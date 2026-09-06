@@ -76,12 +76,28 @@ describe('MarkdownComposer', () => {
     fireEvent.click(getByText(en['composer.mode.source']))
     expect(window.localStorage.getItem(MODE_KEY)).toBe('source')
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.source'])
-    // A fresh mount honors the persisted choice.
+    // The same instance keeps the mode across a host rerender (the F5 path —
+    // a genuinely fresh mount reading localStorage — is tested below).
     rerender(<MarkdownComposer {...chainProps()} />)
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.source'])
     fireEvent.click(getByText(en['composer.mode.render']))
     expect(window.localStorage.getItem(MODE_KEY)).toBe('render')
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.render'])
+  })
+
+  it('a fresh mount restores the persisted mode and it acts on the editor (F5 path)', () => {
+    window.localStorage.setItem(MODE_KEY, 'source')
+    const { getByText } = render(<MarkdownComposer {...chainProps()} />)
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.source'])
+    expect(getByText(en['composer.mode.render'])).toBeInTheDocument()
+    // Source mode leaves typed markdown raw — no folding decorations.
+    fireEvent.paste(content(), {
+      clipboardData: { getData: (type: string) => type === 'text/html' ? '<h2>标题</h2>' : '' },
+    })
+    expect(document.querySelector('.cm-md-h2')).toBeNull()
+    // Switching back acts on the editor immediately.
+    fireEvent.click(getByText(en['composer.mode.render']))
+    expect(document.querySelector('.cm-md-h2')).not.toBeNull()
   })
 
   it('sends the markdown source through setDraft then submit on Enter', async () => {
