@@ -60,3 +60,7 @@ _Avoid_: 渲染后文本（暗示发送的是渲染产物）
 
 **引用 chip（Reference chip）**:
 用户消息中 @提及、/技能、会话引用的内联标识控件；Markdown 化投影必须保留它。
+
+**排队 steering 消息（Steering message）**:
+回合运行中用户追加、由会话收入当前回合的用户消息（ChatNode `steering` 键）；与开场用户消息（`user` 键）共用同一渲染座位，Markdown 化同步生效。
+_Avoid_: pending steering（指尚未入场的瞬态输入回显，宿主直渲、无 slot 扩展点）

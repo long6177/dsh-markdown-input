@@ -1,9 +1,10 @@
 /**
  * dsh-markdown-input, browser half: registers the zh/en dictionaries, the
  * low-priority composer chain entry that takes over the resident composer
- * for Markdown editing, and the `user` chat-node renderer that Markdownizes
- * sent user messages. Built-in takeover panels (approvals, questions,
- * subagent) outrank this entry by priority, so they keep their elections.
+ * for Markdown editing, and the `user`/`steering` chat-node renderers that
+ * Markdownize sent and queued user messages. Built-in takeover panels
+ * (approvals, questions, subagent) outrank this entry by priority, so they
+ * keep their elections.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
@@ -41,11 +42,14 @@ export function apply(ctx: ClientContext): void {
     select: () => MARKDOWN_TAKEOVER,
     locale: NS,
   }, MarkdownComposer))
-  // Keyed replacement of the user-message seat; steering and every other
-  // chat node kind keep the host's own renderers.
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
-    name: 'conversation.chat.node',
-    key: 'user',
-    locale: 'chat',
-  }, MarkdownUserMessage))
+  // Keyed replacement of the user-message seats — turn-opening (`user`) and
+  // queued mid-turn (`steering`) bubbles share identical node data and both
+  // go Markdown; every other chat node kind keeps the host's own renderers.
+  for (const key of ['user', 'steering'] as const) {
+    ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+      name: 'conversation.chat.node',
+      key,
+      locale: 'chat',
+    }, MarkdownUserMessage))
+  }
 }

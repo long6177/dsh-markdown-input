@@ -1,10 +1,11 @@
 /**
- * Markdown-rendered user messages: the `conversation.chat.node` `user` seat
- * replacement. Composes the host baseline Markdown pipeline (`MarkdownText`)
- * with the host user-text projection (`projectUserText`) — reference chips
- * stay chips, the surrounding text renders as Markdown. Known v1 trade-off:
- * a chip inside a running paragraph splits that paragraph into blocks
- * around the chip; boundary chips (the common cases) read seamlessly.
+ * Markdown-rendered user messages: the `conversation.chat.node` `user` and
+ * `steering` seat replacement. Composes the host baseline Markdown pipeline
+ * (`MarkdownText`) with the host user-text projection (`projectUserText`) —
+ * reference chips stay chips, the surrounding text renders as Markdown.
+ * Known v1 trade-off: a chip inside a running paragraph splits that
+ * paragraph into blocks around the chip; boundary chips (the common cases)
+ * read seamlessly.
  */
 import { Children, Fragment, isValidElement, memo, useMemo, type ReactNode } from 'react'
 import {
@@ -17,8 +18,11 @@ import css from './UserMessage.module.css'
 /** The image payload shape the owner's renderer accepts, derived from it. */
 type ImageSourceList = Parameters<ChatNodeOwnerProps['renderMessageImages']>[0]['images']
 
+/** Chat-node seats this renderer replaces; the host serves both with one view. */
+export type MarkdownSeatKind = 'user' | 'steering'
+
 /** Chat-seat copy for the Markdown chrome (same keys the host passes down). */
-function markdownLabels(t: ChatNodeViewProps<'user'>['t']): MarkdownLabels {
+function markdownLabels(t: ChatNodeViewProps<MarkdownSeatKind>['t']): MarkdownLabels {
   return {
     code: { copyLabel: t('copy'), copiedLabel: t('copied') },
     footnotes: t('markdown.footnotes'),
@@ -104,13 +108,14 @@ export function contentParts(content: readonly unknown[]): {
 }
 
 /**
- * The Markdown-rendered user message bubble.
- * @param props - keyed chat renderer seat for the `user` node kind.
+ * The Markdown-rendered user message bubble. The host serves both the `user`
+ * and `steering` keys with one component (identical node data), and so do we.
+ * @param props - keyed chat renderer seat for the `user`/`steering` node kinds.
  * @returns the right-aligned bubble with attachments, Markdown text, and chips.
  */
 export const MarkdownUserMessage = memo(function MarkdownUserMessage({
   node, renderMessageImages, t,
-}: ChatNodeViewProps<'user'>) {
+}: ChatNodeViewProps<MarkdownSeatKind>) {
   const data = node.data
   const { text, images, files, rest } = contentParts(data.content)
   // Stable per locale revision: a fresh object identity would rebuild
