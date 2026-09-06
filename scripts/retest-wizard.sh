@@ -6,7 +6,7 @@
 # Walks a human through loading the plugin into a real dsh web instance and
 # verifying every behavior the v1 spec promised. Results are recorded
 # progressively into outputs/retest-<timestamp>.md and can be posted to
-# issue #1 at the end.
+# issue #1 at the end (ISSUE_NO=<n> targets a different ticket).
 #
 # Run from anywhere:  bash scripts/retest-wizard.sh
 # Everything above the "STAGES" marker is the wizard library: do not hand-edit.
@@ -194,6 +194,9 @@ cd "$(dirname "$0")/.."
 
 REPO_WIN='D:\csdiy\AIcode\dsh-markdown-input'
 REPORT="outputs/retest-$(date +%Y%m%d-%H%M).md"
+# Closing comment lands on issue #1 (v1 spec) by default; a focused retest
+# targets its own ticket, e.g. ISSUE_NO=3 bash scripts/retest-wizard.sh
+ISSUE_NO="${ISSUE_NO:-1}"
 PASS=(); FAIL=(); SKIP=()
 
 # record NAME RESULT NOTE appends one verdict to the report and the tally.
@@ -238,7 +241,7 @@ mkdir -p outputs
   printf -- '- 提交: %s\n' "$(git rev-parse --short HEAD 2>/dev/null || echo '(unknown)')"
 } > "$REPORT"
 
-TOTAL_STAGES=10
+TOTAL_STAGES=11
 
 banner "dsh-markdown-input 真机重测"
 
@@ -291,23 +294,34 @@ ask_result "粘贴转换"
 stage "用户消息 Markdown 化"
 step "发送一条消息，内容包含：# 标题 一行、**粗体**、以及两行 - 列表。"
 step "看聊天气泡：应按 Markdown 渲染（大字标题、粗体、列表），而不是纯文本。"
+note "  （user 键部分 retest-20260906-1923 已 PASS，本轮为回归复核。）"
 ask_result "用户消息 Markdown 化"
 
-# ── Stage 7: 引用 chip ────────────────────────────────────────────────────
+# ── Stage 7: 排队 steering 气泡 ───────────────────────────────────────────
+stage "排队 steering 气泡"
+step "发起一个会让模型跑一小会儿的任务（如写一段长文、执行一个工具）。"
+step "趁回合仍在运行，向输入区输入一条含 # 标题、**粗体**、- 列表 的消息并发送（排队追加）。"
+step "回合吸收这条消息后，看聊天流里的正式 steering 气泡：应按 Markdown 渲染，而非纯文本。"
+note "  （刚发送瞬间的简单回显是宿主直渲的 pending 面板，纯文本属预期；判定对象是吸收后的正式气泡。）"
+step "（可选）排队消息里手动带上 @标签 或 @[标签](dsh-session:…)：正式气泡里 chip 应保留。"
+note "  （@提及候选栏缺失是另一 ticket；手动输入引用形式即可验证 chip。）"
+ask_result "排队 steering 气泡"
+
+# ── Stage 8: 引用 chip ────────────────────────────────────────────────────
 stage "引用 chip"
 step "发送一条带 @提及 或 /技能 或会话引用（@[标签](dsh-session:…)）的消息。"
 step "看气泡：引用 chip（图标+标签）应保留在 Markdown 渲染结果里。"
 note "  （已知取舍：句中的 chip 会把所在段落分块；消息开头/结尾的 chip 应无缝。）"
 ask_result "引用 chip"
 
-# ── Stage 8: 抢占与草稿幸存 ───────────────────────────────────────────────
+# ── Stage 9: 抢占与草稿幸存 ───────────────────────────────────────────────
 stage "抢占与草稿幸存"
 step "在输入区留一句草稿（不要发送）。"
 step "触发一个会弹审批/提问面板的会话（如让子代理跑一个需要批准的任务）。"
 step "面板出现时输入区被内置面板接管；结束后插件输入区应恢复，且草稿还在。"
 ask_result "抢占与草稿幸存"
 
-# ── Stage 9: 视觉细节 ─────────────────────────────────────────────────────
+# ── Stage 10: 视觉细节 ─────────────────────────────────────────────────────
 stage "视觉细节"
 step "围栏代码块：等宽字体 + 底色（无语言级高亮）。"
 step "- [ ] 任务项渲染为复选框样式（勾选项带对勾）。"
@@ -316,7 +330,7 @@ step "贴 30 行长文本：输入区自动增高，超过约 14 行后内部滚
 step "界面切到 English：按钮/占位文案随语言切换。"
 ask_result "视觉细节"
 
-# ── Stage 10: 汇总 ────────────────────────────────────────────────────────
+# ── Stage 11: 汇总 ────────────────────────────────────────────────────────
 stage "汇总"
 {
   printf '\n## 汇总\n\n'
@@ -334,16 +348,16 @@ if (( ${#FAIL[@]} )); then
   note "失败项下一步：gh issue create 逐条开单，或用 /diagnosing-bugs 定位。"
 fi
 
-if confirm "把重测结果评论到 issue #1？"; then
+if confirm "把重测结果评论到 issue #$ISSUE_NO？"; then
   if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
-    if gh api repos/long6177/dsh-markdown-input/issues/1/comments -F body=@"$REPORT" --jq .html_url; then
+    if gh api "repos/long6177/dsh-markdown-input/issues/$ISSUE_NO/comments" -F body=@"$REPORT" --jq .html_url; then
       printf '  %s✓ 已评论%s\n' "$GREEN" "$RESET"
     else
-      SKIPPED+=("评论 issue #1（手动：gh api repos/long6177/dsh-markdown-input/issues/1/comments -F body=@$REPORT）")
+      SKIPPED+=("评论 issue #$ISSUE_NO（手动：gh api repos/long6177/dsh-markdown-input/issues/$ISSUE_NO/comments -F body=@$REPORT）")
       warn "评论失败（账号权限或网络），可手动重发"
     fi
   else
-    SKIPPED+=("评论 issue #1（gh 未就绪；手动：gh api repos/long6177/dsh-markdown-input/issues/1/comments -F body=@$REPORT）")
+    SKIPPED+=("评论 issue #$ISSUE_NO（gh 未就绪；手动：gh api repos/long6177/dsh-markdown-input/issues/$ISSUE_NO/comments -F body=@$REPORT）")
     warn "gh 不可用，未评论"
   fi
 fi
