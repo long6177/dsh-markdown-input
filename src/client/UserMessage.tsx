@@ -58,14 +58,15 @@ export function composeUserMarkdown(
   const flush = (): void => {
     if (run.length > 0) {
       const source = run.join('')
-      if (source.trim() !== '') out.push(<MarkdownText text={source} labels={labels} />)
+      if (source.trim() !== '') out.push(<MarkdownText key={out.length} text={source} labels={labels} />)
       run = []
     }
   }
   for (const piece of pieces) {
     if (isChip(piece)) {
       flush()
-      out.push(piece)
+      // Array children need keys; the composition is static per message.
+      out.push(<Fragment key={out.length}>{piece}</Fragment>)
     } else {
       run.push(runText(piece))
     }
