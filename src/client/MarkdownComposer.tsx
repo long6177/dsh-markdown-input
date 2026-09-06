@@ -24,7 +24,8 @@ export type MarkdownComposerProps =
   & { matched: MarkdownTakeover }
   & PropsLocale<typeof NS>
 
-const MODE_STORAGE_KEY = 'dsh-markdown-input.mode'
+/** localStorage key the render/source preference persists under. */
+export const MODE_STORAGE_KEY = 'dsh-markdown-input.mode'
 
 function storedMode(): EditMode {
   try {
