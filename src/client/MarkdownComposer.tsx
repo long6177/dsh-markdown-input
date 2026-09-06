@@ -47,6 +47,14 @@ export type MarkdownComposerProps =
 /** localStorage key the render/source preference persists under. */
 export const MODE_STORAGE_KEY = 'dsh-markdown-input.mode'
 
+/**
+ * Trailing debounce for mirroring typed text into the machine draft. The
+ * host persists that draft into its session store, which is what a page
+ * reload adopts — a page unload skips React unmounts entirely, so the
+ * unmount flush alone cannot survive F5.
+ */
+export const DRAFT_SYNC_DEBOUNCE_MS = 250
+
 function storedMode(): EditMode {
   try {
     return window.localStorage.getItem(MODE_STORAGE_KEY) === 'source' ? 'source' : 'render'
@@ -81,6 +89,7 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const touchedRef = useRef(false)
   const seedingRef = useRef(false)
+  const draftSyncTimerRef = useRef<number | undefined>(undefined)
   // Refs mirroring the mutable faces so the editor (mounted once) always
   // reads the freshest session state without remounting.
   const inputRef = useRef(input)
@@ -163,6 +172,9 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
       showBanner(tRef.current('composer.file.stillUploading'))
       return
     }
+    // Cancel a pending draft mirror: firing after the machine clears the
+    // sent draft would resurrect the sent text into the input.
+    window.clearTimeout(draftSyncTimerRef.current)
     touchedRef.current = false
     inputActionsRef.current.setDraft(editor.getText())
     // Let the hidden resident editor apply the draft before submit reads
@@ -185,10 +197,25 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
         if (seedingRef.current) return
         touchedRef.current = true
         setHasText(text.trim().length > 0)
+        // Live draft mirror: the host persists machine-draft changes, so the
+        // typed text reaches it as the user types, not only on unmount/submit.
+        window.clearTimeout(draftSyncTimerRef.current)
+        draftSyncTimerRef.current = window.setTimeout(() => {
+          inputActionsRef.current.setDraft(text)
+        }, DRAFT_SYNC_DEBOUNCE_MS)
       },
     })
     editorRef.current = editor
+    // A page reload never runs React unmounts; flush on the unload event so
+    // the trailing debounce window cannot eat the draft's tail.
+    const onPageHide = (): void => {
+      window.clearTimeout(draftSyncTimerRef.current)
+      inputActionsRef.current.setDraft(editor.getText())
+    }
+    window.addEventListener('pagehide', onPageHide)
     return () => {
+      window.removeEventListener('pagehide', onPageHide)
+      window.clearTimeout(draftSyncTimerRef.current)
       // A takeover election unmounts this card while the host keeps its
       // persisted draft; flush the text face so the draft survives the swap
       // and seeds this card back on remount.

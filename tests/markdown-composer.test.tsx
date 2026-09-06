@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
+import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { setConversationSource } from '../src/client/conversation-face.ts'
 import { en } from '../src/client/locales.ts'
 
@@ -186,6 +186,41 @@ describe('MarkdownComposer', () => {
     pasteHtml('<p>草稿内容</p>')
     view.unmount()
     expect(inputActions.setDraft).toHaveBeenCalledWith('草稿内容')
+  })
+
+  it('mirrors typed text into the machine draft while mounted (F5 persistence input)', async () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      render(<MarkdownComposer {...chainProps({ inputActions })} />)
+      // The host persists the draft by mirroring machine-draft changes into
+      // its session store; F5 kills the page without a React unmount, so the
+      // only way typing survives a reload is a live (debounced) sync.
+      pasteHtml('<p>刷新前的一段话</p>')
+      await vi.advanceTimersByTimeAsync(DRAFT_SYNC_DEBOUNCE_MS)
+      expect(inputActions.setDraft).toHaveBeenCalledWith('刷新前的一段话')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the pending draft mirror on submit so the sent text cannot resurrect', async () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const view = render(<MarkdownComposer {...chainProps({ inputActions })} />)
+      pasteHtml('<p>已发送的话</p>')
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      await vi.advanceTimersByTimeAsync(DRAFT_SYNC_DEBOUNCE_MS * 2)
+      // One flush from the submit path itself; the debounced mirror behind it
+      // must have been cancelled, not re-fill the cleared draft.
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+      expect(inputActions.setDraft).toHaveBeenCalledWith('已发送的话')
+      expect(inputActions.submit).toHaveBeenCalledTimes(1)
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('sends the current document when the submit button is clicked', async () => {
