@@ -206,8 +206,9 @@ record() {
   esac
   {
     printf '\n## %s — %s\n' "$name" "$result"
-    [[ -n "$note" ]] && printf '\n> %s\n' "$note"
+    if [[ -n "$note" ]]; then printf '\n> %s\n' "$note"; fi
   } >> "$REPORT"
+  return 0
 }
 
 # ask_result NAME walks the human through one verification and records it.
@@ -216,10 +217,11 @@ ask_result() {
   while true; do
     printf '  %s结果？%s [p=通过 / f=失败 / s=跳过] ' "$YELLOW" "$RESET"
     read -r reply || true
+    # Full-width letters too: a live IME turns p/f/s into ｐ/ｆ/ｓ.
     case "$reply" in
-      p|P) reply=PASS; break ;;
-      f|F) reply=FAIL; break ;;
-      s|S|"") reply=SKIP; break ;;
+      p|P|ｐ|Ｐ) reply=PASS; break ;;
+      f|F|ｆ|Ｆ) reply=FAIL; break ;;
+      s|S|ｓ|Ｓ) reply=SKIP; break ;;
       *) : ;;
     esac
   done

@@ -1,0 +1,2 @@
+# Bash must stay LF on every platform or the wizards die on `$'\r'`.
+*.sh text eol=lf
