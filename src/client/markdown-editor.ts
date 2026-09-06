@@ -54,6 +54,8 @@ export interface MarkdownEditorHandle {
   /** The live view; exposed for the component's focus plumbing and tests. */
   readonly view: EditorView
   setMode(mode: EditMode, placeholder: string): void
+  /** Toggle the editable face; a read-only surface keeps the draft visible. */
+  setEditable(editable: boolean): void
   /** Replace the whole document and park the caret at its end; no-op when equal. */
   setText(text: string): void
   getText(): string
@@ -98,6 +100,11 @@ function pasteHandler(onDocChange: (text: string) => void): Extension {
   })
 }
 
+/** Editable-face extensions: DOM and transaction gates flip together. */
+function editableExtensions(editable: boolean): Extension {
+  return [EditorView.editable.of(editable), EditorState.readOnly.of(!editable)]
+}
+
 /**
  * Mount the markdown editor and return the component-facing handle.
  * @param options - mount target, initial mode/placeholder, and callbacks.
@@ -106,6 +113,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
   const { parent } = options
   const renderCompartment = new Compartment()
   const placeholderCompartment = new Compartment()
+  const editableCompartment = new Compartment()
 
   const baseExtensions: Extension[] = [
     history(),
@@ -132,6 +140,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
         baseExtensions,
         renderCompartment.of(options.mode === 'render' ? liveRender : []),
         placeholderCompartment.of(placeholder(options.placeholder)),
+        editableCompartment.of(editableExtensions(true)),
       ],
     }),
   })
@@ -146,6 +155,11 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
           renderCompartment.reconfigure(mode === 'render' ? liveRender : []),
           placeholderCompartment.reconfigure(placeholder(placeholderText)),
         ],
+      })
+    },
+    setEditable(editable) {
+      view.dispatch({
+        effects: [editableCompartment.reconfigure(editableExtensions(editable))],
       })
     },
     setText(text) {

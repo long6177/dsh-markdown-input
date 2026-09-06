@@ -14,6 +14,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import { MarkdownComposer, MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
 import { MarkdownUserMessage } from './UserMessage.tsx'
+import { installConversationSource } from './conversation-face.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -33,6 +34,9 @@ export const inject = ['slots', 'locale']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
+  // The taken-over card reads the conversation service for its attachment
+  // and notice faces (lazy per call — boot order stays free).
+  installConversationSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   ctx.slots.inject('conversation.composer', () => ctx.slots.register({
     name: 'conversation.composer',

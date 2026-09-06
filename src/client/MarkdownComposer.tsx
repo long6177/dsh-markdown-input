@@ -3,10 +3,30 @@
  * style live rendering with a source-mode switch), the tool row, and submit.
  * Draft sync and submit ride the public inputActions face exactly as the v0
  * text face did; the editor owns the text between them.
+ *
+ * The peripheral alignment (ADR-0002) rides the same public state: draft
+ * attachments are registered through the conversation service and admitted
+ * via inputActions.addAttachments/removeAttachment against the one shared
+ * InputState; machine notices (adjudication failures, send errors) and the
+ * Session promptError surface on this card — during a takeover the resident
+ * bar's toast is invisible, so this is the only notice surface. Busy
+ * admission phases (adjudicating/submitting) disable the submit, attach,
+ * drop, and remove actions and read-only the editor, matching the built-in
+ * bar.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, DragEvent, ReactNode } from 'react'
+import {
+  IconCloseOutline16, IconPaperclipOutline16, IconWarningOutline16,
+} from '@deepseek-ai/dsh-client-ui-primitives'
+import type {
+  ComposerAttachment, DraftAttachmentId,
+} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
+import {
+  conversationFace, noticesOf, useObservable,
+} from './conversation-face.ts'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from './markdown-editor.ts'
 import { NS } from './locales.ts'
 
@@ -49,12 +69,16 @@ function labelOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
  * @param props - chain election marker plus standard session input props and copy.
  * @returns The composer replacement card.
  */
-export function MarkdownComposer({ useInput, inputActions, t }: MarkdownComposerProps) {
+export function MarkdownComposer({ useInput, inputActions, t, sessionId, session }: MarkdownComposerProps) {
   const input = useInput((state) => state)
+  const conversation = conversationFace()
   const [mode, setMode] = useState<EditMode>(storedMode)
   const [hasText, setHasText] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [banner, setBanner] = useState<{ seq: number; text: string } | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const touchedRef = useRef(false)
   const seedingRef = useRef(false)
   // Refs mirroring the mutable faces so the editor (mounted once) always
@@ -63,10 +87,82 @@ export function MarkdownComposer({ useInput, inputActions, t }: MarkdownComposer
   inputRef.current = input
   const inputActionsRef = useRef(inputActions)
   inputActionsRef.current = inputActions
+  const tRef = useRef(t)
+  tRef.current = t
+
+  // Busy admission phases — the machine refuses attachment add/remove there,
+  // and the built-in bar read-onlys the editor while keeping the draft
+  // visible. (Claimed stays editable: the claim args are ordinary text.)
+  const machineBusy = input.phase === 'adjudicating' || input.phase === 'submitting'
+
+  const bannerSeq = useRef(0)
+  const showBanner = useCallback((text: string) => {
+    bannerSeq.current += 1
+    setBanner({ seq: bannerSeq.current, text })
+  }, [])
+
+  // Transient error banner (Toast parity: hold, then fade); keyed so an
+  // identical repeated message restarts the cycle.
+  useEffect(() => {
+    if (banner === null) return undefined
+    const timer = window.setTimeout(() => { setBanner(null) }, 6000)
+    return () => { window.clearTimeout(timer) }
+  }, [banner])
+
+  const noticeSource = useMemo(
+    () => conversation !== undefined && sessionId !== undefined
+      ? noticesOf(conversation, sessionId)
+      : undefined,
+    [conversation, sessionId],
+  )
+  const notice = useObservable(noticeSource)
+  const uploads = useObservable(conversation?.fileUploads)
+
+  // Prompt failures are ordinary failures: the banner announces them, the
+  // draft stays in the machine, the user resubmits. A remount over a session
+  // whose failure is still pending re-announces it once (resident-bar
+  // contract).
+  const promptError = session?.promptError ?? null
+  useEffect(() => {
+    if (promptError === null) return
+    const { error } = promptError
+    showBanner(error.code === 'session/attachment-invalid' || error.code === 'subagent/attachment-invalid'
+      ? tRef.current('composer.file.rejected')
+      : `${error.message} (${error.code})`)
+  }, [promptError, showBanner])
+
+  useEffect(() => {
+    if (notice?.level === 'error') showBanner(notice.text)
+  }, [notice, showBanner])
+
+  const attachments = useMemo(
+    () => conversation === undefined ? [] : conversation.resolveDraftAttachments(input.attachmentIds),
+    [conversation, input.attachmentIds],
+  )
+  // Send waits for every picked file: uploading and failed drafts both hold
+  // the gate (a failed upload is retried or removed, never silently dropped).
+  const uploadsPending = attachments.some(
+    (attachment) => attachment.kind === 'file' && uploads?.[attachment.id]?.status !== 'ready',
+  )
+  const uploadsPendingRef = useRef(false)
+  uploadsPendingRef.current = uploadsPending
+
+  // Keep the ids in line with the descriptors: entries whose browser-owned
+  // objects died elsewhere (session teardown) fall off the draft.
+  useEffect(() => {
+    if (conversation === undefined) return
+    if (attachments.length !== input.attachmentIds.length) {
+      inputActions.pruneAttachments(attachments.map((attachment) => attachment.id))
+    }
+  }, [conversation, attachments, input.attachmentIds, inputActions])
 
   function submit(): void {
     const editor = editorRef.current
     if (editor === null || inputRef.current.phase !== 'plain') return
+    if (uploadsPendingRef.current) {
+      showBanner(tRef.current('composer.file.stillUploading'))
+      return
+    }
     touchedRef.current = false
     inputActionsRef.current.setDraft(editor.getText())
     // Let the hidden resident editor apply the draft before submit reads
@@ -112,6 +208,12 @@ export function MarkdownComposer({ useInput, inputActions, t }: MarkdownComposer
     setHasText(input.draft.trim().length > 0)
   }, [input.draft])
 
+  // Aligned with the built-in bar: busy phases read-only the surface so the
+  // draft stays visible but cannot change under the in-flight submit.
+  useEffect(() => {
+    editorRef.current?.setEditable(!machineBusy)
+  }, [machineBusy])
+
   // Mode and placeholder live in compartments, so a switch keeps undo
   // history and scroll; the choice persists across page loads.
   function toggleMode(): void {
@@ -131,11 +233,123 @@ export function MarkdownComposer({ useInput, inputActions, t }: MarkdownComposer
     editorRef.current?.setMode(mode, placeholderOf(t, mode))
   }, [mode, t])
 
-  const canSubmit = (hasText || input.attachmentIds.length > 0) && input.phase === 'plain'
+  const canSubmit = (hasText || input.attachmentIds.length > 0) && input.phase === 'plain' && !uploadsPending
+  const canIntake = conversation !== undefined && session?.subagent == null && !machineBusy
+
+  // File intake through the conversation service's own validation path; the
+  // admitted state mutation rides the public addAttachments (a busy-phase
+  // refusal releases the just-created drafts instead of leaking them).
+  function intakeFiles(files: readonly File[]): void {
+    if (conversation === undefined || sessionId === undefined || files.length === 0) return
+    if (session?.subagent != null || machineBusy) return
+    try {
+      const drafts = conversation.createDrafts(sessionId, files)
+      if (!inputActionsRef.current.addAttachments(drafts.map((draft) => draft.id))) {
+        conversation.releaseDraftAttachments(drafts)
+      }
+    } catch (error: unknown) {
+      showBanner(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  function onPickFiles(event: ChangeEvent<HTMLInputElement>): void {
+    const picked = event.target.files === null ? [] : [...event.target.files]
+    // Reset so picking the same file again re-fires the change event.
+    event.target.value = ''
+    intakeFiles(picked)
+  }
+
+  function onDragOver(event: DragEvent<HTMLDivElement>): void {
+    if (!canIntake) return
+    event.preventDefault()
+    setDragging(true)
+  }
+
+  function onDragLeave(event: DragEvent<HTMLDivElement>): void {
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return
+    setDragging(false)
+  }
+
+  function onDrop(event: DragEvent<HTMLDivElement>): void {
+    event.preventDefault()
+    setDragging(false)
+    intakeFiles([...event.dataTransfer.files])
+  }
+
+  function onRemoveAttachment(id: DraftAttachmentId): void {
+    if (conversation === undefined || machineBusy) return
+    // The machine admits (not busy) and the release happens in the same tick,
+    // so the descriptor cannot be orphaned by a race.
+    inputActionsRef.current.removeAttachment(id)
+    conversation.releaseDraftAttachment(id)
+  }
+
+  function onRetryFile(id: DraftAttachmentId): void {
+    if (conversation === undefined || sessionId === undefined) return
+    conversation.retryFileUpload(sessionId, id)
+  }
+
+  function uploadState(id: DraftAttachmentId): ReactNode {
+    const upload = uploads?.[id]
+    if (upload === undefined || upload.status === 'ready') return null
+    if (upload.status === 'error') {
+      return (
+        <span className={css.uploadError}>
+          {t('composer.file.uploadFailed')}
+          <button type="button" className={css.retryButton} onClick={() => { onRetryFile(id) }}>
+            {t('composer.file.retry')}
+          </button>
+        </span>
+      )
+    }
+    return <span className={css.uploadState}>{t('composer.file.uploading')}</span>
+  }
+
+  function attachmentChip(attachment: ComposerAttachment): ReactNode {
+    return (
+      <li key={attachment.id} className={css.attachment}>
+        {attachment.kind === 'image'
+          ? <img className={css.thumb} src={attachment.previewUrl} alt="" />
+          : <span className={css.fileChip} aria-hidden>⌗</span>}
+        <span className={css.attachmentName}>{attachment.file.name}</span>
+        {attachment.kind === 'file' ? uploadState(attachment.id) : null}
+        <button type="button" className={css.removeButton} aria-label={t('composer.attachment.remove')}
+          title={t('composer.attachment.remove')} disabled={machineBusy}
+          onClick={() => { onRemoveAttachment(attachment.id) }}>
+          <IconCloseOutline16 size={12} />
+        </button>
+      </li>
+    )
+  }
+
   const otherMode: EditMode = mode === 'render' ? 'source' : 'render'
 
   return (
-    <div className={css.card} data-markdown-composer>
+    <div className={css.card} data-markdown-composer
+      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      {banner !== null && (
+        <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
+          <IconWarningOutline16 size={14} />
+          <span className={css.bannerText}>{banner.text}</span>
+          <button type="button" className={css.bannerClose} aria-label={t('composer.notice.dismiss')}
+            onClick={() => { setBanner(null) }}>
+            <IconCloseOutline16 size={12} />
+          </button>
+        </div>
+      )}
+      {notice?.level === 'info' && (
+        <div className={css.notice} role="status" data-markdown-notice>
+          {notice.text}
+        </div>
+      )}
+      {dragging && canIntake && (
+        <div className={css.dropOverlay} data-markdown-dropzone>{t('composer.dropHere')}</div>
+      )}
+      {attachments.length > 0 && (
+        <ul className={css.attachmentBar} data-markdown-attachments>
+          {attachments.map(attachmentChip)}
+        </ul>
+      )}
       <div className={css.surface} data-markdown-surface ref={surfaceRef} />
       <div className={css.toolRow}>
         {/* Action semantics: the button names the mode it switches TO. */}
@@ -143,6 +357,23 @@ export function MarkdownComposer({ useInput, inputActions, t }: MarkdownComposer
           title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
           {labelOf(t, otherMode)}
         </button>
+        {conversation !== undefined && (
+          <>
+            <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
+              title={t('composer.attach')} disabled={!canIntake}
+              onClick={() => { fileInputRef.current?.click() }}>
+              <IconPaperclipOutline16 size={14} />
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              disabled={session?.subagent != null}
+              hidden
+              onChange={onPickFiles}
+            />
+          </>
+        )}
         <span className={css.spring} />
         <button type="button" className={css.submitButton} disabled={!canSubmit} onClick={submit}>
           {t('composer.action.submit')}

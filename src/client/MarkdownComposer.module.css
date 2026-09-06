@@ -2,6 +2,7 @@
   /* The chain winner replaces the host card outright, so the host card's own
      width constraint does not apply; mirror it to keep the composer column
      aligned with the message column above. */
+  position: relative;
   box-sizing: border-box;
   width: 100%;
   max-width: var(--dsh-composer-card-max-width, 48rem);
@@ -61,6 +62,161 @@
 
 .spring {
   flex: 1;
+}
+
+.iconButton {
+  border: none;
+  border-radius: 6px;
+  padding: 4px;
+  font: inherit;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+}
+
+.iconButton:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Transient error banner (machine notices, prompt failures, intake
+   rejections): the one visible error surface during a takeover. */
+.banner {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, #d64545 45%, transparent);
+  background: color-mix(in srgb, #d64545 10%, transparent);
+  color: inherit;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 0.85em;
+}
+
+.bannerText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bannerClose {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Inline information notice (resident-bar parity: role=status line). */
+.notice {
+  font-size: 0.85em;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+}
+
+/* Drag-over invitation: the drop entry's placeholder overlay. */
+.dropOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9em;
+  color: color-mix(in srgb, currentColor 70%, transparent);
+  background: color-mix(in srgb, canvas 80%, transparent);
+  border: 1.5px dashed color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 12px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Draft attachment rail: chips above the text surface, resident-bar form. */
+.attachmentBar {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.attachment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 8px;
+  padding: 3px 6px;
+  font-size: 0.85em;
+  max-width: 14rem;
+}
+
+.thumb {
+  width: 2.2em;
+  height: 2.2em;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.fileChip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  opacity: 0.7;
+}
+
+.attachmentName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.uploadState {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.uploadError {
+  color: #d64545;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.retryButton {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.9em;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+
+.removeButton {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 4px;
+}
+
+.removeButton:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.removeButton:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .modeButton,
