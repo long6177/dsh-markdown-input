@@ -1,4 +1,11 @@
 .card {
+  /* The chain winner replaces the host card outright, so the host card's own
+     width constraint does not apply; mirror it to keep the composer column
+     aligned with the message column above. */
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width, 48rem);
+  margin-inline: auto;
   display: flex;
   flex-direction: column;
   gap: 4px;

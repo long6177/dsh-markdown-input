@@ -115,6 +115,16 @@ describe('MarkdownComposer', () => {
     expect(attached.getByText(en['composer.action.submit'])).toBeEnabled()
   })
 
+  it('flushes the current text to the host draft when a takeover unmounts the card', () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const view = render(<MarkdownComposer {...chainProps({ inputActions })} />)
+    fireEvent.paste(content(), {
+      clipboardData: { getData: (type: string) => type === 'text/html' ? '<p>草稿内容</p>' : '' },
+    })
+    view.unmount()
+    expect(inputActions.setDraft).toHaveBeenCalledWith('草稿内容')
+  })
+
   it('sends the current document when the submit button is clicked', async () => {
     const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
     const view = render(<MarkdownComposer {...chainProps({ inputActions })} />)

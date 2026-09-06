@@ -92,6 +92,10 @@ export function MarkdownComposer({ useInput, inputActions, t }: MarkdownComposer
     })
     editorRef.current = editor
     return () => {
+      // A takeover election unmounts this card while the host keeps its
+      // persisted draft; flush the text face so the draft survives the swap
+      // and seeds this card back on remount.
+      inputActionsRef.current.setDraft(editor.getText())
       editor.destroy()
       editorRef.current = null
     }
