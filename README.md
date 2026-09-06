@@ -29,6 +29,13 @@ dsh plugin --profile web add github:long6177/dsh-markdown-input
 |---|---|---|---|
 | `defaultMode` | `'render' \| 'source'` | `'render'` | Editing mode the composer opens in. |
 
+### Testing
+
+```sh
+pnpm test                     # unit + component + bundle contract (vitest, jsdom)
+bash scripts/retest-wizard.sh # guided on-device re-test; writes outputs/retest-*.md
+```
+
 ### License
 
 [MIT](./LICENSE)
@@ -61,6 +68,13 @@ dsh plugin --profile web add github:long6177/dsh-markdown-input
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `defaultMode` | `'render' \| 'source'` | `'render'` | 输入区打开时的编辑模式。 |
+
+### 测试
+
+```sh
+pnpm test                     # 单元 + 组件 + bundle 契约（vitest，jsdom）
+bash scripts/retest-wizard.sh # 真机重测引导脚本；结果写入 outputs/retest-*.md
+```
 
 ### 协议
 
