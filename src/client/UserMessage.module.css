@@ -1,0 +1,75 @@
+/* Right-aligned user message row rendered over the host chat layout. */
+.row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  max-width: 85%;
+}
+
+.attachmentRow {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.fileCard {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--dsw-border, color-mix(in srgb, currentColor 14%, transparent));
+  border-radius: 10px;
+  padding: 6px 10px;
+  background: var(--dsw-bg, color-mix(in srgb, currentColor 5%, transparent));
+}
+
+.fileIcon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.fileContent {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.fileName {
+  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.fileMeta {
+  font-size: 0.75em;
+  opacity: 0.65;
+}
+
+.bubble {
+  padding: 8px 12px;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--dsw-bubble-user, color-mix(in srgb, currentColor 8%, transparent));
+  white-space: normal;
+  word-break: break-word;
+}
+
+/* MarkdownText renders block elements; keep them tight inside the bubble. */
+.bubble :global(.md) > *:first-child,
+.bubble > *:first-child {
+  margin-top: 0;
+}
+
+.bubble :global(.md) > *:last-child,
+.bubble > *:last-child {
+  margin-bottom: 0;
+}

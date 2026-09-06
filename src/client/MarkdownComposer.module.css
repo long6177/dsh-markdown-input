@@ -1,0 +1,129 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--dsw-border, color-mix(in srgb, currentColor 14%, transparent));
+  border-radius: 12px;
+  padding: 8px 10px;
+  background: var(--dsw-bg, transparent);
+}
+
+/* The CodeMirror surface: transparent chrome over the card, autogrow with a
+   scroll cap (host parity: ~14 lines). */
+.surface {
+  color: inherit;
+  font: inherit;
+}
+
+.surface :global(.cm-editor) {
+  background: transparent;
+  color: inherit;
+  height: auto;
+  max-height: 14lh;
+}
+
+.surface :global(.cm-editor.cm-focused) {
+  outline: none;
+}
+
+.surface :global(.cm-scroller) {
+  overflow-y: auto;
+  font: inherit;
+  line-height: 1.5;
+  min-height: 3lh;
+}
+
+.surface :global(.cm-content) {
+  padding: 2px 0;
+  caret-color: currentColor;
+}
+
+.surface :global(.cm-line) {
+  padding: 0;
+}
+
+.surface :global(.cm-placeholder) {
+  color: color-mix(in srgb, currentColor 40%, transparent);
+}
+
+.toolRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spring {
+  flex: 1;
+}
+
+.modeButton,
+.submitButton {
+  border: none;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+}
+
+.submitButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Live-render presentation (render mode): folded markers, styled content.
+   Source mode mounts none of these. */
+.surface :global(.cm-md-h1) { font-size: 1.5em; font-weight: 600; }
+.surface :global(.cm-md-h2) { font-size: 1.3em; font-weight: 600; }
+.surface :global(.cm-md-h3) { font-size: 1.15em; font-weight: 600; }
+.surface :global(.cm-md-h4) { font-size: 1em; font-weight: 600; }
+.surface :global(.cm-md-h5) { font-size: 0.95em; font-weight: 600; }
+.surface :global(.cm-md-h6) { font-size: 0.9em; font-weight: 600; }
+
+.surface :global(.cm-md-strong) { font-weight: 600; }
+.surface :global(.cm-md-em) { font-style: italic; }
+
+.surface :global(.cm-md-code),
+.surface :global(.cm-md-codeblock) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+.surface :global(.cm-md-code) {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+
+.surface :global(.cm-md-codeblock) {
+  background: color-mix(in srgb, currentColor 6%, transparent);
+}
+
+.surface :global(.cm-md-quote) {
+  border-left: 2px solid color-mix(in srgb, currentColor 30%, transparent);
+  padding-left: 8px;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+}
+
+.surface :global(.cm-md-link) {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.surface :global(.cm-md-taskbox) {
+  display: inline-block;
+  width: 0.9em;
+  height: 0.9em;
+  margin: 0 4px 0 2px;
+  border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
+  border-radius: 3px;
+  vertical-align: -0.1em;
+}
+
+.surface :global(.cm-md-taskbox-checked) {
+  background:
+    linear-gradient(45deg, transparent 42%, currentColor 42%, currentColor 55%, transparent 55%),
+    linear-gradient(-45deg, transparent 55%, currentColor 55%, currentColor 68%, transparent 68%);
+}
