@@ -49,10 +49,14 @@ export function apply(ctx: ClientContext): void {
   // Keyed replacement of the user-message seats — turn-opening (`user`) and
   // queued mid-turn (`steering`) bubbles share identical node data and both
   // go Markdown; every other chat node kind keeps the host's own renderers.
+  // The host registers the same keys at its default priority 0, and the
+  // registry throws on same-key-same-priority: shadow it at a lower rank
+  // (lowest renders), falling back to the host seat when we deregister.
   for (const key of ['user', 'steering'] as const) {
     ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
       name: 'conversation.chat.node',
       key,
+      priority: -1,
       locale: 'chat',
     }, MarkdownUserMessage))
   }

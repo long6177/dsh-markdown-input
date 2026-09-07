@@ -85,7 +85,10 @@ describe('client apply registration', () => {
     // Every chat-node registration carries a key: an unkeyed one would catch
     // all node kinds and displace the host renderers wholesale.
     expect(chatSeats.map(entry => entry.key).sort()).toEqual(['steering', 'user'])
+    // The host registers the same keys at default priority 0 and the
+    // registry throws on same-key-same-priority; we shadow at a lower rank.
     for (const seat of chatSeats) {
+      expect(seat.priority).toBe(-1)
       expect(seat.component).toBe(MarkdownUserMessage)
       expect(seat.locale).toBe('chat')
     }
