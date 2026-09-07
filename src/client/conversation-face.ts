@@ -65,15 +65,22 @@ export function conversationFace(): ConversationFace | undefined {
 
 /**
  * The per-session notice outlet: the store the resident bar renders
- * errors as transient banners and information inline.
+ * errors as transient banners and information inline. Undefined while the
+ * session shell has not materialized yet (the hub throws when the session
+ * binding is absent — a composer frame can render before that on
+ * new-session boot; the notice surfaces once the shell exists).
  * @param conversation - the conversation service face.
  * @param sessionId - owning session.
  */
 export function noticesOf(
   conversation: ConversationFace,
   sessionId: SessionId,
-): ObservableSource<ComposerNotice | null> {
-  return (conversation.input as InputHubFace).shell(sessionId).notices
+): ObservableSource<ComposerNotice | null> | undefined {
+  try {
+    return (conversation.input as InputHubFace).shell(sessionId).notices
+  } catch {
+    return undefined
+  }
 }
 
 /**

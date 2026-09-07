@@ -383,6 +383,18 @@ describe('MarkdownComposer notices', () => {
     expect(banner?.textContent).toContain('裁决失败')
   })
 
+  it('renders degraded when the per-session notice shell is not materialized yet', () => {
+    // New-session boot: the composer chain can render before the session
+    // binding exists, and the host's InputHub.shell throws then. A render-
+    // time throw would take the whole composer seat down.
+    const conversation = fakeConversation()
+    conversation.input.shell = vi.fn(() => { throw new Error('conversation.input: session "s1" resolved no binding') })
+    setConversationSource(() => conversation)
+    const { container } = render(<MarkdownComposer {...chainProps()} />)
+    expect(container.querySelector('[data-markdown-composer]')).toBeInTheDocument()
+    expect(container.querySelector('[data-markdown-notice]')).toBeNull()
+  })
+
   it('renders an information notice inline as a status line', () => {
     const conversation = fakeConversation({ notice: { level: 'info', text: '命令完成', seq: 4 } })
     setConversationSource(() => conversation)
