@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<title>PROTOTYPE · dsh 输入区四候选效果对比</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  .proto-watermark{position:fixed;top:8px;right:12px;z-index:60;background:#dc2626;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.1em}
+  .composer-card{border:1px solid #cbd5e1;border-radius:12px;background:#fff}
+  .builtin-input{min-height:44px}
+  .fadein{animation:f .18s ease}
+  @keyframes f{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body class="bg-stone-100 text-slate-900 h-screen overflow-hidden">
+<div class="proto-watermark">PROTOTYPE · 一次性演示</div>
+
+<div class="flex h-full">
+  <!-- 侧边栏（模拟 dsh shell） -->
+  <aside class="w-60 bg-white border-r border-slate-200 flex flex-col shrink-0">
+    <div class="px-4 py-3 border-b border-slate-100 text-sm font-semibold text-slate-700">DSH 本地构建</div>
+    <div class="px-3 py-2"><button class="w-full text-left text-sm px-3 py-2 rounded-lg bg-slate-100 font-medium">＋ 新会话</button></div>
+    <div class="px-3 text-xs text-slate-400 space-y-1">
+      <div class="px-3 py-2">LightAgent</div>
+      <div class="px-3 py-2">data-empathizer</div>
+      <div class="px-3 py-2 rounded-lg bg-slate-50 font-medium text-slate-600">test</div>
+      <div class="px-3 py-2">查看 AGENTS.md 文件…</div>
+      <div class="px-3 py-2">字节 Coding Plan 测试</div>
+    </div>
+    <div class="mt-auto px-4 py-3 border-t border-slate-100 text-xs text-slate-400">设置</div>
+  </aside>
+
+  <!-- 主区 -->
+  <main class="flex-1 flex flex-col min-w-0">
+    <div class="px-6 py-3 border-b border-slate-200 text-sm font-semibold text-slate-700 bg-white">test · 会话</div>
+
+    <!-- 消息流 -->
+    <div id="messages" class="flex-1 overflow-y-auto px-8 py-6 space-y-5"></div>
+
+    <!-- 变体说明卡 -->
+    <div id="legend" class="mx-8 mb-2 rounded-lg border px-4 py-2.5 text-xs leading-relaxed"></div>
+
+    <!-- 输入区（变体挂载点） -->
+    <div id="composer-zone" class="px-8 pb-6 pt-1"></div>
+  </main>
+</div>
+
+<!-- 浮动切换条 -->
+<div class="fixed bottom-3 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 bg-slate-900 text-white rounded-full shadow-xl px-2 py-1.5 text-sm">
+  <button id="prev" class="px-2.5 py-1 rounded-full hover:bg-slate-700">←</button>
+  <span id="vlabel" class="px-2 font-medium min-w-56 text-center"></span>
+  <button id="next" class="px-2.5 py-1 rounded-full hover:bg-slate-700">→</button>
+</div>
+
+<script>
+/* PROTOTYPE: 五个输入区形态（现状基线 + 四架构候选），?variant= 切换。
+   问题：四种候选在真实聊天界面里的观感与交互差多少。*/
+
+const MESSAGES = [
+  {role:'user', md:'帮我看看这个 `parseArgs` 函数的边界情况'},
+  {role:'assistant', md:'这个函数有三个边界问题：\n\n1. **空字符串输入**直接返回 `undefined`\n2. `--flag=value` 形式没处理\n\n```js\nif (!raw) return {};\n```\n\n建议先补参数校验。'},
+];
+
+function renderMessages(){
+  document.getElementById('messages').innerHTML = MESSAGES.map(m => m.role==='assistant'
+    ? `<div class="flex gap-3 fadein"><div class="w-7 h-7 rounded bg-indigo-600 text-white text-xs flex items-center justify-center shrink-0">AI</div><div class="text-sm leading-relaxed max-w-2xl prose prose-sm">${marked.parse(m.md)}</div></div>`
+    : `<div class="flex justify-end fadein"><div class="bg-slate-800 text-white text-sm rounded-2xl px-4 py-2 max-w-2xl">${marked.parse(m.md)}</div></div>`
+  ).join('');
+}
+
+/* ---------- 变体：composer 区 ---------- */
+
+function takeoverCard({slim=false}={}){
+  return `<div class="composer-card px-3 pt-2 pb-2 fadein" data-kind="takeover">
+    ${slim?'':`<div class="flex items-center gap-1 mb-1.5 text-xs text-slate-400">
+      <span class="px-1.5 py-0.5 rounded bg-slate-100">📎 附件栏（对齐件）</span>
+      <span class="px-1.5 py-0.5 rounded bg-slate-100" title="若上传中则禁发">上传态占位</span>
+      <span class="flex-1"></span>
+      <span class="px-1.5 py-0.5 rounded bg-slate-100">模型 ▾（对齐件）</span>
+    </div>`}
+    <textarea data-surface rows="3" class="w-full resize-none outline-none text-sm leading-relaxed placeholder-slate-400" placeholder="以 Markdown 撰写…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <div class="flex items-center gap-2 text-xs">
+      <button data-mode class="px-2 py-1 rounded bg-slate-100 hover:bg-slate-200">渲染</button>
+      <span class="text-slate-300">|</span>
+      <span class="text-slate-400">CM6 实时渲染（本原型用纯文本模拟观感）</span>
+      <span class="flex-1"></span>
+      ${slim?'':'<span class="text-red-500 text-[11px]">⚠ 本卡全部 chrome 均为重建对齐件</span>'}
+      <button data-send class="px-3 py-1 rounded bg-indigo-600 text-white font-medium disabled:opacity-40" disabled>发送</button>
+    </div>
+  </div>`;
+}
+
+function builtinComposer({withModeButton=false, notice=null}={}){
+  return `<div class="fadein">
+    ${notice?`<div class="mb-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">${notice}</div>`:''}
+    <div class="composer-card px-3 pt-2 pb-2 builtin-input" data-kind="builtin">
+      <textarea data-surface rows="1" class="w-full resize-none outline-none text-sm leading-relaxed pt-1 placeholder-slate-400" placeholder="发送消息…（官方输入区，原样）"></textarea>
+      <div class="flex items-center gap-2 text-xs text-slate-400 pt-1">
+        <span class="cursor-pointer hover:text-slate-600" title="附件（原生）">📎</span>
+        <span class="px-1.5 py-0.5 rounded bg-slate-100">Plan ▾</span>
+        <span class="px-1.5 py-0.5 rounded bg-slate-100">模型 ▾</span>
+        <span class="flex-1"></span>
+        ${withModeButton?`<button data-mdmode class="px-2 py-1 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 font-medium" title="切换到 Markdown 模式（插件接管）">📝 M↓</button>`:''}
+        <span class="px-2 py-1 rounded bg-slate-800 text-white">➤</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+function c3Layout(){
+  return `<div class="fadein">
+    <div class="mx-0 mb-2 rounded-lg border border-dashed border-indigo-300 bg-indigo-50/50 px-4 py-2 text-xs text-slate-600">
+      <div class="flex items-center gap-2 mb-1"><span class="font-semibold text-indigo-700">预览面板（input.dock，只读）</span><span class="text-slate-400">随下方输入实时渲染</span></div>
+      <div data-preview class="prose prose-sm max-w-none text-slate-800 min-h-6"><span class="text-slate-300">（开始输入即可预览）</span></div>
+    </div>
+    ${builtinComposer({})}
+  </div>`;
+}
+
+/* ---------- 变体注册 ---------- */
+const VARIANTS = {
+  c0:{label:'现状 · 全时接管（基线）', legend:'<b>现状基线</b>：select 恒真，接管卡永远在场。附件栏/通知/工具行全部是重建对齐件——修复地理 5/7 集中于此。打字试试：Enter 发送（原型内不真发）。',
+      html:()=>takeoverCard()},
+  c1:{label:'C1 条件接管 · 模式按钮', legend:'<b>C1 条件接管</b>：官方输入区是默认（附件/补全/steering 全原生，零对齐负担）。点工具行右侧 <b>📝 M↓</b> 切入 Markdown 模式（接管卡，仅 seed→CM6→submit 窄接口）；草稿在切换间幸存（试：两边各打点字再切换）。再点卡内按钮切回。',
+      html:(state)=> state.mdMode ? takeoverCard({slim:true}) : builtinComposer({withModeButton:true, notice:'（示例）这是官方模式：一切原生功能可用；发送失败等通知由官方横幅呈现——插件零负担。'})},
+  c2:{label:'C2 拆浅为深 · 观感同现状', legend:'<b>C2 拆浅为深</b>：纯架构重构（草稿同步抽成深 module），<b>视觉与现状完全一致</b>——列出它只为诚实对比：它不改变 chrome 对齐的竞速，只把 flush 时机矩阵收进一个可测接缝。',
+      html:()=>takeoverCard()},
+  c3:{label:'C3 零接管 · 预览面板', legend:'<b>C3 零接管</b>：官方输入区原样，插件只在上方 dock 挂只读预览（随输入实时渲染，试试在下框打 markdown）；粘贴转换降级为捕获期监听。代价：<b>输入框内就地渲染消失</b>（Q7 否决过的分屏观感）。',
+      html:()=>c3Layout()},
+  c4:{label:'C4 上游共建 · 无视觉变化', legend:'<b>C4 上游共建</b>：向 Discussions 提案官方 composer 扩展面——最终形态等于「官方原生支持 markdown 输入」，观感与官方输入区一致但由官方实现。短期无变化，长期是所有插件的正解。',
+      html:()=>builtinComposer({})},
+};
+const KEYS = Object.keys(VARIANTS);
+
+let state = {mdMode:false};
+
+function variant(){ return (new URLSearchParams(location.search).get('variant')) || 'c1'; }
+
+function render(){
+  const v = variant();
+  const def = VARIANTS[v];
+  document.getElementById('composer-zone').innerHTML = def.html(state);
+  document.getElementById('legend').innerHTML = def.legend;
+  document.getElementById('legend').className = 'mx-8 mb-2 rounded-lg border px-4 py-2.5 text-xs leading-relaxed ' + (v==='c1'?'border-emerald-300 bg-emerald-50':v==='c3'?'border-indigo-300 bg-indigo-50':'border-slate-200 bg-white');
+  document.getElementById('vlabel').textContent = `${v} · ${def.label}`;
+  wire();
+}
+
+function setVariant(k){
+  state.mdMode = false;
+  const u = new URL(location); u.searchParams.set('variant', k); location.replace(u);
+}
+
+document.getElementById('prev').onclick = ()=>{ const i=KEYS.indexOf(variant()); setVariant(KEYS[(i-1+KEYS.length)%KEYS.length]); };
+document.getElementById('next').onclick = ()=>{ const i=KEYS.indexOf(variant()); setVariant(KEYS[(i+1)%KEYS.length]); };
+document.addEventListener('keydown', e=>{
+  if (/INPUT|TEXTAREA/.test(document.activeElement?.tagName) || document.activeElement?.isContentEditable) return;
+  if (e.key==='ArrowLeft') document.getElementById('prev').click();
+  if (e.key==='ArrowRight') document.getElementById('next').click();
+});
+
+/* 每个变体的交互接线 */
+function wire(){
+  const v = variant();
+  const surface = document.querySelector('[data-surface]');
+  const send = document.querySelector('[data-send]');
+
+  if (surface && send){
+    surface.addEventListener('input', ()=>{
+      send.disabled = surface.value.trim().length===0;
+      if (v==='c3'){
+        document.querySelector('[data-preview]').innerHTML = surface.value.trim()
+          ? marked.parse(surface.value) : '<span class="text-slate-300">（开始输入即可预览）</span>';
+      }
+    });
+    surface.addEventListener('keydown', e=>{
+      if (e.key==='Enter' && !e.shiftKey){ e.preventDefault();
+        if (surface.value.trim()){ MESSAGES.push({role:'user', md:surface.value}); renderMessages(); surface.value=''; send.disabled=true;
+          if (v==='c3') document.querySelector('[data-preview]').innerHTML='<span class="text-slate-300">（已发送，预览清空）</span>'; }
+      }
+    });
+  }
+
+  /* C1：模式切换（草稿双向幸存演示） */
+  function stashDraft(){
+    const s = document.querySelector('[data-surface]');
+    if (s) state.draft = s.value;
+  }
+  const mdBtn = document.querySelector('[data-mdmode]');
+  if (mdBtn) mdBtn.onclick = ()=>{ stashDraft(); state.mdMode = true; render(); };
+  const backBtn = document.querySelector('[data-mode]');
+  if (backBtn && v==='c1') backBtn.onclick = ()=>{ stashDraft(); state.mdMode = false; render(); };
+  /* 恢复共享草稿（模拟 overlay + 草稿镜像的幸存语义） */
+  const fresh = document.querySelector('[data-surface]');
+  if (fresh && state.draft !== undefined){
+    fresh.value = state.draft;
+    fresh.dispatchEvent(new Event('input'));
+  }
+}
+
+window.addEventListener('DOMContentLoaded', ()=>{ renderMessages(); render(); });
+if (document.readyState!=='loading'){ renderMessages(); render(); }
+</script>
+</body>
+</html>
