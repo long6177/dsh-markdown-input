@@ -395,6 +395,19 @@ describe('MarkdownComposer notices', () => {
     expect(container.querySelector('[data-markdown-notice]')).toBeNull()
   })
 
+  it('renders the text face only when the service lacks the draft-attachment operations', () => {
+    // Host builds where the draft-attachment face moved off the conversation
+    // service (upstream 0.1.3 service-boundary work): capability-detect and
+    // degrade — the composer seat must never go down over a missing method.
+    const conversation = fakeConversation() as Record<string, unknown>
+    delete conversation.resolveDraftAttachments
+    delete conversation.createDrafts
+    setConversationSource(() => conversation as never)
+    const { container } = render(<MarkdownComposer {...chainProps()} />)
+    expect(container.querySelector('[data-markdown-composer]')).toBeInTheDocument()
+    expect(container.querySelector('[aria-label="' + en['composer.attach'] + '"]')).toBeNull()
+  })
+
   it('renders an information notice inline as a status line', () => {
     const conversation = fakeConversation({ notice: { level: 'info', text: '命令完成', seq: 4 } })
     setConversationSource(() => conversation)

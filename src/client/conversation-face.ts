@@ -39,6 +39,16 @@ type InputHubFace = ConversationController['input'] & {
   shell(sessionId: SessionId): { readonly notices: ObservableSource<ComposerNotice | null> }
 }
 
+/** The draft-attachment operations the taken-over composer consumes. */
+export interface AttachmentFace {
+  createDrafts(sessionId: SessionId, files: readonly File[]): readonly unknown[]
+  resolveDraftAttachments(ids: readonly string[]): readonly unknown[]
+  releaseDraftAttachment(id: string): void
+  releaseDraftAttachments(attachments: readonly unknown[]): void
+  retryFileUpload(sessionId: SessionId, id: string): void
+  readonly fileUploads?: ObservableSource<Readonly<Record<string, { readonly status: string }>>>
+}
+
 /** The conversation service face the taken-over composer consumes. */
 export type ConversationFace = ConversationController
 
@@ -61,6 +71,20 @@ export function setConversationSource(resolve: ConversationSource): void {
  */
 export function conversationFace(): ConversationFace | undefined {
   return source()
+}
+
+/**
+ * The draft-attachment face, capability-detected: undefined on host builds
+ * where the service no longer exposes the operations (the attachment UI
+ * degrades away; the text face must never go down over a missing method).
+ */
+export function attachmentFace(): AttachmentFace | undefined {
+  const conversation = source()
+  if (conversation === undefined) return undefined
+  const candidate = conversation as unknown as Partial<AttachmentFace> & ConversationFace
+  if (typeof candidate.createDrafts !== 'function') return undefined
+  if (typeof candidate.resolveDraftAttachments !== 'function') return undefined
+  return candidate as AttachmentFace
 }
 
 /**

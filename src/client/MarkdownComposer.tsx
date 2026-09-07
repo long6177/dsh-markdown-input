@@ -25,7 +25,8 @@ import type {
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
 import {
-  conversationFace, noticesOf, useObservable,
+  attachmentFace as detectAttachmentFace, conversationFace, noticesOf, useObservable,
+  type AttachmentFace,
 } from './conversation-face.ts'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from './markdown-editor.ts'
 import { NS } from './locales.ts'
@@ -125,7 +126,10 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
     [conversation, sessionId],
   )
   const notice = useObservable(noticeSource)
-  const uploads = useObservable(conversation?.fileUploads)
+  // Attachment operations are capability-detected: host builds where the
+  // service boundary moved shed the attachment UI, never the text face.
+  const attachmentFace = detectAttachmentFace()
+  const uploads = useObservable(attachmentFace?.fileUploads)
 
   // Prompt failures are ordinary failures: the banner announces them, the
   // draft stays in the machine, the user resubmits. A remount over a session
@@ -144,9 +148,11 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
     if (notice?.level === 'error') showBanner(notice.text)
   }, [notice, showBanner])
 
-  const attachments = useMemo(
-    () => conversation === undefined ? [] : conversation.resolveDraftAttachments(input.attachmentIds),
-    [conversation, input.attachmentIds],
+  const attachments = useMemo<ComposerAttachment[]>(
+    () => attachmentFace === undefined
+      ? []
+      : attachmentFace.resolveDraftAttachments(input.attachmentIds) as ComposerAttachment[],
+    [attachmentFace, input.attachmentIds],
   )
   // Send waits for every picked file: uploading and failed drafts both hold
   // the gate (a failed upload is retried or removed, never silently dropped).
@@ -159,11 +165,11 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
   // Keep the ids in line with the descriptors: entries whose browser-owned
   // objects died elsewhere (session teardown) fall off the draft.
   useEffect(() => {
-    if (conversation === undefined) return
+    if (attachmentFace === undefined) return
     if (attachments.length !== input.attachmentIds.length) {
       inputActions.pruneAttachments(attachments.map((attachment) => attachment.id))
     }
-  }, [conversation, attachments, input.attachmentIds, inputActions])
+  }, [attachmentFace, attachments, input.attachmentIds, inputActions])
 
   function submit(): void {
     const editor = editorRef.current
@@ -261,18 +267,18 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
   }, [mode, t])
 
   const canSubmit = (hasText || input.attachmentIds.length > 0) && input.phase === 'plain' && !uploadsPending
-  const canIntake = conversation !== undefined && session?.subagent == null && !machineBusy
+  const canIntake = attachmentFace !== undefined && session?.subagent == null && !machineBusy
 
   // File intake through the conversation service's own validation path; the
   // admitted state mutation rides the public addAttachments (a busy-phase
   // refusal releases the just-created drafts instead of leaking them).
   function intakeFiles(files: readonly File[]): void {
-    if (conversation === undefined || sessionId === undefined || files.length === 0) return
+    if (attachmentFace === undefined || sessionId === undefined || files.length === 0) return
     if (session?.subagent != null || machineBusy) return
     try {
-      const drafts = conversation.createDrafts(sessionId, files)
+      const drafts = attachmentFace.createDrafts(sessionId, files) as ComposerAttachment[]
       if (!inputActionsRef.current.addAttachments(drafts.map((draft) => draft.id))) {
-        conversation.releaseDraftAttachments(drafts)
+        attachmentFace.releaseDraftAttachments(drafts)
       }
     } catch (error: unknown) {
       showBanner(error instanceof Error ? error.message : String(error))
@@ -304,16 +310,16 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
   }
 
   function onRemoveAttachment(id: DraftAttachmentId): void {
-    if (conversation === undefined || machineBusy) return
+    if (attachmentFace === undefined || machineBusy) return
     // The machine admits (not busy) and the release happens in the same tick,
     // so the descriptor cannot be orphaned by a race.
     inputActionsRef.current.removeAttachment(id)
-    conversation.releaseDraftAttachment(id)
+    attachmentFace.releaseDraftAttachment(id)
   }
 
   function onRetryFile(id: DraftAttachmentId): void {
-    if (conversation === undefined || sessionId === undefined) return
-    conversation.retryFileUpload(sessionId, id)
+    if (attachmentFace === undefined || sessionId === undefined) return
+    attachmentFace.retryFileUpload(sessionId, id)
   }
 
   function uploadState(id: DraftAttachmentId): ReactNode {
@@ -384,7 +390,7 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
           title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
           {labelOf(t, otherMode)}
         </button>
-        {conversation !== undefined && (
+        {attachmentFace !== undefined && (
           <>
             <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
               title={t('composer.attach')} disabled={!canIntake}
