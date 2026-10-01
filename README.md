@@ -14,12 +14,12 @@ A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) we
 - **Markdown-rendered user messages** — sent user messages render as Markdown in the chat history (reusing the host's own renderer), with `@`-mention and skill chips preserved.
 - **Paste conversion** — `text/html` clipboard content converts to clean Markdown; `Ctrl/Cmd+Shift+V` pastes the plain flavor untouched.
 
-> **Status: alpha, under active development.** dsh itself is a developer preview with compatibility-breaking changes; this plugin tracks the `0.1.2-rc.x` line of `@deepseek-ai/dsh-*` packages and is re-tested against upstream master.
+> **Status: alpha, under active development.** dsh itself is a developer preview with compatibility-breaking changes; this plugin tracks the `0.2.0-rc.x` line of `@deepseek-ai/dsh` and is re-tested against upstream master.
 
 ### Install
 
 ```sh
-dsh plugin --profile web add dsh-markdown-input   # npm (once published)
+dsh plugin --profile web add dsh-markdown-input   # npm
 dsh plugin --profile web add github:long6177/dsh-markdown-input
 ```
 
@@ -30,6 +30,8 @@ dsh plugin --profile web add github:long6177/dsh-markdown-input
 | `defaultMode` | `'render' \| 'source'` | `'render'` | Editing mode the composer opens in. |
 
 ### Testing
+
+> Dev dependencies link into a local checkout of [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) at `../deepseek-harness`; clone it beside this repo before `pnpm install`.
 
 ```sh
 pnpm test                     # unit + component + bundle contract (vitest, jsdom)
@@ -54,12 +56,12 @@ bash scripts/retest-wizard.sh # guided on-device re-test; writes outputs/retest-
 - **用户消息 Markdown 化** —— 已发送的用户消息在聊天记录中按 Markdown 渲染（复用宿主自带渲染管线），并保留 @提及 与技能引用 chip。
 - **粘贴转换** —— 剪贴板 `text/html` 富文本自动转为干净 Markdown；`Ctrl/Cmd+Shift+V` 直插纯文本原文。
 
-> **状态：alpha，积极开发中。** dsh 本身处于 developer preview、存在破坏性变更；本插件跟随 `@deepseek-ai/dsh-*` 的 `0.1.2-rc.x` 版本线，并对上游 master 持续重测。
+> **状态：alpha，积极开发中。** dsh 本身处于 developer preview、存在破坏性变更；本插件跟随 `@deepseek-ai/dsh` 的 `0.2.0-rc.x` 版本线，并对上游 master 持续重测。
 
 ### 安装
 
 ```sh
-dsh plugin --profile web add dsh-markdown-input   # npm（发布后）
+dsh plugin --profile web add dsh-markdown-input   # npm
 dsh plugin --profile web add github:long6177/dsh-markdown-input
 ```
 
@@ -70,6 +72,8 @@ dsh plugin --profile web add github:long6177/dsh-markdown-input
 | `defaultMode` | `'render' \| 'source'` | `'render'` | 输入区打开时的编辑模式。 |
 
 ### 测试
+
+> 开发依赖以 `link:` 指向本仓库旁的 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 本地检出（`../deepseek-harness`）；执行 `pnpm install` 前请先克隆到相邻目录。
 
 ```sh
 pnpm test                     # 单元 + 组件 + bundle 契约（vitest，jsdom）

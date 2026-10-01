@@ -1,7 +1,7 @@
 {
   "name": "dsh-markdown-input",
   "description": "Markdown live-rendering composer for the DeepSeek Harness web UI: takeover input box with Obsidian-style live preview, source mode, HTML paste conversion, and Markdown-rendered user messages",
-  "version": "0.1.0-alpha.1",
+  "version": "0.2.0-alpha.0",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -50,7 +50,13 @@
     "url": "git+https://github.com/long6177/dsh-markdown-input.git"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "*"
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/dsh": "^0.2.0-rc.2"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/dsh": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.0",
@@ -64,7 +70,7 @@
     "turndown": "^7.2.4"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/cordis": "link:../deepseek-harness/vendor/cordis",
     "@deepseek-ai/dsh-client-locale": "link:../deepseek-harness/packages/client/locale",
     "@deepseek-ai/dsh-client-ui-chat": "link:../deepseek-harness/packages/client/ui-chat",
     "@deepseek-ai/dsh-client-ui-conversation": "link:../deepseek-harness/packages/client/ui-conversation",
