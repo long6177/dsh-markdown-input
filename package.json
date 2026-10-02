@@ -1,7 +1,7 @@
 {
   "name": "dsh-markdown-input",
-  "description": "Markdown enhancements for the DeepSeek Harness web UI on the native composer: Markdown-rendered user messages and rich-text paste conversion, with the live paint layer staged behind capability probes (ADR-0003)",
-  "version": "0.2.0-alpha.2",
+  "description": "Markdown enhancements for the DeepSeek Harness web UI on the native composer: Markdown-rendered user messages, rich-text paste conversion, and the live inline paint layer (bold/italic/code/strikethrough with dimmed markers) — capability-probed per layer (ADR-0003)",
+  "version": "0.2.0-alpha.3",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
