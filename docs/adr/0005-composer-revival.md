@@ -22,3 +22,4 @@ v1 的真机缺陷（alpha.0 整端崩溃、重建面缺陷密集）以两条硬
 - 绘制层引擎（#15）与 composer 侧 PasteDock 随接管失去宿主编辑器锚点而退役：粘贴转 Markdown 必须在 CM6 编辑器面内重实现（CM6 paste handler）。聊天消息投影（用户消息/steering Markdown 化）与输入区无关，保持不变。
 - chip 复用宿主文本协议（纯文本即线格式）：以 CM6 补全 + 装饰重建引用 chip，宿主 `setDraft`/`restoreDraft` 兼容面继续可用。
 - 词汇表：「接管」恢复为现行概念；「绘制层」退役。
+- 发布与反馈闭环依 [ADR-0004](0004-npm-release-remote-feedback-loop.md) 不变：npm 发版（OTP 由维护者输入）、官方桌面端插件管理 UI 安装升级、≤8 条验收清单对照真机口头反馈。
