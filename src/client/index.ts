@@ -1,9 +1,11 @@
 /**
  * dsh-markdown-input, browser half: replaces the `user`/`steering`
  * chat-node seats so sent and queued user messages render through the
- * host's own Markdown pipeline, reference chips preserved. Per ADR-0003
- * the composer is the host's native surface — this plugin registers no
- * composer entry; the paint (L1) and paste (L3) layers build on the
+ * host's own Markdown pipeline, reference chips preserved, and occupies a
+ * composer dock entry for the paste layer (L3): clipboard `text/html`
+ * converts to clean Markdown and inserts through the host's version-guarded
+ * insertion API at the caret. Per ADR-0003 the composer stays the host's
+ * native surface; the paint (L1) and paste (L3) layers build on the
  * capability skeletons in paint-layer.ts / paste-layer.ts.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
@@ -15,6 +17,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { probe, type Capability } from './capability.ts'
+import { PasteDock } from './PasteDock.tsx'
 import { MarkdownUserMessage } from './UserMessage.tsx'
 
 /** Required services: slot registry. */
@@ -80,4 +83,15 @@ export function apply(ctx: ClientContext): void {
       locale: 'chat',
     }, MarkdownUserMessage))
   }
+  // L3 paste layer: one peripheral-slot occupant at the host's
+  // `conversation.composer.dock` entry point (the ambient slot below the
+  // composer card). Session scope grants the standard `inputActions` face;
+  // the occupant renders an invisible anchor and converts rich-text paste
+  // to clean Markdown through the version-guarded insertion verbs. The
+  // host's composer bar declares the slot; inject defers the registration
+  // until that declaration lands.
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
+    id: 'markdown-input-paste',
+  }, PasteDock))
 }

@@ -9,10 +9,12 @@ import { describe, expect, it } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply, userMessageCapability } from '../src/client/index.ts'
 import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
+import { PasteDock } from '../src/client/PasteDock.tsx'
 
 interface RecordedRegistration {
   name: string
   key?: string
+  id?: string
   priority?: number
   locale?: string
   component: unknown
@@ -47,6 +49,7 @@ function recordedContext(): {
         registrations.push({
           name: options.name as string,
           key: options.key as string | undefined,
+          id: options.id as string | undefined,
           priority: options.priority as number | undefined,
           locale: options.locale as string | undefined,
           component,
@@ -66,10 +69,10 @@ describe('client apply registration', () => {
     expect(registrations.filter(entry => entry.name === 'conversation.composer')).toEqual([])
   })
 
-  it('touches only the chat-node slot', () => {
+  it('touches only the chat-node slot and the composer dock', () => {
     const { ctx, injected } = recordedContext()
     apply(ctx)
-    expect([...new Set(injected)]).toEqual(['conversation.chat.node'])
+    expect([...new Set(injected)].sort()).toEqual(['conversation.chat.node', 'conversation.composer.dock'])
   })
 
   it('replaces exactly the user and steering chat-node keys', () => {
@@ -86,6 +89,19 @@ describe('client apply registration', () => {
       expect(seat.component).toBe(MarkdownUserMessage)
       expect(seat.locale).toBe('chat')
     }
+  })
+
+  it('occupies the composer dock with one invisible paste-layer entry', () => {
+    const { ctx, registrations } = recordedContext()
+    apply(ctx)
+    const docks = registrations.filter(entry => entry.name === 'conversation.composer.dock')
+    expect(docks).toHaveLength(1)
+    // A list-slot occupant: a stable id, default priority (render order is
+    // irrelevant for an invisible anchor), and no locale of its own.
+    expect(docks[0]?.id).toBe('markdown-input-paste')
+    expect(docks[0]?.key).toBeUndefined()
+    expect(docks[0]?.locale).toBeUndefined()
+    expect(docks[0]?.component).toBe(PasteDock)
   })
 
   it('ships no dictionaries of its own — seat copy rides the host chat namespace', () => {
