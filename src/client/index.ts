@@ -1,12 +1,11 @@
 /**
  * dsh-markdown-input, browser half: replaces the `user`/`steering`
  * chat-node seats so sent and queued user messages render through the
- * host's own Markdown pipeline, reference chips preserved, and occupies a
- * composer dock entry for the paste layer (L3): clipboard `text/html`
- * converts to clean Markdown and inserts through the host's version-guarded
- * insertion API at the caret. Per ADR-0003 the composer stays the host's
- * native surface; the paint (L1) and paste (L3) layers build on the
- * capability skeletons in paint-layer.ts / paste-layer.ts.
+ * host's own Markdown pipeline, reference chips preserved, and occupies two
+ * composer dock entries on the native composer (ADR-0003): the paint layer
+ * (L1) colors the inline four over the text face with dimmed syntax
+ * markers, and the paste layer (L3) converts clipboard rich text to clean
+ * Markdown through the version-guarded insertion verbs at the caret.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // The `chat`-namespace `t` seat also accepts the shared `common` vocabulary
@@ -17,6 +16,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { probe, type Capability } from './capability.ts'
+import { PaintDock } from './PaintDock.tsx'
 import { PasteDock } from './PasteDock.tsx'
 import { MarkdownUserMessage } from './UserMessage.tsx'
 
@@ -94,4 +94,15 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.composer.dock',
     id: 'markdown-input-paste',
   }, PasteDock))
+  // L1 paint layer: a second dock occupant runs the paint engine over the
+  // native text face — the inline four colored, syntax markers dimmed, via
+  // the CSS Custom Highlight API. Paint-only: zero DOM modification, so
+  // IME, undo, and the caret stay the host's own. Like the paste layer,
+  // the dock owns its capability probe: an unsupported browser never
+  // attaches, and a mid-life failure or structure change degrades that
+  // engine run alone, never the composer (ADR-0003).
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
+    id: 'markdown-input-paint',
+  }, PaintDock))
 }

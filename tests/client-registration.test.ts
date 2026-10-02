@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply, userMessageCapability } from '../src/client/index.ts'
 import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
+import { PaintDock } from '../src/client/PaintDock.tsx'
 import { PasteDock } from '../src/client/PasteDock.tsx'
 
 interface RecordedRegistration {
@@ -91,17 +92,22 @@ describe('client apply registration', () => {
     }
   })
 
-  it('occupies the composer dock with one invisible paste-layer entry', () => {
+  it('occupies the composer dock with the paste and paint entries', () => {
     const { ctx, registrations } = recordedContext()
     apply(ctx)
     const docks = registrations.filter(entry => entry.name === 'conversation.composer.dock')
-    expect(docks).toHaveLength(1)
-    // A list-slot occupant: a stable id, default priority (render order is
-    // irrelevant for an invisible anchor), and no locale of its own.
-    expect(docks[0]?.id).toBe('markdown-input-paste')
-    expect(docks[0]?.key).toBeUndefined()
-    expect(docks[0]?.locale).toBeUndefined()
-    expect(docks[0]?.component).toBe(PasteDock)
+    expect(docks).toHaveLength(2)
+    // List-slot occupants: stable ids, default priority (render order is
+    // irrelevant for invisible anchors), and no locale of their own. Each
+    // dock owns its capability probe — registration is unconditional, the
+    // same idiom as the paste layer at HEAD.
+    expect(docks.map(entry => entry.id).sort()).toEqual(['markdown-input-paint', 'markdown-input-paste'])
+    for (const dock of docks) {
+      expect(dock.key).toBeUndefined()
+      expect(dock.locale).toBeUndefined()
+    }
+    expect(docks.find(entry => entry.id === 'markdown-input-paste')?.component).toBe(PasteDock)
+    expect(docks.find(entry => entry.id === 'markdown-input-paint')?.component).toBe(PaintDock)
   })
 
   it('ships no dictionaries of its own — seat copy rides the host chat namespace', () => {
