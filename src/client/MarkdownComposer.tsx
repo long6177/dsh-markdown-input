@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, ReactNode } from 'react'
 import {
-  IconCloseOutline16, IconPaperclipOutline16, IconWarningOutline16,
+  IconCloseOutlineMedium, IconPaperclipOutlineMedium, IconWarningOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   ComposerAttachment, DraftAttachmentId,
@@ -349,7 +349,7 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
         <button type="button" className={css.removeButton} aria-label={t('composer.attachment.remove')}
           title={t('composer.attachment.remove')} disabled={machineBusy}
           onClick={() => { onRemoveAttachment(attachment.id) }}>
-          <IconCloseOutline16 size={12} />
+          <IconCloseOutlineMedium size={12} />
         </button>
       </li>
     )
@@ -362,11 +362,11 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
       onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       {banner !== null && (
         <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
-          <IconWarningOutline16 size={14} />
+          <IconWarningOutlineMedium size={14} />
           <span className={css.bannerText}>{banner.text}</span>
           <button type="button" className={css.bannerClose} aria-label={t('composer.notice.dismiss')}
             onClick={() => { setBanner(null) }}>
-            <IconCloseOutline16 size={12} />
+            <IconCloseOutlineMedium size={12} />
           </button>
         </div>
       )}
@@ -395,7 +395,7 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
             <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
               title={t('composer.attach')} disabled={!canIntake}
               onClick={() => { fileInputRef.current?.click() }}>
-              <IconPaperclipOutline16 size={14} />
+              <IconPaperclipOutlineMedium size={14} />
             </button>
             <input
               ref={fileInputRef}

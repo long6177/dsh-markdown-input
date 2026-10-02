@@ -1,7 +1,7 @@
 {
   "name": "dsh-markdown-input",
   "description": "Markdown live-rendering composer for the DeepSeek Harness web UI: takeover input box with Obsidian-style live preview, source mode, HTML paste conversion, and Markdown-rendered user messages",
-  "version": "0.2.0-alpha.0",
+  "version": "0.2.0-alpha.1",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -64,7 +64,7 @@
     "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.7.4",
     "@codemirror/view": "^6.43.11",
-    "@deepseek-ai/schemastery": "^3.18.2",
+    "@deepseek-ai/schemastery": "^3.18.4",
     "@lezer/common": "^1.5.2",
     "@lezer/highlight": "^1.2.3",
     "turndown": "^7.2.4"

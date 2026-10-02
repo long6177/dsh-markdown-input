@@ -27,8 +27,8 @@ importers:
         specifier: ^0.2.0-rc.2
         version: 0.2.0-rc.2(cec74ae43b60b765238ca1bdba36119c)
       '@deepseek-ai/schemastery':
-        specifier: ^3.18.2
-        version: 3.18.2
+        specifier: ^3.18.4
+        version: 3.18.4
       '@lezer/common':
         specifier: ^1.5.2
         version: 1.5.2

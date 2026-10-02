@@ -9,7 +9,7 @@
  */
 import { Children, Fragment, isValidElement, memo, useMemo, type ReactNode } from 'react'
 import {
-  DocumentFileIcon, fileSizeText, JsonBlock, MarkdownText, projectUserText,
+  FileTypeIcon, fileSizeText, JsonBlock, MarkdownText, projectUserText,
   type MarkdownLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeViewProps, ChatNodeOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
@@ -131,7 +131,7 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
             {images.length > 0 && renderMessageImages({ images: images as ImageSourceList, align: 'end' })}
             {files.map((file, index) => (
               <span key={index} className={css.fileCard} title={file.attachment?.name}>
-                <DocumentFileIcon className={css.fileIcon} />
+                <FileTypeIcon className={css.fileIcon} path={file.attachment?.name ?? ''} />
                 <span className={css.fileContent}>
                   <span className={css.fileName}>{file.attachment?.name}</span>
                   <span className={css.fileMeta}>{fileSizeText(file.attachment?.bytes ?? 0)}</span>
