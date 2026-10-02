@@ -6,13 +6,11 @@
 
 ## English
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) web-UI plugin that upgrades the chat composer for Markdown:
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) web-UI plugin that layers Markdown onto the native composer and chat history:
 
-- **Composer takeover** — the input box becomes a Markdown live editor (Obsidian-style: markers visible on the active line, folded elsewhere). Built-in takeover panels (approvals, questions, subagent) keep precedence.
-- **Render / source mode toggle** — fold markers for writing, or see the raw source; the choice persists in the browser.
-- **Raw Markdown is what gets sent** — the rendering is purely visual; the model receives the Markdown source.
-- **Markdown-rendered user messages** — sent user messages render as Markdown in the chat history (reusing the host's own renderer), with `@`-mention and skill chips preserved.
-- **Paste conversion** — `text/html` clipboard content converts to clean Markdown; `Ctrl/Cmd+Shift+V` pastes the plain flavor untouched.
+- **Markdown-rendered user messages** — sent user messages and queued steering messages render as Markdown in the chat history (reusing the host's own renderer), with `@`-mention and skill chips preserved.
+- **Paste conversion** — the clipboard `text/html` → clean Markdown converter ships as a module; the composer wiring through the official guarded insertion API lands with the paste layer (L3).
+- **Native composer, layered enhancements** — per [ADR-0003](docs/adr/0003-native-composer-paint-layer.md) the input box stays the host's own: no takeover, no rebuilt tool row. Enhancement layers (the paint-layer live rendering, L1; the paste layer, L3) probe their host surface before activating and auto-disable on failure, each degrading to the native behavior independently.
 
 > **Status: alpha, under active development.** dsh itself is a developer preview with compatibility-breaking changes; this plugin tracks the `0.2.0-rc.x` line of `@deepseek-ai/dsh` and is re-tested against upstream master.
 
@@ -23,15 +21,9 @@ dsh plugin --profile web add dsh-markdown-input   # npm
 dsh plugin --profile web add github:long6177/dsh-markdown-input
 ```
 
-### Config
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `defaultMode` | `'render' \| 'source'` | `'render'` | Editing mode the composer opens in. |
-
 ### Testing
 
-> Dev dependencies link into a local checkout of [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) at `../deepseek-harness`; clone it beside this repo before `pnpm install`.
+> Dev dependencies link into a local checkout of [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) at `../deepseek-harness` (pinned to the `dsh-v0.2.0-rc.2` tag); clone it beside this repo before `pnpm install`.
 
 ```sh
 pnpm test                     # unit + component + bundle contract (vitest, jsdom)
@@ -48,13 +40,11 @@ bash scripts/retest-wizard.sh # guided on-device re-test; writes outputs/retest-
 
 ## 中文
 
-一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web UI 插件，为聊天输入区带来 Markdown 体验：
+一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web UI 插件，在原生输入区与聊天记录之上分层叠加 Markdown 体验：
 
-- **输入区接管** —— 输入框变为 Markdown 实时编辑器（Obsidian 式：光标所在行保留语法标记，移开后折叠）。内置接管面板（审批、提问、子代理）按优先级正常抢占。
-- **渲染 / 源码模式切换** —— 写作时折叠标记，需要时查看原始源码；选择持久化在浏览器中。
-- **发送的是原始 Markdown 源码** —— 渲染只是视觉层，模型收到的是 Markdown 源码。
-- **用户消息 Markdown 化** —— 已发送的用户消息在聊天记录中按 Markdown 渲染（复用宿主自带渲染管线），并保留 @提及 与技能引用 chip。
-- **粘贴转换** —— 剪贴板 `text/html` 富文本自动转为干净 Markdown；`Ctrl/Cmd+Shift+V` 直插纯文本原文。
+- **用户消息 Markdown 化** —— 已发送的用户消息与排队中的 steering 消息在聊天记录中按 Markdown 渲染（复用宿主自带渲染管线），并保留 @提及 与技能引用 chip。
+- **粘贴转换** —— 剪贴板 `text/html` → 干净 Markdown 的转换器以模块形式随包发布；经官方带守卫插入 API 接入输入区的粘贴层（L3）随后续工单落地。
+- **原生输入区，分层增强** —— 依据 [ADR-0003](docs/adr/0003-native-composer-paint-layer.md)，输入区保持宿主原生形态：不接管、不重建工具行。各增强层（绘制层实时渲染 L1、粘贴层 L3）激活前先探测宿主能力，失败即自动禁用，各自独立降级、互不牵连。
 
 > **状态：alpha，积极开发中。** dsh 本身处于 developer preview、存在破坏性变更；本插件跟随 `@deepseek-ai/dsh` 的 `0.2.0-rc.x` 版本线，并对上游 master 持续重测。
 
@@ -65,15 +55,9 @@ dsh plugin --profile web add dsh-markdown-input   # npm
 dsh plugin --profile web add github:long6177/dsh-markdown-input
 ```
 
-### 配置
-
-| 字段 | 类型 | 默认值 | 说明 |
-|---|---|---|---|
-| `defaultMode` | `'render' \| 'source'` | `'render'` | 输入区打开时的编辑模式。 |
-
 ### 测试
 
-> 开发依赖以 `link:` 指向本仓库旁的 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 本地检出（`../deepseek-harness`）；执行 `pnpm install` 前请先克隆到相邻目录。
+> 开发依赖以 `link:` 指向本仓库旁的 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 本地检出（固定在 `dsh-v0.2.0-rc.2` 标签）；执行 `pnpm install` 前请先克隆到相邻目录。
 
 ```sh
 pnpm test                     # 单元 + 组件 + bundle 契约（vitest，jsdom）

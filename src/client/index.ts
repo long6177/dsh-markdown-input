@@ -1,51 +1,71 @@
 /**
- * dsh-markdown-input, browser half: registers the zh/en dictionaries, the
- * low-priority composer chain entry that takes over the resident composer
- * for Markdown editing, and the `user`/`steering` chat-node renderers that
- * Markdownize sent and queued user messages. Built-in takeover panels
- * (approvals, questions, subagent) outrank this entry by priority, so they
- * keep their elections.
+ * dsh-markdown-input, browser half: replaces the `user`/`steering`
+ * chat-node seats so sent and queued user messages render through the
+ * host's own Markdown pipeline, reference chips preserved. Per ADR-0003
+ * the composer is the host's native surface — this plugin registers no
+ * composer entry; the paint (L1) and paste (L3) layers build on the
+ * capability skeletons in paint-layer.ts / paste-layer.ts.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
+// The `chat`-namespace `t` seat also accepts the shared `common` vocabulary
+// (copy/copied/markdown.footnotes) — that augmentation comes from here.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
-import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
+// Context.slots (SlotRegistry) is declared by the renderer's client face.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import { MarkdownComposer, MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
-import { en, NS, zh, type ComposerKey } from './locales.ts'
+import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
+import { probe, type Capability } from './capability.ts'
 import { MarkdownUserMessage } from './UserMessage.tsx'
-import { installConversationSource } from './conversation-face.ts'
 
-declare module '@deepseek-ai/dsh-client-ui-slots' {
-  interface LocaleNamespaceMap {
-    /** Markdown composer copy. */
-    'markdown-input': ComposerKey
-  }
-}
-
-export type { MarkdownComposerProps } from './MarkdownComposer.tsx'
-
-/** Required services: slot registry and copy. */
-export const inject = ['slots', 'locale']
+/** Required services: slot registry. */
+export const inject = ['slots']
 
 /**
- * Client plugin body: register the dictionaries, the composer takeover, and
- * the Markdown user-message renderer.
+ * A component value is present when the host module table resolved it at
+ * all — `memo`/`forwardRef` wrap the function into an exotic object, so a
+ * `typeof === 'function'` check would false-negative exactly the crash
+ * this gate guards against (missing names = `undefined`).
+ */
+function present(value: unknown): boolean {
+  return value !== undefined && value !== null
+}
+
+/**
+ * Probe the primitives values the Markdown seat composes with. A host
+ * build whose module table dropped any of them disables the seat
+ * replacement wholesale: nothing registers and the host's own renderers
+ * stay — the user sees the native bubbles, never a broken seat.
+ * @param surface - the primitives module namespace as the host table resolved it.
+ */
+export function userMessageCapability(surface: {
+  MarkdownText?: unknown
+  projectUserText?: unknown
+  FileTypeIcon?: unknown
+  fileSizeText?: unknown
+  JsonBlock?: unknown
+}): Capability {
+  return probe(
+    () => present(surface.MarkdownText)
+      && present(surface.JsonBlock)
+      && present(surface.FileTypeIcon)
+      && typeof surface.projectUserText === 'function'
+      && typeof surface.fileSizeText === 'function',
+    'primitives Markdown surface incomplete',
+  )
+}
+
+/**
+ * Client plugin body: replace the `user`/`steering` chat-node seats with
+ * the Markdown renderer, behind the capability probe.
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  // The taken-over card reads the conversation service for its attachment
-  // and notice faces (lazy per call — boot order stays free).
-  installConversationSource(ctx)
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
-  ctx.slots.inject('conversation.composer', () => ctx.slots.register({
-    name: 'conversation.composer',
-    // After approvals/questions (0..1) and the subagent read-only composer
-    // (-10): pending interactions keep precedence over Markdown editing.
-    priority: 2,
-    select: () => MARKDOWN_TAKEOVER,
-    locale: NS,
-  }, MarkdownComposer))
+  const capability = userMessageCapability(primitives)
+  if (!capability.supported) {
+    // Auto-disable: degrade to the host seats for the whole page life.
+    console.info(`[markdown-input] user-message Markdown rendering disabled: ${capability.reason}`)
+    return
+  }
   // Keyed replacement of the user-message seats — turn-opening (`user`) and
   // queued mid-turn (`steering`) bubbles share identical node data and both
   // go Markdown; every other chat node kind keeps the host's own renderers.

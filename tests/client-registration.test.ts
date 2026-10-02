@@ -1,21 +1,19 @@
 /**
  * Seam 0 (registration): the client `apply()` is the plugin's whole surface
  * toward the host slot registry, so it is asserted from the outside with a
- * recording `ctx` — the composer takeover lands at its negotiated priority,
- * and the chat-node seat is keyed replacement only: exactly the `user` and
- * `steering` keys, leaving every other node kind to the host's renderer.
+ * recording `ctx` — the composer stays native (no composer entry at all,
+ * ADR-0003), and the chat-node seat is keyed replacement only: exactly the
+ * `user` and `steering` keys, gated on the primitives capability probe.
  */
 import { describe, expect, it } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import { apply } from '../src/client/index.ts'
+import { apply, userMessageCapability } from '../src/client/index.ts'
 import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
-import { NS } from '../src/client/locales.ts'
 
 interface RecordedRegistration {
   name: string
   key?: string
   priority?: number
-  select?: unknown
   locale?: string
   component: unknown
 }
@@ -50,7 +48,6 @@ function recordedContext(): {
           name: options.name as string,
           key: options.key as string | undefined,
           priority: options.priority as number | undefined,
-          select: options.select,
           locale: options.locale as string | undefined,
           component,
         })
@@ -62,20 +59,17 @@ function recordedContext(): {
 }
 
 describe('client apply registration', () => {
-  it('touches only the composer and chat-node slots', () => {
-    const { ctx, injected } = recordedContext()
+  it('leaves the composer native — no composer entry is registered', () => {
+    const { ctx, injected, registrations } = recordedContext()
     apply(ctx)
-    expect([...new Set(injected)].sort()).toEqual(['conversation.chat.node', 'conversation.composer'])
+    expect(injected).not.toContain('conversation.composer')
+    expect(registrations.filter(entry => entry.name === 'conversation.composer')).toEqual([])
   })
 
-  it('takes over the composer at priority 2 with a constant selector', () => {
-    const { ctx, registrations } = recordedContext()
+  it('touches only the chat-node slot', () => {
+    const { ctx, injected } = recordedContext()
     apply(ctx)
-    const composer = registrations.find(entry => entry.name === 'conversation.composer')
-    expect(composer).toBeDefined()
-    expect(composer?.priority).toBe(2)
-    expect(typeof composer?.select).toBe('function')
-    expect(composer?.locale).toBe(NS)
+    expect([...new Set(injected)]).toEqual(['conversation.chat.node'])
   })
 
   it('replaces exactly the user and steering chat-node keys', () => {
@@ -94,9 +88,31 @@ describe('client apply registration', () => {
     }
   })
 
-  it('registers the zh/en dictionaries under the plugin namespace', () => {
+  it('ships no dictionaries of its own — seat copy rides the host chat namespace', () => {
     const { ctx, dictionaries } = recordedContext()
     apply(ctx)
-    expect(dictionaries).toEqual([[NS, { zh: expect.any(Object), en: expect.any(Object) }]])
+    expect(dictionaries).toEqual([])
+  })
+})
+
+describe('userMessageCapability gate', () => {
+  const full = {
+    MarkdownText: () => null,
+    projectUserText: () => null,
+    FileTypeIcon: () => null,
+    fileSizeText: () => '',
+    JsonBlock: () => null,
+  }
+
+  it('supports a complete primitives surface', () => {
+    expect(userMessageCapability(full).supported).toBe(true)
+  })
+
+  it('disables when any composed value is missing', () => {
+    const { FileTypeIcon, ...withoutIcons } = full
+    void FileTypeIcon
+    const verdict = userMessageCapability(withoutIcons)
+    expect(verdict.supported).toBe(false)
+    expect(verdict.reason).toContain('Markdown surface')
   })
 })

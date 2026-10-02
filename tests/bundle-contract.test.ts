@@ -50,10 +50,9 @@ const MODULE_TABLE = new Set([
     expect(externals).not.toContain('turndown')
   })
 
-  it('registers both the composer takeover and the user-message renderer', () => {
-    expect(bundle).toContain('"conversation.composer"')
+  it('keeps the composer native and registers the user-message renderer', () => {
+    expect(bundle).not.toContain('"conversation.composer"')
     expect(bundle).toContain('"conversation.chat.node"')
-    expect(bundle).toContain('priority: 2')
   })
 })
 
@@ -61,7 +60,12 @@ describe('packaging manifests', () => {
   it('declares the client export and web platform', () => {
     expect(packageJson.exports).toHaveProperty('./client')
     expect(packageJson.dsh.client.platform).toBe('web')
-    expect(packageJson.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-conversation')
+    // ui-chat must load before this row materializes: the chat view owns the
+    // 'conversation.chat.node' children declaration our seat registers into,
+    // and the registry throws when the slot is not yet declared.
+    expect(packageJson.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-chat')
+    expect(packageJson.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-slots')
+    expect(packageJson.dsh.client.inject).not.toContain('@deepseek-ai/dsh-client-ui-conversation')
     expect(packageJson.files).toEqual(expect.arrayContaining(['lib', 'cordis.patch.yml']))
     if (existsSync(bundlePath)) {
       const clientExport = packageJson.exports['./client'] as { types: string, default: string }
