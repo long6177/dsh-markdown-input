@@ -13,6 +13,8 @@ import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
 import { TakeoverCard } from '../src/client/composer-card.tsx'
 import { degradeTakeover, resetTakeoverDegradation } from '../src/client/degrade.ts'
 import { en, NS, zh } from '../src/client/locales.ts'
+import { en as modelEn, zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
+import { MODEL_NS } from '../src/client/model-face.ts'
 import { FallbackNotice } from '../src/client/FallbackNotice.tsx'
 import { PaintDock } from '../src/client/PaintDock.tsx'
 import { PasteDock } from '../src/client/PasteDock.tsx'
@@ -44,6 +46,9 @@ function recordedContext(): {
       register(...args: unknown[]): () => void {
         dictionaries.push(args)
         return () => {}
+      },
+      bind(ns: string): (key: string) => string {
+        return (key: string) => `${ns}:${key}`
       },
     },
     slots: {
@@ -134,7 +139,13 @@ describe('client apply registration', () => {
   it('ships the markdown-input dictionaries (zh/en) for the card copy', () => {
     const { ctx, dictionaries } = recordedContext()
     apply(ctx)
-    expect(dictionaries).toEqual([[NS, { zh, en }]])
+    // Two namespaces: the card copy, and the vendored model picker's verbatim
+    // ui-model-selection dictionary under the plugin's own namespace (the
+    // host `model` namespace stays untouched).
+    expect(dictionaries).toEqual([
+      [NS, { zh, en }],
+      [MODEL_NS, { zh: modelZh, en: modelEn }],
+    ])
   })
 
   it('the session latch: a degraded takeover never re-registers, the rest still does', () => {

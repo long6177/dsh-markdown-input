@@ -29,6 +29,9 @@ function recordedContext(): { ctx: ClientContext, disposers: readonly ReturnType
       register(): () => void {
         return () => {}
       },
+      bind(ns: string): (key: string) => string {
+        return (key: string) => ns + ':' + key
+      },
     },
     slots: {
       inject(_name: string, register: () => void): void {

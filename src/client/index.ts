@@ -30,10 +30,12 @@ import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
 import { installConversationSource } from './conversation-face.ts'
 import { installPermissionSource } from './permission-face.ts'
+import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
 import { TakeoverCard } from './composer-card.tsx'
 import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
+import { en as modelEn, zh as modelZh, type ModelKey } from './ModelSelectFace.locales.ts'
 import { PaintDock } from './PaintDock.tsx'
 import { PasteDock } from './PasteDock.tsx'
 import { MarkdownUserMessage } from './UserMessage.tsx'
@@ -42,6 +44,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
     /** Markdown composer copy. */
     'markdown-input': ComposerKey
+    /** The vendored model picker's copy (verbatim ui-model-selection dictionary, own namespace — the host `model` namespace stays untouched). */
+    'markdown-input.model': ModelKey
   }
 }
 
@@ -95,7 +99,22 @@ export function apply(ctx: ClientContext): void {
   // forwarded invalidation event, and the live session's command face the
   // same lazy way; the capability detection lives in the installer.
   installPermissionSource(ctx)
+  // The model face reads the host `modelDirectories` resolver (the same
+  // per-session directories the native seat and /model popup use) the same
+  // lazy way; a host build without model selection hides the face alone —
+  // the service is deliberately not a declared inject dependency, which
+  // would hold the whole plugin pending until it materializes.
+  installModelSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
+  // The vendored picker's copy is the verbatim ui-model-selection dictionary
+  // under the plugin's own namespace; the bound translate rides
+  // model-face.ts into the component (bind is stable per namespace and reads
+  // the active locale at call time — the same usage the host apply makes).
+  ctx.effect(() => {
+    const disposeModels = ctx.locale.register(MODEL_NS, { zh: modelZh, en: modelEn })
+    setModelLocale(ctx.locale.bind(MODEL_NS))
+    return disposeModels
+  }, 'markdown-input: model dictionaries')
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
   // (degrade.ts), which latches the takeover off for the page life and

@@ -63,6 +63,14 @@
   container-type: inline-size;
 }
 
+/* Expanded controls cannot share the line (observeControlRow measured):
+   the model pill drops its text and shows the pure icon. The variable names
+   are the host seat contract (`conversation.input.model`). */
+.toolRow[data-model-compact] {
+  --dsh-composer-model-text-display: none;
+  --dsh-composer-model-icon-display: block;
+}
+
 .spring {
   flex: 1;
 }

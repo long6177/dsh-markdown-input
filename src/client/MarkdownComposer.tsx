@@ -15,9 +15,10 @@
  * bar.
  *
  * The tool row is a federation of faces: the rebuilt permission preset
- * selector (T3) mounts inside its own FaceGate and reads the host's
- * permission data plane (permission-face.ts) — a probe miss or a mid-life
- * degrade hides that face alone, the text face and the rest of the row stay.
+ * selector (T3) and the vendored model/reasoning selector (T4) mount inside
+ * their own FaceGates and read the host's permission and model data planes
+ * (permission-face.ts, model-face.ts) — a probe miss or a mid-life degrade
+ * hides that face alone, the text face and the rest of the row stay.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, ReactNode } from 'react'
@@ -29,6 +30,7 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
+import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
   attachmentFace as detectAttachmentFace, conversationFace, noticesOf, useObservable,
@@ -38,6 +40,8 @@ import { registerFace } from './face.ts'
 import { FaceGate } from './FaceGate.tsx'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from './markdown-editor.ts'
 import { NS } from './locales.ts'
+import { modelFaceDefinition } from './model-face.ts'
+import { ModelSelectFace } from './ModelSelectFace.tsx'
 import { permissionFaceDefinition } from './permission-face.ts'
 import { PermissionSelectFace } from './PermissionSelectFace.tsx'
 
@@ -120,6 +124,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   const [banner, setBanner] = useState<{ seq: number; text: string } | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const toolRowRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const touchedRef = useRef(false)
   const seedingRef = useRef(false)
@@ -285,6 +290,16 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     setHasText(input.draft.trim().length > 0)
   }, [input.draft])
 
+  // Tool-row collapse measurement (the model pill's truncation ladder, host
+  // parity): flips `data-model-compact` when the expanded controls cannot
+  // share the line, which switches the pill to pure icon. The row exists on
+  // every render of the card, so a mount-time observe is enough.
+  useEffect(() => {
+    const row = toolRowRef.current
+    if (row === null) return undefined
+    return observeControlRow(row)
+  }, [])
+
   // Aligned with the built-in bar: busy phases read-only the surface so the
   // draft stays visible but cannot change under the in-flight submit.
   useEffect(() => {
@@ -402,7 +417,9 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   const otherMode: EditMode = mode === 'render' ? 'source' : 'render'
 
   return (
-    <div className={css.card} data-markdown-composer
+    // `data-composer-card` is the host card contract (the shared Toast
+    // anchor and popup-dismissal marker); `data-markdown-composer` is ours.
+    <div className={css.card} data-markdown-composer data-composer-card
       onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       {banner !== null && (
         <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
@@ -428,7 +445,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
         </ul>
       )}
       <div className={css.surface} data-markdown-surface ref={surfaceRef} />
-      <div className={css.toolRow}>
+      <div className={css.toolRow} ref={toolRowRef}>
         {/* Permission preset face (tool row ②): projection-driven pill +
             preset popup + risk gate, probed and gated independently — a
             probe miss or a mid-life degrade hides this face alone. */}
@@ -464,6 +481,17 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
           </>
         )}
         <span className={css.spring} />
+        {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
+            over the host `modelDirectories` data plane, right-aligned before
+            the submit action like the native seat. Probed and gated like the
+            permission face; busy phases never lock the model seat. */}
+        <FaceGate definition={modelFaceDefinition()}>
+          <ModelSelectFace
+            sessionId={sessionId}
+            locked={sessionId === undefined}
+            subagent={session?.subagent ?? null}
+          />
+        </FaceGate>
         <button type="button" className={css.submitButton} disabled={!canSubmit} onClick={submit}>
           {t('composer.action.submit')}
         </button>
