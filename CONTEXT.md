@@ -11,8 +11,12 @@ dsh Web UI 中用户撰写消息的整块区域：文本面、工具行、附件
 _Avoid_: 输入框（笼统指文本面时可用「文本面」）、textarea
 
 **绘制层（Paint layer）**:
-叠加于宿主输入区之上、仅改绘制而不改 DOM 与布局的渲染层；输入区内 Markdown 视觉呈现的实现位置。
-_Avoid_: 覆盖层（暗示 DOM 叠放）、接管（v1 已退役的替换机制）
+叠加于宿主输入区之上、仅改绘制而不改 DOM 与布局的渲染层；alpha.3 曾作为输入区渲染方案，因 CSS Custom Highlight API 的 paint 级上限（无字重字形）自 ADR-0005 起退役。
+_Avoid_: 覆盖层（暗示 DOM 叠放）
+
+**接管卡（Takeover card）**:
+经 `conversation.composer` 选举链低优先级接管输入区的插件卡片：内嵌 CodeMirror 6 编辑器承担文本面，工具行控件与弹层按原生形态重建；输入区实时渲染的实现位置（ADR-0005 起）。
+_Avoid_: 皮肤（暗示纯外观）、覆盖层
 
 **附加槽（Peripheral slot）**:
 不替换内置输入区、只在其周边（卡片上方、下方、工具行两侧、卡内浮动）贡献小部件的扩展点。

@@ -1,6 +1,6 @@
 # 通过 conversation.composer 选举链整体接管输入区，自建周边部件对齐内置形态
 
-> **状态：已被 [ADR-0003](0003-native-composer-paint-layer.md) 取代。** v2 起不再接管输入区；本文保留为 v1 的决策记录。
+> **状态：现行（自 [ADR-0005](0005-composer-revival.md) 起恢复）。** 曾被 [ADR-0003](0003-native-composer-paint-layer.md) 短暂取代；接管链以 error boundary + 逐面能力探测的硬化约束重启。
 
 分屏预览方案被用户否决（不接受「下方原始、上方预览」的割裂体验），周边附加槽又无法改变文本面本身。我们通过 `conversation.composer` 选举链以低优先级注册（`select` 恒真），让审批/提问等内置面板按其优先级正常抢占，其余时间由本插件输入卡片接管。被隐藏的内置子部件（工具行、附件栏、@与/补全等）按「尽量对齐原样」原则重建；草稿读写与提交走公开 `InputState`/`inputActions` API，不触碰宿主私有编辑器实例。chain 的 `overlay` 机制保证被接管的内置输入区保活、草稿在接管切换间幸存。
 

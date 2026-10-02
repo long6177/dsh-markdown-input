@@ -1,5 +1,7 @@
 # 放弃 composer 接管，转向「原生输入区 + 绘制层」的分层增强
 
+> **状态：已被 [ADR-0005](0005-composer-revival.md) 取代。** paint 级上限（无字重字形）经 alpha.3 真机验收被用户否决，绘制层路线退役；接管形态以硬化约束复活。
+
 v1 通过 `conversation.composer` 选举链整体接管输入区并重建周边部件，真机反馈显示重建层缺陷密集（草稿丢失、steering 气泡、引用 chip），且每个上游 preview 版本都要求重新对齐。上游 0.2.0 的 slot 授权规则明确 children 声明独占——声明他人已声明的子槽在加载时即失败——因此重建是机制强制的结构性成本，不是可优化的实现细节。与此同时，上游 0.2.0 把接管路线的主要动机逐一放进了公开 API：带版本守卫的光标处插入（`InputActions.captureInsertion()` / `insertText()`）、程序化草稿读写（`setDraft()`）、完整提交面（`submit(mode, source)`）、覆盖式面板的焦点归还（`focus()`），以及 chip 的纯文本无损往返（草稿文本重扫描派生 chip）。v2 起不再接管输入区：宿主的编辑器、工具行、附件栏与提交机保持原生，插件以「绘制层 + 官方草稿 API + 附加槽」分层增强，各层可独立降级。
 
 ## Considered Options
