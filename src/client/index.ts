@@ -7,6 +7,12 @@
  * sent and queued user messages render through the host's own Markdown
  * pipeline, reference chips preserved.
  *
+ * The takeover card's faces read the host through capability-detected
+ * gateways bound here: the conversation service (attachments, notices) and
+ * the permission data plane (catalog RPC + invalidation event + the live
+ * session's `/permission` write). Each face probes its own dependencies and
+ * degrades alone.
+ *
  * The three dock occupants (paste, paint, fallback notice) register beside
  * the card: the two ADR-0003 anchors idle over the hidden native fallback
  * until the dock retirement (T7), and the notice renders the one-shot
@@ -23,6 +29,7 @@ import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
 import { installConversationSource } from './conversation-face.ts'
+import { installPermissionSource } from './permission-face.ts'
 import { TakeoverCard } from './composer-card.tsx'
 import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
@@ -84,6 +91,10 @@ export function apply(ctx: ClientContext): void {
   // The taken-over card reads the conversation service for its attachment
   // and notice faces (lazy per call — boot order stays free).
   installConversationSource(ctx)
+  // The permission face reads the `remote.permissionPresets` catalog, the
+  // forwarded invalidation event, and the live session's command face the
+  // same lazy way; the capability detection lives in the installer.
+  installPermissionSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback

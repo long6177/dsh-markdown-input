@@ -108,6 +108,18 @@ function createFace(definition: FaceDefinition): FaceHandle {
 }
 
 /**
+ * Read an already-registered face by id WITHOUT registering one. The
+ * downstream door for faces whose FaceGate owns the definition: a gated
+ * body reads its verdict and latches mid-life degrades through this, and
+ * can never latch its own unconditional probe ahead of the gate's — a body
+ * rendered without its gate gets undefined, not a false verdict.
+ * @param id - the face id the gate registered.
+ */
+export function registeredFace(id: string): FaceHandle | undefined {
+  return faces.get(id)
+}
+
+/**
  * Test seam: clear the registry so a fresh test sees fresh probes. Never
  * call in plugin code — a face's verdict is page-lifetime by design.
  */

@@ -58,6 +58,9 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Query container for the tool-row controls' narrow-composer collapses
+     (the permission pill drops its label below 460px). */
+  container-type: inline-size;
 }
 
 .spring {

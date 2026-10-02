@@ -13,6 +13,11 @@
  * admission phases (adjudicating/submitting) disable the submit, attach,
  * drop, and remove actions and read-only the editor, matching the built-in
  * bar.
+ *
+ * The tool row is a federation of faces: the rebuilt permission preset
+ * selector (T3) mounts inside its own FaceGate and reads the host's
+ * permission data plane (permission-face.ts) — a probe miss or a mid-life
+ * degrade hides that face alone, the text face and the rest of the row stay.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, ReactNode } from 'react'
@@ -30,8 +35,11 @@ import {
   type AttachmentFace,
 } from './conversation-face.ts'
 import { registerFace } from './face.ts'
+import { FaceGate } from './FaceGate.tsx'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from './markdown-editor.ts'
 import { NS } from './locales.ts'
+import { permissionFaceDefinition } from './permission-face.ts'
+import { PermissionSelectFace } from './PermissionSelectFace.tsx'
 
 /** Selector marker this entry returns to win the composer chain election. */
 export interface MarkdownTakeover {
@@ -80,7 +88,7 @@ function labelOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
  * @param props - chain election marker plus standard session input props and copy.
  * @returns The composer replacement card.
  */
-export function MarkdownComposer({ useInput, inputActions, t, sessionId, session }: MarkdownComposerProps) {
+export function MarkdownComposer({ useInput, inputActions, useProjection, t, sessionId, session }: MarkdownComposerProps) {
   // Editor face (ADR-0005 hardening #2): the text face probes its own host
   // dependencies — the input hook and the two machine verbs it mirrors and
   // submits through — before anything else runs. The gate sits before the
@@ -421,6 +429,18 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
       )}
       <div className={css.surface} data-markdown-surface ref={surfaceRef} />
       <div className={css.toolRow}>
+        {/* Permission preset face (tool row ②): projection-driven pill +
+            preset popup + risk gate, probed and gated independently — a
+            probe miss or a mid-life degrade hides this face alone. */}
+        <FaceGate definition={permissionFaceDefinition(useProjection)}>
+          <PermissionSelectFace
+            useProjection={useProjection}
+            sessionId={sessionId}
+            t={t}
+            locked={sessionId === undefined}
+            onError={showBanner}
+          />
+        </FaceGate>
         {/* Action semantics: the button names the mode it switches TO. */}
         <button type="button" className={css.modeButton} onClick={toggleMode}
           title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>

@@ -7,7 +7,7 @@
  * ships, not any individual face.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { registerFace, resetFaces } from '../src/client/face.ts'
+import { registeredFace, registerFace, resetFaces } from '../src/client/face.ts'
 
 afterEach(() => {
   resetFaces()
@@ -59,6 +59,17 @@ describe('registerFace', () => {
     const a = registerFace({ id: 'tool.a', probe: () => true })
     const b = registerFace({ id: 'tool.b', probe: () => true })
     expect(b).not.toBe(a)
+  })
+})
+
+describe('registeredFace (lookup-only door)', () => {
+  it('reads an existing handle without registering one', () => {
+    const face = registerFace({ id: 'tool.test', probe: () => true })
+    expect(registeredFace('tool.test')).toBe(face)
+  })
+
+  it('answers undefined for an unregistered id instead of creating a handle', () => {
+    expect(registeredFace('tool.nobody')).toBeUndefined()
   })
 })
 

@@ -1,0 +1,105 @@
+/* The permission pill and its option rows, aligned with the native picker's
+   trigger chrome (28px chip, product glyph, current-preset label, rotating
+   chevron). Host design tokens carry a currentColor fallback so the pill
+   degrades gracefully on builds that rename them. */
+
+.trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 4px 0 8px;
+  border: none;
+  border-radius: var(--dsw-radius-sm, 8px);
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, inherit);
+  font-size: 13px;
+  line-height: 20px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.trigger:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, color-mix(in srgb, currentColor 8%, transparent));
+}
+
+.trigger:focus-visible {
+  box-shadow: 0 0 0 2px var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary, currentColor));
+}
+
+.trigger:disabled {
+  color: var(--dsw-alias-label-dimmed, color-mix(in srgb, currentColor 40%, transparent));
+  cursor: default;
+}
+
+.triggerIcon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+/* The shared 16px glyphs render one step smaller on the exposed trigger;
+   the dropdown rows keep the full 16px. */
+.triggerIcon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.triggerLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.optionLabel {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.optionLabelText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.badge {
+  flex: none;
+  align-self: flex-start;
+  margin-top: -1px;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 60%, transparent));
+  font-size: 8px;
+  line-height: 10px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.chevron {
+  /* inline-flex, not inline: an inline seat reserves baseline descent under
+     the svg and floats the glyph off-center in the 28px trigger. */
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--dsw-alias-label-caption, color-mix(in srgb, currentColor 60%, transparent));
+  transition: transform 120ms ease;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+/* Narrow composer: the trigger collapses to icon + chevron so the row keeps
+   fitting. Only triggers that actually carry a mode glyph drop their label —
+   a host-configured mode without one keeps its text as the sole identifier.
+   The 460px cut is where the tool row starts squeezing labels; the query
+   container is the takeover card's tool row. */
+@container (max-width: 460px) {
+  .trigger:has(.triggerIcon) .triggerLabel {
+    display: none;
+  }
+}
