@@ -6,11 +6,12 @@
 
 ## English
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) web-UI plugin that layers Markdown onto the native composer and chat history:
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) web-UI plugin that layers Markdown onto the composer and chat history:
 
 - **Markdown-rendered user messages** — sent user messages and queued steering messages render as Markdown in the chat history (reusing the host's own renderer), with `@`-mention and skill chips preserved.
-- **Paste conversion** — pasting rich text from the web or Word converts the clipboard `text/html` to clean Markdown at the caret in one undo step, through the host's version-guarded insertion API; `Ctrl/Cmd+Shift+V` still pastes plain, and plain-text, file, and image pastes keep their native behavior.
-- **Native composer, layered enhancements** — per [ADR-0003](docs/adr/0003-native-composer-paint-layer.md) the input box stays the host's own: no takeover, no rebuilt tool row. Enhancement layers (the paint-layer live rendering, L1; the paste layer, L3) probe their host surface before activating and auto-disable on failure, each degrading to the native behavior independently.
+- **Live-rendering takeover composer** — a low-priority `conversation.composer` chain entry ([ADR-0005](docs/adr/0005-composer-revival.md)) takes the composer over with a bundled CodeMirror 6 editor, Obsidian-style: bold/italic/inline code/strikethrough take their real styles, syntax markers fold away once the cursor leaves their line (render mode; a source toggle keeps every marker visible), Enter sends (IME-safe), `Shift+Enter` breaks the line, typed text mirrors into the host draft so it survives page reloads, and the attachment bar covers upload/remove/uploading states. Built-in takeover panels (approvals, questions, subagent) outrank the entry and keep their elections.
+- **Paste conversion** — pasting rich text from the web or Word converts the clipboard `text/html` to clean Markdown: in the takeover editor at the caret, and on the native composer through the host's version-guarded insertion API; `Ctrl/Cmd+Shift+V` still pastes plain, and plain-text, file, and image pastes keep their native behavior.
+- **Graceful degradation** — every surface probes its host face before activating and degrades independently: built-in panels keep the composer when they need it, missing host surfaces shed their feature (never the text face), and a card-level error boundary reverts to the native composer silently with the draft intact.
 
 > **Status: alpha, under active development.** dsh itself is a developer preview with compatibility-breaking changes; this plugin tracks the `0.2.0-rc.x` line of `@deepseek-ai/dsh` and is re-tested against upstream master.
 
@@ -40,11 +41,12 @@ bash scripts/retest-wizard.sh # guided on-device re-test; writes outputs/retest-
 
 ## 中文
 
-一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web UI 插件，在原生输入区与聊天记录之上分层叠加 Markdown 体验：
+一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web UI 插件，在输入区与聊天记录之上分层叠加 Markdown 体验：
 
 - **用户消息 Markdown 化** —— 已发送的用户消息与排队中的 steering 消息在聊天记录中按 Markdown 渲染（复用宿主自带渲染管线），并保留 @提及 与技能引用 chip。
-- **粘贴转换** —— 从网页/Word 粘贴富文本时，剪贴板 `text/html` 自动转为干净 Markdown，经宿主带版本守卫的插入 API 一步写入光标处、一步撤销；`Ctrl/Cmd+Shift+V` 仍直插纯文本，纯文本、文件与图片粘贴行为不变。
-- **原生输入区，分层增强** —— 依据 [ADR-0003](docs/adr/0003-native-composer-paint-layer.md)，输入区保持宿主原生形态：不接管、不重建工具行。各增强层（绘制层实时渲染 L1、粘贴层 L3）激活前先探测宿主能力，失败即自动禁用，各自独立降级、互不牵连。
+- **实时渲染接管卡** —— 经 `conversation.composer` 选举链低优先级条目（[ADR-0005](docs/adr/0005-composer-revival.md)）以自带 CodeMirror 6 编辑器接管输入区，Obsidian 式实时渲染：粗体/斜体/行内代码/删除线以真样式呈现，语法标记折叠：光标行保留原文标记，光标离开后标记折叠隐去（渲染模式；源码模式标记始终可见）；Enter 发送（中文 IME 安全）、`Shift+Enter` 换行，输入内容实时镜像进宿主草稿、页面刷新不丢，附件栏覆盖上传/移除/上传中状态。内置接管面板（审批、提问、子代理）优先级更高、照常抢占。
+- **粘贴转换** —— 从网页/Word 粘贴富文本时，剪贴板 `text/html` 自动转为干净 Markdown：接管卡内在光标处直转；原生输入区经宿主带版本守卫的插入 API 一步写入、一步撤销；`Ctrl/Cmd+Shift+V` 仍直插纯文本，纯文本、文件与图片粘贴行为不变。
+- **逐面降级** —— 各面激活前先探测宿主能力，失败即独立降级：内置面板需要输入区时照常接管，宿主面缺失时只失去对应功能（文本面永不因此下线），卡级 error boundary 在渲染异常时静默回落原生输入区、草稿不丢。
 
 > **状态：alpha，积极开发中。** dsh 本身处于 developer preview、存在破坏性变更；本插件跟随 `@deepseek-ai/dsh` 的 `0.2.0-rc.x` 版本线，并对上游 master 持续重测。
 

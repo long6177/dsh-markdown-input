@@ -1,14 +1,17 @@
 /**
  * Seam 0 (registration): the client `apply()` is the plugin's whole surface
  * toward the host slot registry, so it is asserted from the outside with a
- * recording `ctx` — the composer stays native (no composer entry at all,
- * ADR-0003), and the chat-node seat is keyed replacement only: exactly the
- * `user` and `steering` keys, gated on the primitives capability probe.
+ * recording `ctx` — the composer is taken over through ONE low-priority
+ * chain entry (built-in panels outrank it, ADR-0005), dictionaries ship,
+ * and the chat-node seat is keyed replacement only: exactly the `user` and
+ * `steering` keys, gated on the primitives capability probe.
  */
 import { describe, expect, it } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply, userMessageCapability } from '../src/client/index.ts'
 import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
+import { TakeoverCard } from '../src/client/composer-card.tsx'
+import { en, NS, zh } from '../src/client/locales.ts'
 import { PaintDock } from '../src/client/PaintDock.tsx'
 import { PasteDock } from '../src/client/PasteDock.tsx'
 
@@ -63,17 +66,26 @@ function recordedContext(): {
 }
 
 describe('client apply registration', () => {
-  it('leaves the composer native — no composer entry is registered', () => {
+  it('takes over the composer through one low-priority chain entry', () => {
     const { ctx, injected, registrations } = recordedContext()
     apply(ctx)
-    expect(injected).not.toContain('conversation.composer')
-    expect(registrations.filter(entry => entry.name === 'conversation.composer')).toEqual([])
+    expect(injected).toContain('conversation.composer')
+    const composer = registrations.filter(entry => entry.name === 'conversation.composer')
+    expect(composer).toHaveLength(1)
+    // The chain tries entries in ascending priority (lower first): approvals
+    // register at 1 and the subagent read-only composer at -10, so both try
+    // BEFORE the Markdown card and keep their elections; the card's 2 still
+    // precedes the native fallback body.
+    expect(composer[0]?.priority).toBe(2)
+    expect(composer[0]?.locale).toBe(NS)
+    expect(composer[0]?.component).toBe(TakeoverCard)
   })
 
-  it('touches only the chat-node slot and the composer dock', () => {
+  it('touches only the composer chain, chat-node slot, and composer dock', () => {
     const { ctx, injected } = recordedContext()
     apply(ctx)
-    expect([...new Set(injected)].sort()).toEqual(['conversation.chat.node', 'conversation.composer.dock'])
+    expect([...new Set(injected)].sort())
+      .toEqual(['conversation.chat.node', 'conversation.composer', 'conversation.composer.dock'])
   })
 
   it('replaces exactly the user and steering chat-node keys', () => {
@@ -110,10 +122,10 @@ describe('client apply registration', () => {
     expect(docks.find(entry => entry.id === 'markdown-input-paint')?.component).toBe(PaintDock)
   })
 
-  it('ships no dictionaries of its own — seat copy rides the host chat namespace', () => {
+  it('ships the markdown-input dictionaries (zh/en) for the card copy', () => {
     const { ctx, dictionaries } = recordedContext()
     apply(ctx)
-    expect(dictionaries).toEqual([])
+    expect(dictionaries).toEqual([[NS, { zh, en }]])
   })
 })
 

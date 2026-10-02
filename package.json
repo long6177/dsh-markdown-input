@@ -1,6 +1,6 @@
 {
   "name": "dsh-markdown-input",
-  "description": "Markdown enhancements for the DeepSeek Harness web UI on the native composer: Markdown-rendered user messages, rich-text paste conversion, and the live inline paint layer (bold/italic/code/strikethrough with dimmed markers) — capability-probed per layer (ADR-0003)",
+  "description": "Markdown enhancements for the DeepSeek Harness web UI: a low-priority composer takeover card with a CodeMirror 6 live-rendering editor (Obsidian-style), Markdown-rendered user messages, and rich-text paste conversion — built-in takeover panels keep precedence, and every surface capability-probes and degrades to the native composer (ADR-0005)",
   "version": "0.2.0-alpha.3",
   "type": "module",
   "main": "lib/index.js",
@@ -23,7 +23,9 @@
     "client": {
       "platform": "web",
       "inject": [
+        "@deepseek-ai/dsh-client-locale",
         "@deepseek-ai/dsh-client-ui-chat",
+        "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-primitives",
         "@deepseek-ai/dsh-client-ui-slots"
       ]
@@ -58,6 +60,12 @@
     }
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.4",
+    "@codemirror/view": "^6.43.11",
+    "@lezer/common": "^1.5.2",
     "turndown": "^7.2.4"
   },
   "devDependencies": {

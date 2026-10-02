@@ -4,7 +4,7 @@
  * closure-factory bundle matching the dsh dynamic client-bundle contract —
  * the artifact calls window.__ModuleLoader__.load({id, factory}) and resolves
  * module-table rows (react, cordis, dsh-client-ui-*) through the injected
- * require while everything else (turndown) inlines.
+ * require while everything else (CodeMirror, turndown) inlines.
  */
 import { readFile } from 'node:fs/promises'
 import { resolve as resolvePath } from 'node:path'

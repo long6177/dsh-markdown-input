@@ -50,8 +50,8 @@ const MODULE_TABLE = new Set([
     expect(externals).not.toContain('turndown')
   })
 
-  it('keeps the composer native and registers the user-message renderer', () => {
-    expect(bundle).not.toContain('"conversation.composer"')
+  it('takes over the composer and registers the user-message renderer', () => {
+    expect(bundle).toContain('"conversation.composer"')
     expect(bundle).toContain('"conversation.chat.node"')
   })
 })
@@ -62,10 +62,13 @@ describe('packaging manifests', () => {
     expect(packageJson.dsh.client.platform).toBe('web')
     // ui-chat must load before this row materializes: the chat view owns the
     // 'conversation.chat.node' children declaration our seat registers into,
-    // and the registry throws when the slot is not yet declared.
+    // and the registry throws when the slot is not yet declared. The
+    // takeover card reads the conversation service (attachments, notices)
+    // and registers dictionaries, so locale and ui-conversation load first.
     expect(packageJson.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-chat')
     expect(packageJson.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-slots')
-    expect(packageJson.dsh.client.inject).not.toContain('@deepseek-ai/dsh-client-ui-conversation')
+    expect(packageJson.dsh.client.inject).toContain('@deepseek-ai/dsh-client-ui-conversation')
+    expect(packageJson.dsh.client.inject).toContain('@deepseek-ai/dsh-client-locale')
     expect(packageJson.files).toEqual(expect.arrayContaining(['lib', 'cordis.patch.yml']))
     if (existsSync(bundlePath)) {
       const clientExport = packageJson.exports['./client'] as { types: string, default: string }
