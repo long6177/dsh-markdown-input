@@ -24,10 +24,12 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
+import { fallbackToNative } from './degrade.ts'
 import {
   attachmentFace as detectAttachmentFace, conversationFace, noticesOf, useObservable,
   type AttachmentFace,
 } from './conversation-face.ts'
+import { registerFace } from './face.ts'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from './markdown-editor.ts'
 import { NS } from './locales.ts'
 
@@ -79,6 +81,29 @@ function labelOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
  * @returns The composer replacement card.
  */
 export function MarkdownComposer({ useInput, inputActions, t, sessionId, session }: MarkdownComposerProps) {
+  // Editor face (ADR-0005 hardening #2): the text face probes its own host
+  // dependencies — the input hook and the two machine verbs it mirrors and
+  // submits through — before anything else runs. The gate sits before the
+  // FIRST hook call on purpose: a probed-away face returns without calling
+  // any host hook at all, so even a broken `useInput` (alpha.0's renamed-
+  // exports failure mode) cannot throw its way past the probe. The verdict
+  // latches for the page life, so the early return is stable for this
+  // instance (hook order stays consistent) and the fallback fires once.
+  const actions = inputActions as unknown as { setDraft?: unknown; submit?: unknown } | undefined | null
+  const editorFace = registerFace({
+    id: 'editor',
+    probe: () => typeof useInput === 'function' && actions !== null && actions !== undefined
+      && typeof actions.setDraft === 'function' && typeof actions.submit === 'function',
+  })
+  const editorVerdict = editorFace.verdict()
+  if (!editorVerdict.supported) {
+    // Render-phase and one-shot: the card latch makes the report, the
+    // notice, and the entry dispose idempotent (StrictMode re-renders
+    // included); the null render only covers the frames before the unmount.
+    fallbackToNative(`editor face probe failed (${editorVerdict.reason ?? 'unknown'})`)
+    return null
+  }
+
   const input = useInput((state) => state)
   const conversation = conversationFace()
   const [mode, setMode] = useState<EditMode>(storedMode)
@@ -194,23 +219,34 @@ export function MarkdownComposer({ useInput, inputActions, t, sessionId, session
   useEffect(() => {
     const surface = surfaceRef.current
     if (surface === null) return undefined
-    const editor = createMarkdownEditor({
-      parent: surface,
-      placeholder: '',
-      mode: storedMode(),
-      onSubmit: submit,
-      onDocChange: (text) => {
-        if (seedingRef.current) return
-        touchedRef.current = true
-        setHasText(text.trim().length > 0)
-        // Live draft mirror: the host persists machine-draft changes, so the
-        // typed text reaches it as the user types, not only on unmount/submit.
-        window.clearTimeout(draftSyncTimerRef.current)
-        draftSyncTimerRef.current = window.setTimeout(() => {
-          inputActionsRef.current.setDraft(text)
-        }, DRAFT_SYNC_DEBOUNCE_MS)
-      },
-    })
+    let editor: MarkdownEditorHandle
+    try {
+      editor = createMarkdownEditor({
+        parent: surface,
+        placeholder: '',
+        mode: storedMode(),
+        onSubmit: submit,
+        onDocChange: (text) => {
+          if (seedingRef.current) return
+          touchedRef.current = true
+          setHasText(text.trim().length > 0)
+          // Live draft mirror: the host persists machine-draft changes, so the
+          // typed text reaches it as the user types, not only on unmount/submit.
+          window.clearTimeout(draftSyncTimerRef.current)
+          draftSyncTimerRef.current = window.setTimeout(() => {
+            inputActionsRef.current.setDraft(text)
+          }, DRAFT_SYNC_DEBOUNCE_MS)
+        },
+      })
+    } catch (error: unknown) {
+      // A mount that throws is the editor face failing mid-life — degrade
+      // the face in the framework and escalate to the card fallback (native
+      // composer tops back in), never let the exception escape into the
+      // host shell (alpha.0).
+      editorFace.degrade('editor face mount failed')
+      fallbackToNative('editor face mount failed', error)
+      return undefined
+    }
     editorRef.current = editor
     // A page reload never runs React unmounts; flush on the unload event so
     // the trailing debounce window cannot eat the draft's tail.

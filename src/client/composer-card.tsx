@@ -2,27 +2,19 @@
  * Card-level crash containment for the takeover card (ADR-0005): a render
  * exception anywhere inside the Markdown composer must never take the
  * host's conversation shell down with it — that failure mode is what
- * retired v1. The boundary swallows the frame (a silent null render),
- * reports the reason on the console, and fires the crash callback the
- * registrant installed — disposing the `conversation.composer` chain entry
- * so the election collapses and the native composer (the chain's overlay
- * fallback) tops back in. The composer body's own unmount flush mirrors the
- * text into the machine draft, so nothing the user typed is lost.
+ * retired v1. The boundary swallows the frame (a silent null render) and
+ * funnels the crash into the unified card fallback (degrade.ts), which
+ * reports the reason, latches the takeover off for the page life, fires
+ * the one-shot notice, and disposes the `conversation.composer` chain
+ * entry so the election collapses and the native composer (the chain's
+ * overlay fallback) tops back in. The composer body's own unmount flush
+ * mirrors the text into the machine draft, so nothing the user typed is
+ * lost. The editor face's probe failure (MarkdownComposer) rides the same
+ * fallback without the boundary.
  */
-import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { Component, type ReactNode } from 'react'
+import { fallbackToNative } from './degrade.ts'
 import { MarkdownComposer, type MarkdownComposerProps } from './MarkdownComposer.tsx'
-
-let crashHandler: ((error: unknown) => void) | undefined
-
-/**
- * Install the card-crash callback (the plugin apply wires it to disposing
- * the composer chain entry). The latest installation wins; pass no handler
- * to clear.
- * @param handler - called for every caught render error.
- */
-export function bindComposerCrash(handler: ((error: unknown) => void) | undefined): void {
-  crashHandler = handler
-}
 
 interface ComposerCardState {
   readonly crashed: boolean
@@ -40,15 +32,8 @@ export class ComposerCard extends Component<{ children: ReactNode }, ComposerCar
     return { crashed: true }
   }
 
-  override componentDidCatch(error: unknown, info: ErrorInfo): void {
-    console.error('[markdown-input] takeover card crashed; reverting to the native composer',
-      error, info.componentStack)
-    try {
-      crashHandler?.(error)
-    } catch (handlerError: unknown) {
-      // A failing handler must not escalate into the boundary again.
-      console.error('[markdown-input] composer crash handler failed', handlerError)
-    }
+  override componentDidCatch(error: unknown, info: { componentStack?: string }): void {
+    fallbackToNative('takeover card crashed', error, info.componentStack)
   }
 
   override render(): ReactNode {

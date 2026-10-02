@@ -7,10 +7,10 @@
  * sent and queued user messages render through the host's own Markdown
  * pipeline, reference chips preserved.
  *
- * The two peripheral docks (paint L1, paste L3) stay registered: under the
- * takeover they see only the hidden native bar (the chain fallback stays
- * mounted but display:none), so both idle harmlessly until the dock
- * retirement (ADR-0005, T7).
+ * The three dock occupants (paste, paint, fallback notice) register beside
+ * the card: the two ADR-0003 anchors idle over the hidden native fallback
+ * until the dock retirement (T7), and the notice renders the one-shot
+ * degradation announcement when the card falls back.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // The `chat`-namespace `t` seat also accepts the shared `common` vocabulary
@@ -20,9 +20,11 @@ import type {} from '@deepseek-ai/dsh-client-ui-chat/client'
 // Context.slots (SlotRegistry) is declared by the renderer's client face.
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
-import { bindComposerCrash, TakeoverCard } from './composer-card.tsx'
+import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
 import { installConversationSource } from './conversation-face.ts'
+import { TakeoverCard } from './composer-card.tsx'
+import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
 import { PaintDock } from './PaintDock.tsx'
@@ -83,11 +85,14 @@ export function apply(ctx: ClientContext): void {
   // and notice faces (lazy per call — boot order stays free).
   installConversationSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
-  // Card-level crash latch (ADR-0005): a render exception inside the card
-  // disposes this session's chain entry — the election collapses, the chain
-  // fallback (the native composer) tops back in, and the machine draft the
-  // card flushed on unmount survives. The latch holds for the entry's life;
-  // a later session scope re-registers fresh.
+  // Card-level crash latch (ADR-0005): a render exception inside the card —
+  // or an editor-face probe failure — funnels into the unified fallback
+  // (degrade.ts), which latches the takeover off for the page life and
+  // disposes this chain entry: the election collapses, the chain fallback
+  // (the native composer) tops back in, and the machine draft the card
+  // flushed on unmount survives. The latch outlives the entry — a later
+  // session scope re-runs this inject thunk but must not re-attempt the
+  // takeover; only reloading the browser half restarts it.
   let disposeEntry: (() => void) | undefined
   bindComposerCrash(() => {
     const dispose = disposeEntry
@@ -95,6 +100,9 @@ export function apply(ctx: ClientContext): void {
     dispose?.()
   })
   ctx.slots.inject('conversation.composer', () => {
+    // Session latch: once degraded, the native composer stays for the rest
+    // of the page life (ADR-0005 Q5).
+    if (takeoverDegraded()) return () => {}
     const dispose = ctx.slots.register({
       name: 'conversation.composer',
       // After approvals/questions (1) and the subagent read-only composer
@@ -146,4 +154,13 @@ export function apply(ctx: ClientContext): void {
     name: 'conversation.composer.dock',
     id: 'markdown-input-paint',
   }, PaintDock))
+  // Degradation notice (ADR-0005 Q5): quiet until the takeover falls back,
+  // then the one-shot non-modal notice — event-driven over degrade.ts, so
+  // it survives the card's unmount and never re-shows. The declared locale
+  // delivers the `t` seat for the notice copy.
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
+    id: 'markdown-input-fallback',
+    locale: NS,
+  }, FallbackNotice))
 }

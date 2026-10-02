@@ -1,0 +1,23 @@
+/* One-shot degradation notice (ADR-0005 Q5): the light, non-modal line that
+   announces the fallback to the native composer. It renders in the dock
+   slot below the card, so it mirrors the card's column constraint. */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width, 48rem);
+  margin-inline: auto;
+  border: 1px solid color-mix(in srgb, #d97706 45%, transparent);
+  background: color-mix(in srgb, #d97706 10%, transparent);
+  color: inherit;
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 0.85em;
+}
+
+.noticeText {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

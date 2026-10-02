@@ -6,12 +6,14 @@
  * and the chat-node seat is keyed replacement only: exactly the `user` and
  * `steering` keys, gated on the primitives capability probe.
  */
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply, userMessageCapability } from '../src/client/index.ts'
 import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
 import { TakeoverCard } from '../src/client/composer-card.tsx'
+import { degradeTakeover, resetTakeoverDegradation } from '../src/client/degrade.ts'
 import { en, NS, zh } from '../src/client/locales.ts'
+import { FallbackNotice } from '../src/client/FallbackNotice.tsx'
 import { PaintDock } from '../src/client/PaintDock.tsx'
 import { PasteDock } from '../src/client/PasteDock.tsx'
 
@@ -65,6 +67,10 @@ function recordedContext(): {
   return { ctx, injected, registrations, dictionaries }
 }
 
+afterEach(() => {
+  resetTakeoverDegradation()
+})
+
 describe('client apply registration', () => {
   it('takes over the composer through one low-priority chain entry', () => {
     const { ctx, injected, registrations } = recordedContext()
@@ -104,28 +110,47 @@ describe('client apply registration', () => {
     }
   })
 
-  it('occupies the composer dock with the paste and paint entries', () => {
+  it('occupies the composer dock with the paste, paint, and fallback-notice entries', () => {
     const { ctx, registrations } = recordedContext()
     apply(ctx)
     const docks = registrations.filter(entry => entry.name === 'conversation.composer.dock')
-    expect(docks).toHaveLength(2)
+    expect(docks).toHaveLength(3)
     // List-slot occupants: stable ids, default priority (render order is
-    // irrelevant for invisible anchors), and no locale of their own. Each
-    // dock owns its capability probe — registration is unconditional, the
-    // same idiom as the paste layer at HEAD.
-    expect(docks.map(entry => entry.id).sort()).toEqual(['markdown-input-paint', 'markdown-input-paste'])
+    // irrelevant for invisible anchors). Each dock owns its capability
+    // probe — registration is unconditional, the same idiom as the paste
+    // layer at HEAD. The notice dock alone carries copy, so it alone
+    // declares the locale namespace.
+    expect(docks.map(entry => entry.id).sort())
+      .toEqual(['markdown-input-fallback', 'markdown-input-paint', 'markdown-input-paste'])
     for (const dock of docks) {
       expect(dock.key).toBeUndefined()
-      expect(dock.locale).toBeUndefined()
     }
-    expect(docks.find(entry => entry.id === 'markdown-input-paste')?.component).toBe(PasteDock)
-    expect(docks.find(entry => entry.id === 'markdown-input-paint')?.component).toBe(PaintDock)
+    expect(docks.find(entry => entry.id === 'markdown-input-paste')).toMatchObject({ component: PasteDock, locale: undefined })
+    expect(docks.find(entry => entry.id === 'markdown-input-paint')).toMatchObject({ component: PaintDock, locale: undefined })
+    expect(docks.find(entry => entry.id === 'markdown-input-fallback'))
+      .toMatchObject({ component: FallbackNotice, locale: NS })
   })
 
   it('ships the markdown-input dictionaries (zh/en) for the card copy', () => {
     const { ctx, dictionaries } = recordedContext()
     apply(ctx)
     expect(dictionaries).toEqual([[NS, { zh, en }]])
+  })
+
+  it('the session latch: a degraded takeover never re-registers, the rest still does', () => {
+    // Degraded earlier in the page life (boundary crash, editor-face probe
+    // failure): re-running apply — a later session scope's re-inject — must
+    // not re-attempt the takeover (ADR-0005 Q5). Dictionaries, chat-node
+    // seats, and the dock occupants (the fallback notice among them) are
+    // not part of the latch.
+    degradeTakeover('editor face probe failed (setDraft missing)')
+    const { ctx, registrations } = recordedContext()
+    apply(ctx)
+    const names = registrations.map(entry => entry.name)
+    expect(names).not.toContain('conversation.composer')
+    expect(names).toContain('conversation.chat.node')
+    expect(names).toContain('conversation.composer.dock')
+    expect(registrations.filter(entry => entry.name === 'conversation.composer.dock')).toHaveLength(3)
   })
 })
 

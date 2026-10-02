@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { setConversationSource } from '../src/client/conversation-face.ts'
+import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
+import { resetFaces } from '../src/client/face.ts'
 import { en } from '../src/client/locales.ts'
 
 interface FakeDraft {
@@ -109,6 +111,8 @@ afterEach(() => {
   cleanup()
   setConversationSource(() => undefined)
   window.localStorage.clear()
+  resetFaces()
+  resetTakeoverDegradation()
 })
 
 describe('MarkdownComposer', () => {
@@ -438,5 +442,77 @@ describe('MarkdownComposer notices', () => {
     }
     const { container } = render(<MarkdownComposer {...chainProps({ session })} />)
     expect(container.querySelector('[data-markdown-banner]')?.textContent).toContain(en['composer.file.rejected'])
+  })
+})
+
+describe('MarkdownComposer editor face degradation (ADR-0005 hardening #2)', () => {
+  // The face registry and the card latch are page-lifetime module state;
+  // this describe runs its own fresh registration so a latched verdict from
+  // the healthy describes above cannot mask the failure paths.
+  beforeEach(() => {
+    resetFaces()
+    resetTakeoverDegradation()
+  })
+
+  function withoutSetDraft(): MarkdownComposerProps {
+    const props = chainProps()
+    // The alpha.0 failure shape: the host runtime boundary moved and one
+    // verb the text face mirrors/submits through is gone.
+    delete (props.inputActions as unknown as Record<string, unknown>).setDraft
+    return props
+  }
+
+  it('an editor face probe failure falls back to the native input area', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const events: string[] = []
+    const unsubscribe = onTakeoverDegrade((event) => {
+      events.push(event.reason)
+    })
+    const { container } = render(<MarkdownComposer {...withoutSetDraft()} />)
+    unsubscribe()
+    // The card renders nothing (the dispose unmounts it in production) and
+    // the unified fallback reported the cause and latched the takeover off.
+    expect(container).toBeEmptyDOMElement()
+    expect(events).toEqual([expect.stringContaining('editor face probe failed')])
+    expect(consoleError.mock.calls.some(call => String(call[0]).includes('reverting to the native composer')))
+      .toBe(true)
+    expect(takeoverDegraded()).toBe(true)
+  })
+
+  it('a missing input hook is intercepted by the probe before the hook runs', () => {
+    // The gate sits before the first hook call: a host build whose input
+    // hook itself is gone (the alpha.0 failure class) degrades through the
+    // editor-face path — it never reaches the hook, so no render exception
+    // escapes and the reason names the face, not a generic crash.
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const events: string[] = []
+    const unsubscribe = onTakeoverDegrade((event) => {
+      events.push(event.reason)
+    })
+    const props = chainProps()
+    delete (props as unknown as Record<string, unknown>).useInput
+    const { container } = render(<MarkdownComposer {...props} />)
+    unsubscribe()
+    expect(container).toBeEmptyDOMElement()
+    expect(events).toEqual([expect.stringContaining('editor face probe failed')])
+    expect(consoleError.mock.calls.some(call => String(call[0]).includes('reverting to the native composer')))
+      .toBe(true)
+  })
+
+  it('the latched verdict keeps a degraded takeover down across remounts', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const first = render(<MarkdownComposer {...withoutSetDraft()} />)
+    expect(first.container).toBeEmptyDOMElement()
+    first.unmount()
+    // A re-elected card with a healthy surface still cannot revive the
+    // takeover: the editor face verdict latched for the page life.
+    const second = render(<MarkdownComposer {...chainProps()} />)
+    expect(second.container).toBeEmptyDOMElement()
+  })
+
+  it('a healthy surface keeps the editor face supported', () => {
+    const { container } = render(<MarkdownComposer {...chainProps()} />)
+    expect(container.querySelector('.cm-content')).not.toBeNull()
+    expect(takeoverDegraded()).toBe(false)
   })
 })

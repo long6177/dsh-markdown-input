@@ -18,6 +18,7 @@ const zh = {
   'composer.file.retry': '重试上传',
   'composer.file.rejected': '附件被拒绝',
   'composer.notice.dismiss': '关闭提示',
+  'composer.fallback.notice': 'Markdown 输入区出现异常，已换回原生输入区；本次会话内不再重试，重启后恢复。',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -38,6 +39,7 @@ const en: Record<ComposerKey, string> = {
   'composer.file.retry': 'Retry upload',
   'composer.file.rejected': 'Attachment rejected',
   'composer.notice.dismiss': 'Dismiss notice',
+  'composer.fallback.notice': 'The Markdown composer hit an error and fell back to the native input area; it will not retry this session, and resumes after a restart.',
 }
 
 export { zh, en }

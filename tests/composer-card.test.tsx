@@ -1,15 +1,21 @@
 /**
  * Card-level crash containment (ADR-0005): a render exception inside the
  * takeover card must never escape into the host shell. The boundary
- * swallows the frame, reports it, and fires the crash callback — which the
- * plugin apply wired to disposing the `conversation.composer` entry, so
- * the chain's election collapses and the native composer tops back in.
+ * swallows the frame and funnels into the unified fallback (degrade.ts),
+ * which reports the reason, latches the takeover off for the page life,
+ * fires the one-shot notice event, and — through the action the apply
+ * installed — disposes the `conversation.composer` entry, so the chain's
+ * election collapses and the native composer tops back in.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply } from '../src/client/index.ts'
-import { bindComposerCrash, TakeoverCard } from '../src/client/composer-card.tsx'
+import {
+  bindComposerCrash, fallbackToNative, onTakeoverDegrade,
+  resetTakeoverDegradation, takeoverDegraded,
+} from '../src/client/degrade.ts'
+import { TakeoverCard } from '../src/client/composer-card.tsx'
 import type { MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 
 /** A context that runs inject thunks eagerly and records register disposers. */
@@ -39,16 +45,25 @@ function recordedContext(): { ctx: ClientContext, disposers: readonly ReturnType
 }
 
 /**
- * Props that crash MarkdownComposer at its first hook call: the takeover
- * card's render fails before any host face is consulted.
+ * Props that crash the takeover card mid-render with a fault the editor
+ * face probe cannot see coming (the manually injected fault the acceptance
+ * criteria call for): the runtime faces are present, so the probe passes
+ * and the card mounts — then the input hook explodes at first call.
  */
 function crashingProps(): MarkdownComposerProps {
-  return { matched: { kind: 'markdown' } } as unknown as MarkdownComposerProps
+  return {
+    matched: { kind: 'markdown' },
+    useInput: (): never => {
+      throw new Error('host input face exploded')
+    },
+    inputActions: { setDraft: (): void => {}, submit: (): void => {} },
+  } as unknown as MarkdownComposerProps
 }
 
 afterEach(() => {
   cleanup()
   bindComposerCrash(undefined)
+  resetTakeoverDegradation()
   vi.restoreAllMocks()
 })
 
@@ -88,5 +103,29 @@ describe('composer card crash containment', () => {
     // Only the composer entry's disposer ran; the chat-node and dock
     // registrations stay untouched by the card crash.
     expect(chatNodeDispose).not.toHaveBeenCalled()
+  })
+
+  it('a caught crash latches the takeover degraded and announces it once', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const events: string[] = []
+    const unsubscribe = onTakeoverDegrade((event) => {
+      events.push(event.reason)
+    })
+    bindComposerCrash(vi.fn())
+    render(<TakeoverCard {...crashingProps()} />)
+    unsubscribe()
+    expect(takeoverDegraded()).toBe(true)
+    expect(events).toEqual([expect.stringContaining('takeover card crashed')])
+  })
+})
+
+describe('unified card fallback (degrade.ts)', () => {
+  it('the editor-face fallback path disposes the entry through the same action', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { ctx, disposers } = recordedContext()
+    apply(ctx)
+    fallbackToNative('editor face probe failed (setDraft missing)')
+    expect(disposers[0]).toHaveBeenCalledTimes(1)
+    expect(takeoverDegraded()).toBe(true)
   })
 })
