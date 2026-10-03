@@ -154,3 +154,93 @@ describe('createMarkdownEditor', () => {
     expect(handle.getText()).toBe('# Head')
   })
 })
+
+describe('menu key seam', () => {
+  it('routes the six menu keys to a registered handler and consumes them', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('draft')
+    const seen: string[] = []
+    handle.setMenuKeyHandler((intent) => {
+      seen.push(intent)
+      return true
+    })
+    const content = document.querySelector('.cm-content') as HTMLElement
+    fireEvent.keyDown(content, { key: 'ArrowUp' })
+    fireEvent.keyDown(content, { key: 'ArrowDown' })
+    fireEvent.keyDown(content, { key: 'Enter' })
+    fireEvent.keyDown(content, { key: 'Tab' })
+    fireEvent.keyDown(content, { key: 'Tab', shiftKey: true })
+    fireEvent.keyDown(content, { key: 'Escape' })
+    expect(seen).toEqual(['up', 'down', 'pick', 'pick', 'close', 'close'])
+    // A consumed Enter never sends, and a consumed Tab never indents.
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('draft')
+  })
+
+  it('falls through to the editor when the handler declines or is absent', () => {
+    const { handle, onSubmit } = mount()
+    const content = document.querySelector('.cm-content') as HTMLElement
+    // No handler: Enter sends as usual.
+    fireEvent.keyDown(content, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    // A handler returning false leaves the key to the editor's own commands.
+    handle.setMenuKeyHandler(() => false)
+    handle.setText('second')
+    fireEvent.keyDown(content, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(2)
+    handle.setMenuKeyHandler(null)
+    fireEvent.keyDown(content, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(3)
+  })
+
+  it('consumes menu keys without acting while IME composition is active', () => {
+    const { handle } = mount()
+    const seen: string[] = []
+    handle.setMenuKeyHandler((intent) => {
+      seen.push(intent)
+      return true
+    })
+    const content = document.querySelector('.cm-content') as HTMLElement
+    // Defense in depth against a key slipping past the editor's composition
+    // gating: the menu keystroke is consumed, the handler never sees it.
+    Object.defineProperty(handle.view, 'composing', { value: true })
+    fireEvent.keyDown(content, { key: 'ArrowDown' })
+    expect(seen).toEqual([])
+    fireEvent.keyDown(content, { key: 'Enter' })
+    expect(seen).toEqual([])
+  })
+})
+
+describe('claim helpers', () => {
+  it('isLeadingSelection: only whitespace before the caret answers true', () => {
+    const { handle } = mount()
+    handle.setText('')
+    expect(handle.isLeadingSelection()).toBe(true)
+    handle.setText('   ')
+    expect(handle.isLeadingSelection()).toBe(true)
+    handle.setText('hello')
+    expect(handle.isLeadingSelection()).toBe(false)
+    // A whitespace head before a later caret still leads.
+    handle.setText('  tail')
+    handle.view.dispatch({ selection: { anchor: 2 } })
+    expect(handle.isLeadingSelection()).toBe(true)
+  })
+
+  it('claimSelection replaces the document head through the selection end and parks the caret after the token', () => {
+    const { handle, onDocChange } = mount()
+    handle.setText('hello')
+    handle.claimSelection('/goal ')
+    expect(handle.getText()).toBe('/goal ')
+    expect(handle.view.state.selection.main.head).toBe('/goal '.length)
+    expect(onDocChange).toHaveBeenCalledWith('/goal ')
+  })
+
+  it('claimSelection keeps text after the selection end (inline spans survive)', () => {
+    const { handle } = mount()
+    handle.setText('  tail')
+    handle.view.dispatch({ selection: { anchor: 2 } })
+    handle.claimSelection('/目标 ')
+    expect(handle.getText()).toBe('/目标 tail')
+    expect(handle.view.state.selection.main.head).toBe('/目标 '.length)
+  })
+})

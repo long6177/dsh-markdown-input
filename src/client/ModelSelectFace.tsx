@@ -47,6 +47,7 @@ import type {
 } from './model-face.ts'
 import { MODEL_NS, modelFaceHandle, modelLocale, modelSeatFace } from './model-face.ts'
 import type { SessionId } from './conversation-face.ts'
+import { registerChainPopup } from './chain-open.ts'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular,
@@ -255,6 +256,17 @@ export function ModelSelect(
   }, [open, pane, state, query])
   /* jscpd:ignore-end */
 
+  // Chain-open seam for the `+` command menu (tool row ①): while this seat
+  // is available the menu's model row chains into this card; unavailability
+  // (subagent session, absent resolver) unregisters, hiding that menu row.
+  // `show` is defined past the unavailable early return, so the registration
+  // effect reads it through a render-refreshed ref.
+  const showRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    if (!available) return undefined
+    return registerChainPopup('model', () => { showRef.current(); return true })
+  }, [available])
+
   if (!available) return null
 
   const show = (): void => {
@@ -267,6 +279,7 @@ export function ModelSelect(
     setOpen(true)
     reload()
   }
+  showRef.current = show
 
   const changeQuery = (next: string): void => {
     setQuery(next)

@@ -21,6 +21,7 @@ import {
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { useObservable, type SessionId } from './conversation-face.ts'
+import { registerChainPopup } from './chain-open.ts'
 import { en, NS, type ComposerKey } from './locales.ts'
 import {
   permissionFace, permissionFaceHandle,
@@ -150,6 +151,15 @@ export function PermissionSelectFace({
     setAcknowledged(false)
     setConfirmation(null)
   }, [catalog, confirmation, locked, selection])
+
+  // Chain-open seam for the `+` command menu (tool row ①): while this popup
+  // face is alive and rendering UI the menu's permission row chains into it;
+  // a probe miss or a mid-life degrade unregisters, hiding that menu row.
+  const canChain = !degraded && permission !== undefined && selection !== undefined && catalog !== null
+  useEffect(() => {
+    if (!canChain) return undefined
+    return registerChainPopup('permission', () => { setOpen(true); return true })
+  }, [canChain])
 
   if (degraded || permission === undefined || selection === undefined || catalog === null) return null
   // A local alias so the closures below read the narrowed face (TS narrowing

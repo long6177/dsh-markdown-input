@@ -14,11 +14,14 @@
  * drop, and remove actions and read-only the editor, matching the built-in
  * bar.
  *
- * The tool row is a federation of faces: the rebuilt permission preset
- * selector (T3) and the vendored model/reasoning selector (T4) mount inside
- * their own FaceGates and read the host's permission and model data planes
- * (permission-face.ts, model-face.ts) — a probe miss or a mid-life degrade
- * hides that face alone, the text face and the rest of the row stay.
+ * The tool row is a federation of faces: the `+` command menu (T5), the
+ * rebuilt permission preset selector (T3) and the vendored model/reasoning
+ * selector (T4) mount inside their own FaceGates and read the host's
+ * command-catalog, permission, and model data planes (command-face.ts,
+ * permission-face.ts, model-face.ts) — a probe miss or a mid-life degrade
+ * hides that face alone, the text face and the rest of the row stay. When
+ * the command menu face is unavailable the legacy attach button takes its
+ * place, so file intake never disappears with the menu.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, ReactNode } from 'react'
@@ -30,6 +33,8 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
+import { CommandMenuFace } from './CommandMenuFace.tsx'
+import { commandFaceDefinition } from './command-face.ts'
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
@@ -123,9 +128,20 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   const [dragging, setDragging] = useState(false)
   const [banner, setBanner] = useState<{ seq: number; text: string } | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
+  // The editor handle as state: the tool-row faces need it in their effects
+  // (the menu key seam binds on arrival), and child effects run before this
+  // component's mount effect, so a ref alone would leave them unbound.
+  const [editorHandle, setEditorHandle] = useState<MarkdownEditorHandle | null>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const cardRef = useRef<HTMLDivElement | null>(null)
   const toolRowRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // The `+` menu registers its close verb here; the card closes it whenever
+  // the document changes (the host pipeline's trigger-track loss).
+  const menuCloseRef = useRef<(() => void) | null>(null)
+  const registerMenuClose = useCallback((close: (() => void) | null) => {
+    menuCloseRef.current = close
+  }, [])
   const touchedRef = useRef(false)
   const seedingRef = useRef(false)
   const draftSyncTimerRef = useRef<number | undefined>(undefined)
@@ -240,6 +256,10 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
         mode: storedMode(),
         onSubmit: submit,
         onDocChange: (text) => {
+          // Any document change invalidates the `+` menu's trigger track
+          // (host parity: the menu closes; a claim insertion closes first,
+          // so this is a no-op there).
+          menuCloseRef.current?.()
           if (seedingRef.current) return
           touchedRef.current = true
           setHasText(text.trim().length > 0)
@@ -261,6 +281,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
       return undefined
     }
     editorRef.current = editor
+    setEditorHandle(editor)
     // A page reload never runs React unmounts; flush on the unload event so
     // the trailing debounce window cannot eat the draft's tail.
     const onPageHide = (): void => {
@@ -277,6 +298,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
       inputActionsRef.current.setDraft(editor.getText())
       editor.destroy()
       editorRef.current = null
+      setEditorHandle(null)
     }
   }, [])
 
@@ -326,7 +348,14 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   }, [mode, t])
 
   const canSubmit = (hasText || input.attachmentIds.length > 0) && input.phase === 'plain' && !uploadsPending
-  const canIntake = attachmentFace !== undefined && session?.subagent == null && !machineBusy
+  // Native canAcceptDrop parity: subagent === null, not locked (a session id
+  // exists), not busy, and the intake face present.
+  const canIntake = attachmentFace !== undefined && sessionId !== undefined
+    && session?.subagent == null && !machineBusy
+
+  // Both the `+` menu's file row and the fallback attach button ride the
+  // same hidden input.
+  const pickFiles = useCallback(() => { fileInputRef.current?.click() }, [])
 
   // File intake through the conversation service's own validation path; the
   // admitted state mutation rides the public addAttachments (a busy-phase
@@ -419,7 +448,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   return (
     // `data-composer-card` is the host card contract (the shared Toast
     // anchor and popup-dismissal marker); `data-markdown-composer` is ours.
-    <div className={css.card} data-markdown-composer data-composer-card
+    <div className={css.card} data-markdown-composer data-composer-card ref={cardRef}
       onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
       {banner !== null && (
         <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
@@ -446,6 +475,42 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
       )}
       <div className={css.surface} data-markdown-surface ref={surfaceRef} />
       <div className={css.toolRow} ref={toolRowRef}>
+        {/* Command-menu face (tool row ①): the `+` trigger and its rebuilt
+            MenuView over the host command catalog. Probed and gated like the
+            other faces; its fallback keeps the legacy attach button alive so
+            file intake never disappears with the menu. The hidden file input
+            is shared by both and exists whenever the attachment face does. */}
+        <FaceGate
+          definition={commandFaceDefinition()}
+          fallback={attachmentFace !== undefined && (
+            <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
+              title={t('composer.attach')} disabled={!canIntake}
+              onClick={pickFiles}>
+              <IconPaperclipOutlineMedium size={14} />
+            </button>
+          )}
+        >
+          <CommandMenuFace
+            sessionId={sessionId}
+            t={t}
+            editor={editorHandle}
+            container={cardRef}
+            canPickFiles={canIntake}
+            onPickFiles={pickFiles}
+            onError={showBanner}
+            registerClose={registerMenuClose}
+          />
+        </FaceGate>
+        {attachmentFace !== undefined && (
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            disabled={session?.subagent != null}
+            hidden
+            onChange={onPickFiles}
+          />
+        )}
         {/* Permission preset face (tool row ②): projection-driven pill +
             preset popup + risk gate, probed and gated independently — a
             probe miss or a mid-life degrade hides this face alone. */}
@@ -463,23 +528,6 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
           title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
           {labelOf(t, otherMode)}
         </button>
-        {attachmentFace !== undefined && (
-          <>
-            <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
-              title={t('composer.attach')} disabled={!canIntake}
-              onClick={() => { fileInputRef.current?.click() }}>
-              <IconPaperclipOutlineMedium size={14} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              disabled={session?.subagent != null}
-              hidden
-              onChange={onPickFiles}
-            />
-          </>
-        )}
         <span className={css.spring} />
         {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
             over the host `modelDirectories` data plane, right-aligned before

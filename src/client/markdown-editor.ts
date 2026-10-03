@@ -19,6 +19,16 @@ import { convertHtmlToMarkdown } from './paste-converter.ts'
 
 export type EditMode = 'render' | 'source'
 
+/** Which move the open `+` command menu wants (its combobox keyboard). */
+export type MenuKeyIntent = 'up' | 'down' | 'pick' | 'close'
+
+/**
+ * A menu key handler: consumes a key by returning true (the editor's own
+ * commands never see it), or declines to fall through while the menu is
+ * closed. Handlers are consulted for the six menu keys only.
+ */
+export type MenuKeyHandler = (intent: MenuKeyIntent) => boolean
+
 /** A fence marker line toggles the inside-fence state during the Enter scan. */
 const FENCE_LINE_RE = /^\s{0,3}(?:```+|~~~+)/u
 
@@ -60,6 +70,25 @@ export interface MarkdownEditorHandle {
   setText(text: string): void
   getText(): string
   focus(): void
+  /**
+   * Install (or clear) the open `+` menu's key handler. The menu owns the
+   * six combobox keys — ↑/↓ cycle the highlight, Enter/Tab pick it,
+   * Shift+Tab/Escape close — while its handler accepts them; a declined or
+   * absent handler returns the keys to the editor's own commands.
+   */
+  setMenuKeyHandler(handler: MenuKeyHandler | null): void
+  /**
+   * Whether only whitespace precedes the selection (the leading-trigger
+   * position of the host's command pipeline — claim rows only make sense
+   * there, and a claim inserts over the whole document head).
+   */
+  isLeadingSelection(): boolean
+  /**
+   * Insert one claim token over the document head through the selection end
+   * (the host beginCommand contract) and park the caret after the token;
+   * the trailing-space token text is the caller's.
+   */
+  claimSelection(token: string): void
   destroy(): void
 }
 
@@ -114,6 +143,16 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
   const renderCompartment = new Compartment()
   const placeholderCompartment = new Compartment()
   const editableCompartment = new Compartment()
+  // The open `+` menu installs its key handler here; the keymap consults it
+  // ahead of the editor's own commands and falls through while it is null.
+  const menuHandler: { current: MenuKeyHandler | null } = { current: null }
+  const runMenu = (intent: MenuKeyIntent) => (view: EditorView): boolean => {
+    // IME composition: a candidate-confirming keystroke never drives the
+    // menu (defense in depth behind the editor's own composition gating).
+    if (view.composing) return true
+    const handler = menuHandler.current
+    return handler === null ? false : handler(intent)
+  }
 
   const baseExtensions: Extension[] = [
     history(),
@@ -122,6 +161,14 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     markdown({ base: markdownLanguage }),
     EditorView.lineWrapping,
     Prec.highest(keymap.of([
+      // The open menu's combobox keys sit ahead of the send/newline bindings;
+      // a declining run (menu closed) hands each key back to the next binding.
+      { key: 'ArrowUp', run: runMenu('up') },
+      { key: 'ArrowDown', run: runMenu('down') },
+      { key: 'Enter', run: runMenu('pick') },
+      { key: 'Tab', run: runMenu('pick') },
+      { key: 'Shift-Tab', run: runMenu('close') },
+      { key: 'Escape', run: runMenu('close') },
       { key: 'Enter', run: enterCommand(options.onSubmit) },
       { key: 'Shift-Enter', run: insertNewlineAndIndent },
     ])),
@@ -171,6 +218,20 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     },
     getText: () => view.state.doc.toString(),
     focus: () => view.focus(),
+    setMenuKeyHandler(handler) {
+      menuHandler.current = handler
+    },
+    isLeadingSelection(): boolean {
+      const selection = view.state.selection.main
+      return view.state.doc.sliceString(0, selection.from).trim() === ''
+    },
+    claimSelection(token) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.selection.main.to, insert: token },
+        selection: { anchor: token.length },
+        scrollIntoView: true,
+      })
+    },
     destroy: () => view.destroy(),
   }
 }
