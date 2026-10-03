@@ -27,6 +27,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
+import { installCommandSource } from './command-face.ts'
 import { installConversationSource } from './conversation-face.ts'
 import { installPermissionSource } from './permission-face.ts'
 import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
@@ -113,6 +114,11 @@ export function apply(ctx: ClientContext): void {
   // `remote.fileReferences` namespace the same lazy way; without it the
   // popup face hides and typed `@` stays plain text.
   installFileReferenceSource(ctx)
+  // The tool-row ① command menu reads the host `remote.commands` catalog
+  // RPCs the same lazy way; a missed wiring here latches the face off for
+  // the page life and the tool row silently stays on the paperclip
+  // fallback (real-device regression #29).
+  installCommandSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // The vendored picker's copy is the verbatim ui-model-selection dictionary
   // under the plugin's own namespace; the bound translate rides
