@@ -10,7 +10,7 @@
  * The face resolves lazily per call (boot order stays free) from the
  * client root context, mirroring how the host's own input hub reaches the
  * service. Runtime members beyond the published `IConversation` shape are
- * consumed through narrow structural types at the two cast sites below —
+ * consumed through narrow structural types at the cast sites below —
  * devDependencies pin the upstream master sources, and the slot/service
  * faces are per-version retest contract points (ADR-0002).
  */
@@ -128,10 +128,59 @@ export function useObservable<T>(source: ObservableSource<T> | undefined): T | u
 }
 
 /**
+ * One queued-row mutation (issue #30): the session-controller QueueAction,
+ * consumed structurally — the card's strip edits text-only rows, removes
+ * (retracts), and steers a row into the running turn.
+ */
+export type QueueAction =
+  | { readonly kind: 'edit'; readonly content: readonly { readonly type: 'text'; readonly text: string }[] }
+  | { readonly kind: 'remove' }
+  | { readonly kind: 'steer' }
+
+/** The session-scoped queued-message mutation verb (the native dock's inject). */
+export type QueueUpdate = (itemId: string, action: QueueAction) => Promise<void>
+
+/** The sessions service reach the queue verb resolves through. */
+interface SessionScopeFace {
+  scope(sessionId: SessionId): ClientContext | undefined
+}
+
+/** The client root context, kept by the install for session-scope walks. */
+let rootContext: ClientContext | undefined
+
+/**
  * Install the gateway on the client root context (called once from the
  * plugin apply).
  * @param ctx - client root context.
  */
 export function installConversationSource(ctx: ClientContext): void {
+  rootContext = ctx
   setConversationSource(() => ctx.get('conversation') as ConversationController | undefined)
+}
+
+/**
+ * The queued-message mutation verb for one session, capability-detected per
+ * call. The root-resolved conversation service cannot serve here — its
+ * scope-addressed verbs read the caller's scope tag and fail loud on root
+ * contexts — so the resolution walks the sessions service into the session
+ * scope and reads that scope's conversation, exactly the native queue
+ * dock's inject path. Undefined sheds the strip's action buttons; the rows
+ * stay visible.
+ * @param sessionId - owning session.
+ */
+export function queueUpdateOf(sessionId: SessionId): QueueUpdate | undefined {
+  const ctx = rootContext
+  if (ctx === undefined) return undefined
+  try {
+    const sessions = ctx.get('sessions') as Partial<SessionScopeFace> | undefined
+    if (typeof sessions?.scope !== 'function') return undefined
+    const actx = sessions.scope(sessionId)
+    const conversation = actx?.get('conversation') as
+      | { updateQueue?(itemId: string, action: QueueAction): Promise<void> }
+      | undefined
+    if (typeof conversation?.updateQueue !== 'function') return undefined
+    return (itemId, action) => conversation.updateQueue!(itemId, action)
+  } catch {
+    return undefined
+  }
 }

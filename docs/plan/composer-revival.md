@@ -71,6 +71,7 @@
 - `/` 补全弹层：指令 + 技能两组（命令目录 + 技能贡献，同宿主管线数据源）。
 - `/技能` 词典命中 chip、会话引用 chip（`@[label](dsh-session:…)`）。
 - goal/plan claim 幽灵提示装饰。
+- 排队消息栏（#30，alpha.4 真机缺口）：接管卡内重建原生 queue dock 视图——行数据走输入货币 `InputState.queue`（facade 覆写 agent inbox）+ 会话快照 `pendingSubmissions` 回显，撤回/编辑/插话走会话域 `conversation.updateQueue`（原生 dock 同路径）；动作面按能力探测缺席时仅降按钮、行可见不降。
 - 输入参考：宿主弹层截图（用户提供时以其为准，否则按源码仿）。
 
 ## 6. 治理与退役动作

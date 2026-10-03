@@ -84,6 +84,22 @@ const zh = {
   'completion.drill.key': 'Tab',
   'completion.drill.aria': '进入目录',
   'completion.skill.userOnly': '仅用户',
+  // Queue strip (issue #30). The native composer's queue dock renders inside
+  // the fallback bar, which the takeover hides (overlay election), so the
+  // card rebuilds it; keys mirror the host `conversation` namespace copy
+  // verbatim (`queue.*`).
+  'queue.count': '{n} 条排队消息',
+  'queue.sending': '发送中…',
+  'queue.edit': '编辑排队消息',
+  'queue.edit.unsupported': '包含非文本内容，暂不支持编辑',
+  'queue.save': '保存排队消息',
+  'queue.cancelEdit': '取消编辑',
+  'queue.remove': '删除排队消息',
+  'queue.steer': '插话发送',
+  'queue.steer.unavailable': '仅运行中可插话发送',
+  'queue.editFailed': '编辑失败：这条消息可能已经开始发送。',
+  'queue.removeFailed': '删除失败：这条消息可能已经开始发送。',
+  'queue.steerFailed': '插话发送失败，请重试。',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -161,6 +177,18 @@ const en: Record<ComposerKey, string> = {
   'completion.drill.key': 'Tab',
   'completion.drill.aria': 'Browse folder',
   'completion.skill.userOnly': 'user-only',
+  'queue.count': '{n} queued messages',
+  'queue.sending': 'Sending…',
+  'queue.edit': 'Edit queued message',
+  'queue.edit.unsupported': 'Contains non-text content; editing is not supported yet',
+  'queue.save': 'Save queued message',
+  'queue.cancelEdit': 'Cancel editing',
+  'queue.remove': 'Remove queued message',
+  'queue.steer': 'Steer queued message',
+  'queue.steer.unavailable': 'Steering is available only while the agent is running',
+  'queue.editFailed': 'Edit failed: this message may have already started sending.',
+  'queue.removeFailed': 'Removal failed: this message may have already started sending.',
+  'queue.steerFailed': 'Steering failed. Try again.',
 }
 
 export { zh, en }

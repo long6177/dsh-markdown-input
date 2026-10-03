@@ -132,6 +132,151 @@
   color: color-mix(in srgb, currentColor 75%, transparent);
 }
 
+/* Queue strip (issue #30): the queued-message view the native composer
+   keeps in its input dock, rebuilt in-card because the takeover hides the
+   dock with the fallback bar. Quiet rows above the attachments rail. */
+.queue {
+  display: flex;
+  flex-direction: column;
+}
+
+.queueHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: 8px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 0.85em;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+}
+
+.queueHeader:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.queueHeader:disabled {
+  cursor: default;
+}
+
+.queueLead {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.queueCount {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+}
+
+.queueChevron {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.queueList {
+  max-height: 11lh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 0.85em;
+}
+
+.queueRow + .queueRow {
+  border-top: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+}
+
+.queueSendingRow .queuePreview,
+.queueSendingRow .queueLead {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.queuePreview {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queueEditor {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  max-height: 9lh;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  outline: none;
+  resize: none;
+  overflow-y: auto;
+}
+
+.queueEditor:focus {
+  border-color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.queueStatus {
+  flex: none;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  white-space: nowrap;
+}
+
+.queueActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.queueAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+  cursor: pointer;
+}
+
+.queueAction:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+}
+
+.queueAction:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
 /* Drag-over invitation: the drop entry's placeholder overlay. */
 .dropOverlay {
   position: absolute;

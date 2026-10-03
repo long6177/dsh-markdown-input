@@ -8,10 +8,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
-import { setConversationSource } from '../src/client/conversation-face.ts'
+import { installConversationSource, setConversationSource } from '../src/client/conversation-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
 import { resetFaces } from '../src/client/face.ts'
 import { en } from '../src/client/locales.ts'
+import type { QueueRow } from '../src/client/queue-core.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 
 interface FakeDraft {
@@ -44,6 +45,7 @@ function fakeConversation(options: {
     releaseDraftAttachment: vi.fn(),
     releaseDraftAttachments: vi.fn(),
     retryFileUpload: vi.fn(),
+    updateQueue: vi.fn((_itemId: string, _action: unknown) => Promise.resolve()),
     fileUploads: {
       subscribe: () => () => {},
       getSnapshot: () => uploadsSnapshot,
@@ -65,6 +67,7 @@ function chainProps(overrides: {
   session?: Record<string, unknown> | undefined
   claim?: { readonly name: string; readonly token: string; readonly hint?: string }
   goal?: unknown
+  queue?: readonly QueueRow[]
   inputActions?: Partial<Record<'setDraft' | 'submit', ReturnType<typeof vi.fn>>>
 } = {}): MarkdownComposerProps {
   const inputActions = {
@@ -81,7 +84,7 @@ function chainProps(overrides: {
     attachmentIds: overrides.attachmentIds ?? [],
     draftRev: 0,
     occurrences: [],
-    queue: [],
+    queue: overrides.queue ?? [],
     claim: overrides.claim,
   }
   return {
@@ -606,5 +609,158 @@ describe('MarkdownComposer — chip text round-trip (T9)', () => {
     fireEvent.click(getByText(en['composer.action.submit']))
     await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith(draft))
     expect(inputActions.submit).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MarkdownComposer — queue strip (issue #30)', () => {
+  /** A running-session snapshot; `session` is plain data for the card. */
+  function queueSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { running: true, subagent: null, pendingSubmissions: [], ...overrides }
+  }
+
+  /** chainProps with one durable queued row (rpcId r1). */
+  function queuedProps(session: Record<string, unknown> = queueSession()): MarkdownComposerProps {
+    return chainProps({
+      session,
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队补充' }], source: { kind: 'user', rpcId: 'r1' } }],
+    })
+  }
+
+  /** Bind a fake root context whose session scope resolves `conversation` (the queueUpdateOf walk). */
+  function installScope(conversation: FakeConversation | undefined): void {
+    installConversationSource({
+      get: (name: string) => name === 'sessions'
+        ? { scope: () => ({ get: (n: string) => n === 'conversation' ? conversation : undefined }) }
+        : undefined,
+    } as never)
+  }
+
+  it('renders nothing while the queue and echoes are empty', () => {
+    const { container } = render(<MarkdownComposer {...chainProps()} />)
+    expect(container.querySelector('[data-markdown-queue]')).toBeNull()
+  })
+
+  it('shows the queued row with its retract path and retracts through updateQueue', async () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { getByText, getByRole } = render(<MarkdownComposer {...queuedProps()} />)
+    const strip = document.querySelector('[data-markdown-queue]')
+    expect(strip).not.toBeNull()
+    expect(strip).toHaveTextContent('排队补充')
+    fireEvent.click(getByRole('button', { name: en['queue.remove'] }))
+    await waitFor(() => expect(conversation.updateQueue).toHaveBeenCalledWith('m1', { kind: 'remove' }))
+    expect(getByText('排队补充')).toBeInTheDocument()
+  })
+
+  it('gates steering on the running state', async () => {
+    const idle = render(<MarkdownComposer {...queuedProps(queueSession({ running: false }))} />)
+    expect(idle.getByRole('button', { name: en['queue.steer'] })).toBeDisabled()
+    idle.unmount()
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const running = render(<MarkdownComposer {...queuedProps()} />)
+    const steer = running.getByRole('button', { name: en['queue.steer'] })
+    expect(steer).toBeEnabled()
+    fireEvent.click(steer)
+    await waitFor(() => expect(conversation.updateQueue).toHaveBeenCalledWith('m1', { kind: 'steer' }))
+  })
+
+  it('edits a text-only row in place and saves the replacement through updateQueue', async () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { getByRole } = render(<MarkdownComposer {...queuedProps()} />)
+    fireEvent.click(getByRole('button', { name: en['queue.edit'] }))
+    const editor = getByRole('textbox', { name: en['queue.edit'] }) as HTMLTextAreaElement
+    expect(editor.value).toBe('排队补充')
+    fireEvent.change(editor, { target: { value: '排队补充（改）' } })
+    fireEvent.keyDown(editor, { key: 'Enter' })
+    await waitFor(() => expect(conversation.updateQueue).toHaveBeenCalledWith('m1', {
+      kind: 'edit',
+      content: [{ type: 'text', text: '排队补充（改）' }],
+    }))
+  })
+
+  it('marks attachment-bearing rows uneditable and Escape cancels an open edit', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const attached = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '带图' }, { type: 'image' }] }],
+    })} />)
+    expect(attached.getByRole('button', { name: en['queue.edit'] })).toBeDisabled()
+    attached.unmount()
+    const editable = render(<MarkdownComposer {...queuedProps()} />)
+    fireEvent.click(editable.getByRole('button', { name: en['queue.edit'] }))
+    const editor = editable.getByRole('textbox', { name: en['queue.edit'] })
+    fireEvent.keyDown(editor, { key: 'Escape' })
+    expect(editable.queryByRole('textbox', { name: en['queue.edit'] })).toBeNull()
+    expect(editable.getByText('排队补充')).toBeInTheDocument()
+    expect(conversation.updateQueue).not.toHaveBeenCalled()
+  })
+
+  it('shows unadmitted queued submissions as sending echoes with disabled actions', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { getByText, getByRole } = render(<MarkdownComposer {...chainProps({
+      session: queueSession({ pendingSubmissions: [{
+        requestId: 'r9', placement: 'queued', time: 0, text: '还在路上', attachments: [],
+      }] }),
+    })} />)
+    expect(getByText('还在路上')).toBeInTheDocument()
+    expect(getByText(en['queue.sending'])).toBeInTheDocument()
+    expect(getByRole('button', { name: en['queue.remove'] })).toBeDisabled()
+    expect(conversation.updateQueue).not.toHaveBeenCalled()
+  })
+
+  it('collapses multiple rows behind a count header until expanded', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { getByRole, getAllByRole } = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [
+        { id: 'm1', content: [{ type: 'text', text: '第一条' }] },
+        { id: 'm2', content: [{ type: 'text', text: '第二条' }] },
+      ],
+    })} />)
+    const header = getByRole('button', { name: en['queue.count'].replace('{n}', '2') })
+    expect(header).toHaveAttribute('aria-expanded', 'false')
+    expect(document.querySelector('[data-markdown-queue-list]')).toHaveAttribute('hidden')
+    fireEvent.click(header)
+    expect(header).toHaveAttribute('aria-expanded', 'true')
+    expect(document.querySelector('[data-markdown-queue-list]')).not.toHaveAttribute('hidden')
+    for (const remove of getAllByRole('button', { name: en['queue.remove'] })) {
+      expect(remove).toBeEnabled()
+    }
+  })
+
+  it('reports a failed mutation on the card banner', async () => {
+    const conversation = fakeConversation()
+    conversation.updateQueue = vi.fn(() => Promise.reject(new Error('gone')))
+    installScope(conversation)
+    const { getByRole, findByText } = render(<MarkdownComposer {...queuedProps()} />)
+    fireEvent.click(getByRole('button', { name: en['queue.remove'] }))
+    expect(await findByText(en['queue.removeFailed'])).toBeInTheDocument()
+  })
+
+  it('keeps the edit open for a retry when a save fails', async () => {
+    const conversation = fakeConversation()
+    conversation.updateQueue = vi.fn(() => Promise.reject(new Error('gone')))
+    installScope(conversation)
+    const { getByRole, findByText } = render(<MarkdownComposer {...queuedProps()} />)
+    fireEvent.click(getByRole('button', { name: en['queue.edit'] }))
+    fireEvent.keyDown(getByRole('textbox', { name: en['queue.edit'] }), { key: 'Enter' })
+    expect(await findByText(en['queue.editFailed'])).toBeInTheDocument()
+    expect(getByRole('textbox', { name: en['queue.edit'] })).toBeInTheDocument()
+    expect(conversation.updateQueue).toHaveBeenCalledWith('m1', {
+      kind: 'edit',
+      content: [{ type: 'text', text: '排队补充' }],
+    })
+  })
+
+  it('keeps the rows visible without actions when the queue verb is absent', () => {
+    installScope(undefined)
+    const { getByText, queryByRole } = render(<MarkdownComposer {...queuedProps()} />)
+    expect(getByText('排队补充')).toBeInTheDocument()
+    expect(queryByRole('button', { name: en['queue.remove'] })).toBeNull()
   })
 })

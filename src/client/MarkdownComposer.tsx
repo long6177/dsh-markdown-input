@@ -40,7 +40,8 @@ import type { CompletionGuard } from './completion-core.ts'
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
-  attachmentFace as detectAttachmentFace, conversationFace, noticesOf, useObservable,
+  attachmentFace as detectAttachmentFace, conversationFace, noticesOf, queueUpdateOf,
+  useObservable,
   type AttachmentFace,
 } from './conversation-face.ts'
 import { registerFace } from './face.ts'
@@ -51,6 +52,8 @@ import { modelFaceDefinition } from './model-face.ts'
 import { ModelSelectFace } from './ModelSelectFace.tsx'
 import { permissionFaceDefinition } from './permission-face.ts'
 import { PermissionSelectFace } from './PermissionSelectFace.tsx'
+import { QueueFace } from './QueueFace.tsx'
+import { queueMutableOf, queueViewRows } from './queue-core.ts'
 import { skillFace } from './skill-face.ts'
 
 /** Selector marker this entry returns to win the composer chain election. */
@@ -206,6 +209,19 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   // shape-only `@`/session arms still decorate (they need no data plane).
   const skills = skillFace()
   const skillLexicon = useObservable(skills?.lexicons)
+
+  // Queue strip (issue #30): the queued-message view the native dock keeps
+  // in the fallback bar, which the takeover hides. Rows ride the input
+  // currency's `queue` (the facade overlays the agent inbox) plus the
+  // session snapshot's pendingSubmissions echoes; mutations ride the
+  // session-scoped conversation verb, capability-detected per call —
+  // without it the strip keeps rendering, minus its action buttons.
+  const queueUpdate = sessionId === undefined ? undefined : queueUpdateOf(sessionId)
+  const queueRows = useMemo(
+    () => queueViewRows(input.queue, session?.pendingSubmissions ?? []),
+    [input.queue, session?.pendingSubmissions],
+  )
+  const queueMutable = queueMutableOf(session?.subagent)
 
   // Prompt failures are ordinary failures: the banner announces them, the
   // draft stays in the machine, the user resubmits. A remount over a session
@@ -536,6 +552,14 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
           {notice.text}
         </div>
       )}
+      <QueueFace
+        rows={queueRows}
+        mutable={queueMutable}
+        running={session?.running ?? false}
+        updateQueue={queueUpdate}
+        t={t}
+        onError={showBanner}
+      />
       {dragging && canIntake && (
         <div className={css.dropOverlay} data-markdown-dropzone>{t('composer.dropHere')}</div>
       )}
