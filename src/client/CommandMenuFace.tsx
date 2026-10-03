@@ -27,8 +27,8 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from './conversation-face.ts'
 import { useObservable } from './conversation-face.ts'
 import { hasChainPopup, openChainPopup } from './chain-open.ts'
-import { commandFace, type CommandExecuteResult } from './command-face.ts'
-import { assembleCommandRows } from './command-rows.ts'
+import { commandFace } from './command-face.ts'
+import { assembleCommandRows, reportExecute } from './command-rows.ts'
 import { NS } from './locales.ts'
 import type { MarkdownEditorHandle, MenuKeyHandler } from './markdown-editor.ts'
 import css from './CommandMenuFace.module.css'
@@ -65,6 +65,12 @@ export interface CommandMenuFaceProps {
   readonly onError: (text: string) => void
   /** Registers the close verb the card calls when the document changes. */
   readonly registerClose: (close: (() => void) | null) => void
+  /**
+   * Runs when the menu opens (T10 popup interlock): the typed-trigger
+   * completion popup closes, keeping one candidate surface above the card —
+   * the native pipeline's single-MenuView semantics.
+   */
+  readonly onOpen?: () => void
 }
 
 /**
@@ -73,7 +79,7 @@ export interface CommandMenuFaceProps {
  * @returns the trigger (with the portaled menu), or nothing while locked.
  */
 export function CommandMenuFace({
-  sessionId, t, editor, container, canPickFiles, onPickFiles, onError, registerClose,
+  sessionId, t, editor, container, canPickFiles, onPickFiles, onError, registerClose, onOpen,
 }: CommandMenuFaceProps): ReactNode {
   const [open, setOpen] = useState(false)
   const [leading, setLeading] = useState(true)
@@ -129,8 +135,9 @@ export function CommandMenuFace({
     setLeading(leadingNow)
     setHighlight(0)
     setOpen(true)
+    onOpen?.()
     if (face !== undefined && sessionId !== undefined) face.ensure(sessionId)
-  }, [face, sessionId, editor])
+  }, [face, sessionId, editor, onOpen])
 
   const pickRow = useCallback((index: number): void => {
     const row = rowsRef.current[index]
@@ -177,6 +184,9 @@ export function CommandMenuFace({
           setHighlight((current) => (current >= last ? 0 : current + 1))
           return true
         case 'pick':
+        case 'tab':
+          // Tab drills in the completion popups (T10); the `+` menu has no
+          // drill dimension, so it answers the verb as an ordinary pick.
           pickRow(highlightRef.current)
           return true
         case 'close':
@@ -292,16 +302,4 @@ export function CommandMenuFace({
       )}
     </>
   )
-}
-
-/** Map a detached execution outcome onto the card banner (host parity: success is silent — the flow node renders in the conversation). */
-function reportExecute(
-  result: CommandExecuteResult,
-  onError: (text: string) => void,
-  t: CommandMenuFaceProps['t'],
-): void {
-  if (result.kind === 'success') return
-  if (result.kind === 'error') { onError(t('command.executeError', { text: result.text })) }
-  else if (result.kind === 'unmatched') { onError(t('command.executeUnmatched')) }
-  else { onError(t('command.executeFailed', { message: result.message })) }
 }

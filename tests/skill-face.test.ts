@@ -66,13 +66,18 @@ describe('skillFaceSupported', () => {
 })
 
 describe('skillFace', () => {
-  it('fetches a session lexicon and publishes its names', async () => {
+  it('fetches a session lexicon and publishes its entries', async () => {
     bindSurfaces()
     const face = skillFace()
     expect(face).toBeDefined()
     face!.ensure('s1')
     await vi.waitFor(() => {
-      expect(face!.lexicons.getSnapshot().value.get('s1')).toEqual(['plan', 'read-file'])
+      // The entries pass through whole: the chip decorations read `name`,
+      // the completion popup (T10) reads the discovery copy beside it.
+      expect(face!.lexicons.getSnapshot().value.get('s1')).toEqual([
+        { name: 'plan', description: '', modelInvocable: true },
+        { name: 'read-file', description: '', modelInvocable: false },
+      ])
     })
   })
 

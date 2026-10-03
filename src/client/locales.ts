@@ -71,6 +71,19 @@ const zh = {
   'command.executeFailed': '命令执行失败：{message}',
   'command.executeError': '{text}',
   'command.executeUnmatched': '未知或格式错误的命令',
+  // Typed-trigger completion popups (T10). Group titles mirror the host
+  // `slash.menu` namespace copy verbatim (`command`/`skill`/`loading`/
+  // `drill.*`/`suggestions.aria`); the file section title mirrors the host
+  // `ui-reference` `section.files`; the skill marker mirrors `menu.userOnly`.
+  'completion.suggestions.aria': '触发候选建议',
+  'completion.loading': '正在加载…',
+  'completion.group.command': '指令',
+  'completion.group.skill': '技能',
+  'completion.section.files': '文件与文件夹',
+  'completion.drill.hint': '进入目录',
+  'completion.drill.key': 'Tab',
+  'completion.drill.aria': '进入目录',
+  'completion.skill.userOnly': '仅用户',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -139,6 +152,15 @@ const en: Record<ComposerKey, string> = {
   'command.executeFailed': 'Command failed: {message}',
   'command.executeError': '{text}',
   'command.executeUnmatched': 'Unknown or malformed command',
+  'completion.suggestions.aria': 'Trigger suggestions',
+  'completion.loading': 'Loading…',
+  'completion.group.command': 'Commands',
+  'completion.group.skill': 'Skills',
+  'completion.section.files': 'Files & folders',
+  'completion.drill.hint': 'Browse folder',
+  'completion.drill.key': 'Tab',
+  'completion.drill.aria': 'Browse folder',
+  'completion.skill.userOnly': 'user-only',
 }
 
 export { zh, en }

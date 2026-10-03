@@ -1,0 +1,191 @@
+/* The typed-trigger completion popups: the host MenuView's surface rebuilt
+   (its CSS module is not exported) on the `+` menu's (T5) visual contract —
+   anchored above the takeover card exactly as the native popup (弹层), full
+   card width, bottom edge 4px above the card's top border, design max-height
+   400px with a runtime viewport clamp, 4px padding inside the elevated
+   material, 34px rows with 14px icons and right-aligned 12px descriptions.
+   Host design tokens carry currentColor fallbacks so renamed tokens degrade
+   gracefully. */
+
+.menu {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  /* The card root is the containing block: both insets pin the menu edge to
+     edge with the card. */
+  left: 0;
+  right: 0;
+  z-index: 100;
+  box-sizing: border-box;
+  overflow: hidden;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  border: 0;
+  box-shadow: 0 4px 24px color-mix(in srgb, currentColor 18%, transparent);
+}
+
+.viewport {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--dsw-radius-md, 6px);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary, inherit);
+  text-align: left;
+}
+
+/* One shared highlight (pointer motion parks it here through the mousemove
+   handler, so there is no separate :hover tint competing with the keyboard). */
+.itemActive,
+.item:active {
+  background: var(--dsw-alias-interactive-bg-hover, color-mix(in srgb, currentColor 8%, transparent));
+}
+
+/* Source-group title (指令/技能) — the section title's ink at the group
+   level; a group whose rows carry sections renders those instead. */
+.groupTitle {
+  flex: none;
+  min-height: 23px;
+  padding: 5px 8px 2px;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 60%, transparent));
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.groupTitle:not(:first-child) {
+  margin-top: 3px;
+}
+
+.sectionTitle {
+  flex: none;
+  min-height: 23px;
+  padding: 5px 8px 2px;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 60%, transparent));
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.sectionTitle:not(:first-child) {
+  margin-top: 3px;
+}
+
+.itemIcon {
+  display: inline-flex;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--dsw-alias-menu-icon, inherit);
+}
+
+.itemIcon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.itemName {
+  flex: none;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The wire name beside the display label (directories: `src/` beside `src`),
+   in the description's ink so the row reads title first. */
+.itemAlias {
+  flex: none;
+  max-width: 20%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 60%, transparent));
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Right-aligned so every description ends at the same edge and the titles
+   read as one left column. */
+.itemDescription {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 60%, transparent));
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* The directory drill affordance: hint text + Tab key cap + the pointer
+   chevron twin. */
+.trailing {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 60%, transparent));
+}
+
+.drillHintText {
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.drillKey {
+  font: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 4px;
+  border-radius: 4px;
+  border: 1px solid color-mix(in srgb, currentColor 24%, transparent);
+}
+
+.drill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.drill:hover {
+  background: var(--dsw-alias-interactive-bg-hover, color-mix(in srgb, currentColor 8%, transparent));
+}
+
+/* The pending group's skeleton rows (native parity: two dimmed bars). */
+.skeletonRow {
+  display: flex;
+  padding: 8px;
+}
+
+.skeletonBar {
+  display: inline-block;
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}

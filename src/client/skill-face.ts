@@ -23,15 +23,23 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { RemoteResult } from './command-face.ts'
 import type { ObservableSource, SessionId } from './conversation-face.ts'
 
-/** The one field the lexicon reads off a skill entry (host SkillEntry). */
+/**
+ * One skill entry as the host catalog delivers it. The chip decorations read
+ * only `name`; the completion popup (T10) additionally reads the discovery
+ * copy when the host provides it.
+ */
 export interface SkillEntry {
   /** Kebab-case identifier referenced as `/name`. */
   readonly name: string
+  /** Human-readable summary, when the host supplies one. */
+  readonly description?: string
+  /** False when the skill is user-invocation-only (native userOnly marker). */
+  readonly modelInvocable?: boolean
 }
 
 /** Per-session lexicon caches as one publishable snapshot. */
 export interface SkillLexiconState {
-  readonly value: ReadonlyMap<SessionId, readonly string[]>
+  readonly value: ReadonlyMap<SessionId, readonly SkillEntry[]>
 }
 
 /** The skill lexicon face the chip decorations consume. */
@@ -131,7 +139,7 @@ function createFace(surfaces: SkillSurfaces): SkillFace {
         const result = await surfaces.skills.list({ sessionId })
         inFlight.delete(sessionId)
         if (!result.ok) return // uncached: the `/` arm stays plain, a later ensure retries
-        publish({ value: new Map(snapshot.value).set(sessionId, result.value.skills.map(skill => skill.name)) })
+        publish({ value: new Map(snapshot.value).set(sessionId, result.value.skills) })
       } catch {
         inFlight.delete(sessionId)
       }

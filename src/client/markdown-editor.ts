@@ -18,19 +18,25 @@ import {
 } from '@codemirror/view'
 import { liveRender } from './live-render.ts'
 import { decideRichPaste, plainPasteGestureTracker, readClipboard } from './paste-decision.ts'
+import { detectCompletion, sameProbeIdentity, type CompletionProbe } from './completion-core.ts'
 import { refChipDecorations, setClaimGhostEffect, setSkillLexiconEffect, type ClaimGhost } from './ref-chip-decor.ts'
 
 export type EditMode = 'render' | 'source'
 
-/** Which move the open `+` command menu wants (its combobox keyboard). */
-export type MenuKeyIntent = 'up' | 'down' | 'pick' | 'close'
-
 /**
- * A menu key handler: consumes a key by returning true (the editor's own
- * commands never see it), or declines to fall through while the menu is
- * closed. Handlers are consulted for the six menu keys only.
+ * Which move the open `+` command menu wants (its combobox keyboard). The
+ * completion popups (T10) share the seam: `tab` is their drill-or-pick verb,
+ * which the `+` menu answers as an ordinary pick.
  */
+export type MenuKeyIntent = 'up' | 'down' | 'pick' | 'close' | 'tab'
+
+/** A menu key handler: consumes a key by returning true (the editor's own
+ * commands never see it), or declines to fall through while the menu is
+ * closed. Handlers are consulted for the combobox keys only. */
 export type MenuKeyHandler = (intent: MenuKeyIntent) => boolean
+
+/** The completion probe seam's listener: identity-deduped token or none. */
+export type CompletionProbeListener = (probe: CompletionProbe | null) => void
 
 /** A fence marker line toggles the inside-fence state during the Enter scan. */
 const FENCE_LINE_RE = /^\s{0,3}(?:```+|~~~+)/u
@@ -82,11 +88,26 @@ export interface MarkdownEditorHandle {
   focus(): void
   /**
    * Install (or clear) the open `+` menu's key handler. The menu owns the
-   * six combobox keys — ↑/↓ cycle the highlight, Enter/Tab pick it,
+   * combobox keys — ↑/↓ cycle the highlight, Enter/Tab pick it,
    * Shift+Tab/Escape close — while its handler accepts them; a declined or
-   * absent handler returns the keys to the editor's own commands.
+   * absent handler returns the keys to the editor's own commands. The
+   * completion popups' handler (T10) shares the seam and is consulted first.
    */
   setMenuKeyHandler(handler: MenuKeyHandler | null): void
+  /**
+   * Install (or clear) the completion popups' key handler (T10). Same
+   * contract as the `+` menu's handler, consulted ahead of it: ↑/↓ cycle,
+   * Enter picks, Tab drills-or-picks, Escape/Shift+Tab close; declined keys
+   * fall through to the `+` menu's handler and then the editor's own.
+   */
+  setCompletionKeyHandler(handler: MenuKeyHandler | null): void
+  /**
+   * Install (or clear) the completion probe listener (T10). The editor
+   * re-detects the live trigger token on every document/selection change —
+   * frozen while IME composition runs, re-emitted at its end — and delivers
+   * identity-deduped probes (or null). Binding delivers the current probe.
+   */
+  setCompletionProbeListener(listener: CompletionProbeListener | null): void
   /**
    * Replace the hot skill dictionary behind the chip decorations' `/` arm
    * (the `remote.skills` face resolves after mount; an empty roll keeps
@@ -210,12 +231,33 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
   // The open `+` menu installs its key handler here; the keymap consults it
   // ahead of the editor's own commands and falls through while it is null.
   const menuHandler: { current: MenuKeyHandler | null } = { current: null }
+  // The completion popups (T10) install theirs here; runMenu consults the
+  // completion handler FIRST (its popup and the `+` menu never open at once —
+  // typed text closes the menu — so the chain is unambiguous), then the
+  // `+` menu's, then declines so the editor's own commands carry on.
+  const completionHandler: { current: MenuKeyHandler | null } = { current: null }
   const runMenu = (intent: MenuKeyIntent) => (view: EditorView): boolean => {
     // IME composition: a candidate-confirming keystroke never drives the
-    // menu (defense in depth behind the editor's own composition gating).
+    // menus (defense in depth behind the editor's own composition gating).
     if (view.composing) return true
-    const handler = menuHandler.current
-    return handler === null ? false : handler(intent)
+    const completion = completionHandler.current
+    if (completion !== null && completion(intent)) return true
+    const menu = menuHandler.current
+    return menu === null ? false : menu(intent)
+  }
+  // The completion probe seam (T10): the live trigger token is re-detected
+  // on every document/selection change and delivered identity-deduped; the
+  // listener binds late (the popup face mounts as a sibling), so binding
+  // delivers the current probe once.
+  const probeListener: { current: CompletionProbeListener | null } = { current: null }
+  let lastProbe: CompletionProbe | null = null
+  const emitProbe = (state: EditorState, force = false): void => {
+    const listener = probeListener.current
+    if (listener === null) return
+    const next = detectCompletion(state.doc.toString(), state.selection.main.head)
+    if (!force && sameProbeIdentity(next, lastProbe)) return
+    lastProbe = next
+    listener(next)
   }
 
   const baseExtensions: Extension[] = [
@@ -225,12 +267,14 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     markdown({ base: markdownLanguage }),
     EditorView.lineWrapping,
     Prec.highest(keymap.of([
-      // The open menu's combobox keys sit ahead of the send/newline bindings;
-      // a declining run (menu closed) hands each key back to the next binding.
+      // The open menus' combobox keys sit ahead of the send/newline bindings;
+      // a declining run (both popups closed) hands each key back to the next
+      // binding. Tab routes the completion popups' drill-or-pick verb; the
+      // `+` menu answers it as an ordinary pick.
       { key: 'ArrowUp', run: runMenu('up') },
       { key: 'ArrowDown', run: runMenu('down') },
       { key: 'Enter', run: runMenu('pick') },
-      { key: 'Tab', run: runMenu('pick') },
+      { key: 'Tab', run: runMenu('tab') },
       { key: 'Shift-Tab', run: runMenu('close') },
       { key: 'Escape', run: runMenu('close') },
       { key: 'Enter', run: enterCommand(options.onSubmit) },
@@ -239,6 +283,11 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     keymap.of([...defaultKeymap, ...historyKeymap]),
     EditorView.updateListener.of((update) => {
       if (update.docChanged) options.onDocChange(update.state.doc.toString())
+      // The probe freezes while IME composition runs (a pinyin caret churns
+      // the token per keystroke) and re-emits at the composition-end update,
+      // which arrives with composing already false.
+      if (update.view.composing) return
+      if (update.docChanged || update.selectionSet) emitProbe(update.state)
     }),
     pasteHandler(options.onFiles),
     refChipDecorations,
@@ -285,6 +334,15 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     focus: () => view.focus(),
     setMenuKeyHandler(handler) {
       menuHandler.current = handler
+    },
+    setCompletionKeyHandler(handler) {
+      completionHandler.current = handler
+    },
+    setCompletionProbeListener(listener) {
+      probeListener.current = listener
+      // Late binding delivers the current probe: a draft restored (or seeded)
+      // while no listener was bound still opens on its live trigger token.
+      if (listener !== null) emitProbe(view.state, true)
     },
     setSkillLexicon(names) {
       view.dispatch({ effects: setSkillLexiconEffect.of([...names]) })

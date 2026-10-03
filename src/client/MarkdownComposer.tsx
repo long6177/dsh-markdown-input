@@ -35,6 +35,8 @@ import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots
 import css from './MarkdownComposer.module.css'
 import { CommandMenuFace } from './CommandMenuFace.tsx'
 import { commandFaceDefinition } from './command-face.ts'
+import { CompletionFace, completionFaceDefinition } from './CompletionFace.tsx'
+import type { CompletionGuard } from './completion-core.ts'
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
@@ -142,6 +144,13 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   const menuCloseRef = useRef<(() => void) | null>(null)
   const registerMenuClose = useCallback((close: (() => void) | null) => {
     menuCloseRef.current = close
+  }, [])
+  // The completion popups (T10) register theirs here; the card closes them
+  // when the `+` menu opens — one candidate surface above the card, the
+  // native pipeline's single-MenuView semantics in both directions.
+  const completionCloseRef = useRef<(() => void) | null>(null)
+  const registerCompletionClose = useCallback((close: (() => void) | null) => {
+    completionCloseRef.current = close
   }, [])
   const touchedRef = useRef(false)
   const seedingRef = useRef(false)
@@ -332,10 +341,10 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   // the editor holds an empty roll and slash tokens stay plain text.
   useEffect(() => {
     if (skills !== undefined && sessionId !== undefined) skills.ensure(sessionId)
-    const names = skills !== undefined && sessionId !== undefined
+    const entries = skills !== undefined && sessionId !== undefined
       ? skillLexicon?.value.get(sessionId)
       : undefined
-    editorHandle?.setSkillLexicon(names ?? [])
+    editorHandle?.setSkillLexicon((entries ?? []).map((entry) => entry.name))
   }, [skills, sessionId, skillLexicon, editorHandle])
 
   // Claim ghost hint (T9): the native claim decoration — while a command
@@ -402,6 +411,17 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   // Both the `+` menu's file row and the fallback attach button ride the
   // same hidden input.
   const pickFiles = useCallback(() => { fileInputRef.current?.click() }, [])
+
+  // Input-phase guard for the completion popups (T10, host TriggerGuard):
+  // busy admission phases freeze both triggers; a held command claim
+  // suppresses `/` while `@` stays live.
+  const completionGuard: CompletionGuard = machineBusy
+    ? 'frozen'
+    : input.phase === 'claimed' ? 'claimed' : 'plain'
+  // The popup interlock verbs: opening either candidate surface closes the
+  // other (the native pipeline's single MenuView, in both directions).
+  const closeCommandMenu = useCallback(() => { menuCloseRef.current?.() }, [])
+  const closeCompletionPopups = useCallback(() => { completionCloseRef.current?.() }, [])
 
   // File intake through the conversation service's own validation path; the
   // admitted state mutation rides the public addAttachments (a busy-phase
@@ -550,6 +570,27 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
             onPickFiles={pickFiles}
             onError={showBanner}
             registerClose={registerMenuClose}
+            onOpen={closeCompletionPopups}
+          />
+        </FaceGate>
+        {/* Completion popups (typed triggers, T10): the `/` command+skill
+            popup and the `@` file-search popup over the CM6 surface,
+            token-driven through the editor's probe seam. Probed and gated
+            like the other faces — a probe miss hides the popups and typed
+            text stays plain; per-trigger availability is checked inside
+            (one data plane can die alone). */}
+        <FaceGate definition={completionFaceDefinition()}>
+          <CompletionFace
+            sessionId={sessionId}
+            t={t}
+            editor={editorHandle}
+            container={cardRef}
+            guard={completionGuard}
+            canPickFiles={canIntake}
+            onPickFiles={pickFiles}
+            onError={showBanner}
+            registerClose={registerCompletionClose}
+            onOpen={closeCommandMenu}
           />
         </FaceGate>
         {attachmentFace !== undefined && (

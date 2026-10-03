@@ -24,7 +24,7 @@ import {
   IconPlanOutlineRegular, PermissionIconFullAccessRegular,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { IconProps } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { CommandDescriptor } from './command-face.ts'
+import type { CommandDescriptor, CommandExecuteResult } from './command-face.ts'
 import type { ChainPopupId } from './chain-open.ts'
 import type { ComposerKey } from './locales.ts'
 
@@ -125,6 +125,22 @@ const SYNTHETIC_CATALOG: readonly CommandDescriptor[] = BUILTIN_NAMES.map((name)
 const SECTION_ROWS: Readonly<Record<'add' | 'commands', readonly string[]>> = {
   add: ['file', 'goal', 'plan', 'feedback'],
   commands: ['compact', 'permission', 'model', 'export'],
+}
+
+/**
+ * Map a detached execution outcome onto the card banner (host parity:
+ * success is silent — the flow node renders in the conversation). Shared by
+ * the `+` menu and the completion popups' execute-row dispatch.
+ */
+export function reportExecute(
+  result: CommandExecuteResult,
+  onError: (text: string) => void,
+  t: (key: ComposerKey, params?: Record<string, unknown>) => string,
+): void {
+  if (result.kind === 'success') return
+  if (result.kind === 'error') { onError(t('command.executeError', { text: result.text })) }
+  else if (result.kind === 'unmatched') { onError(t('command.executeUnmatched')) }
+  else { onError(t('command.executeFailed', { message: result.message })) }
 }
 
 /** Assembly inputs. */

@@ -314,7 +314,9 @@ describe('menu key seam', () => {
     fireEvent.keyDown(content, { key: 'Tab' })
     fireEvent.keyDown(content, { key: 'Tab', shiftKey: true })
     fireEvent.keyDown(content, { key: 'Escape' })
-    expect(seen).toEqual(['up', 'down', 'pick', 'pick', 'close', 'close'])
+    // Tab delivers the drill-or-pick verb (the completion popups' T10
+    // semantics); the `+` menu answers it as an ordinary pick.
+    expect(seen).toEqual(['up', 'down', 'pick', 'tab', 'close', 'close'])
     // A consumed Enter never sends, and a consumed Tab never indents.
     expect(onSubmit).not.toHaveBeenCalled()
     expect(handle.getText()).toBe('draft')
@@ -351,6 +353,74 @@ describe('menu key seam', () => {
     expect(seen).toEqual([])
     fireEvent.keyDown(content, { key: 'Enter' })
     expect(seen).toEqual([])
+  })
+
+  it('consults the completion key handler ahead of the + menu handler', () => {
+    const { handle } = mount()
+    const seen: string[] = []
+    handle.setMenuKeyHandler((intent) => { seen.push(`menu:${intent}`); return true })
+    handle.setCompletionKeyHandler((intent) => {
+      if (intent === 'close') return false // a declined verb falls through
+      seen.push(`completion:${intent}`)
+      return true
+    })
+    const content = document.querySelector('.cm-content') as HTMLElement
+    fireEvent.keyDown(content, { key: 'ArrowDown' })
+    fireEvent.keyDown(content, { key: 'Tab' })
+    // The completion handler owns the keys while it accepts them.
+    expect(seen).toEqual(['completion:down', 'completion:tab'])
+    // A declining completion verb reaches the + menu handler next.
+    fireEvent.keyDown(content, { key: 'Escape' })
+    expect(seen).toEqual(['completion:down', 'completion:tab', 'menu:close'])
+  })
+})
+
+describe('completion probe seam', () => {
+  it('delivers the live trigger token on document changes, identity-deduped', () => {
+    const { handle } = mount()
+    const seen: (string | null)[] = []
+    handle.setCompletionProbeListener((probe) => { seen.push(probe === null ? null : `${probe.trigger}:${probe.query}`) })
+    // Binding delivers the current probe (none on an empty draft).
+    expect(seen).toEqual([null])
+    handle.setText('/')
+    expect(seen).toEqual([null, '/:'])
+    // Typing refines the query per keystroke (the caret rides the insert).
+    handle.view.dispatch({ changes: { from: 1, insert: 'co' }, selection: { anchor: 3 } })
+    expect(seen).toEqual([null, '/:', '/:co'])
+    // A selection move that changes nothing emits nothing; leaving the
+    // token clears it.
+    handle.view.dispatch({ selection: { anchor: 0 } })
+    expect(seen).toEqual([null, '/:', '/:co', null])
+  })
+
+  it('freezes the probe while IME composition runs and re-emits at its end', () => {
+    const { handle } = mount()
+    const seen: (string | null)[] = []
+    handle.setCompletionProbeListener((probe) => { seen.push(probe === null ? null : `${probe.trigger}:${probe.query}`) })
+    handle.setText('@sr')
+    expect(seen).toEqual([null, '@:sr'])
+    // Simulated composition (the same seam the IME tests use): updates
+    // during composing emit nothing; the composition-end update re-emits.
+    handle.view.inputState.composing = 1
+    Object.defineProperty(handle.view, 'composing', { value: true, configurable: true })
+    handle.view.dispatch({ changes: { from: 3, insert: 'c' } })
+    expect(seen).toEqual([null, '@:sr'])
+    Object.defineProperty(handle.view, 'composing', { value: false, configurable: true })
+    handle.view.dispatch({ selection: { anchor: 4 } })
+    expect(seen).toEqual([null, '@:sr', '@:src'])
+  })
+
+  it('emits nothing while no listener is bound, then delivers the current probe on bind', () => {
+    const { handle } = mount()
+    handle.setText('rest @to')
+    const listener = vi.fn()
+    handle.setCompletionProbeListener(listener)
+    // Exactly one bind-time delivery of the live token; further updates
+    // re-detect but the identity dedupe holds the line.
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+      trigger: '@', query: 'to', quoted: false, start: 5, end: 8,
+    }))
   })
 })
 
