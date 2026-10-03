@@ -13,10 +13,9 @@
  * session's `/permission` write). Each face probes its own dependencies and
  * degrades alone.
  *
- * The three dock occupants (paste, paint, fallback notice) register beside
- * the card: the two ADR-0003 anchors idle over the hidden native fallback
- * until the dock retirement (T7), and the notice renders the one-shot
- * degradation announcement when the card falls back.
+ * One peripheral-slot occupant registers at the host's
+ * `conversation.composer.dock` beside the card — the fallback notice,
+ * rendering the one-shot degradation announcement when the card falls back.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // The `chat`-namespace `t` seat also accepts the shared `common` vocabulary
@@ -36,8 +35,6 @@ import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
 import { en as modelEn, zh as modelZh, type ModelKey } from './ModelSelectFace.locales.ts'
-import { PaintDock } from './PaintDock.tsx'
-import { PasteDock } from './PasteDock.tsx'
 import { MarkdownUserMessage } from './UserMessage.tsx'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
@@ -161,29 +158,6 @@ export function apply(ctx: ClientContext): void {
       locale: 'chat',
     }, MarkdownUserMessage))
   }
-  // L3 paste layer: one peripheral-slot occupant at the host's
-  // `conversation.composer.dock` entry point (the ambient slot below the
-  // composer card). Session scope grants the standard `inputActions` face;
-  // the occupant renders an invisible anchor and converts rich-text paste
-  // to clean Markdown through the version-guarded insertion verbs. The
-  // host's composer bar declares the slot; inject defers the registration
-  // until that declaration lands.
-  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-    name: 'conversation.composer.dock',
-    id: 'markdown-input-paste',
-  }, PasteDock))
-  // L1 paint layer: a second dock occupant runs the paint engine over the
-  // native text face — the inline four colored, syntax markers dimmed, via
-  // the CSS Custom Highlight API. Paint-only: zero DOM modification, so
-  // IME, undo, and the caret stay the host's own. Like the paste layer,
-  // the dock owns its capability probe: an unsupported browser never
-  // attaches, and a mid-life failure or structure change degrades that
-  // engine run alone, never the composer (ADR-0003). Under the takeover
-  // (ADR-0005) it idles over the hidden fallback bar until T7 retires it.
-  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-    name: 'conversation.composer.dock',
-    id: 'markdown-input-paint',
-  }, PaintDock))
   // Degradation notice (ADR-0005 Q5): quiet until the takeover falls back,
   // then the one-shot non-modal notice — event-driven over degrade.ts, so
   // it survives the card's unmount and never re-shows. The declared locale

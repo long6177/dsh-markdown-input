@@ -2,7 +2,7 @@
  * The CodeMirror 6 surface of the taken-over composer: one factory that
  * mounts the editor, owns the key semantics (Enter sends, Shift+Enter and
  * code-fence Enter newline, IME composition never sends), owns the paste
- * migration (T6: the paste-layer decision core converts rich text to clean
+ * migration (T6: the paste decision core converts rich text to clean
  * Markdown, plain/gesture/file pastes keep host intake semantics), and
  * reconfigures render/source mode and the placeholder through compartments
  * so undo history and scroll survive a mode switch. Component tests drive
@@ -17,7 +17,7 @@ import {
   EditorView, keymap, placeholder,
 } from '@codemirror/view'
 import { liveRender } from './live-render.ts'
-import { decideRichPaste, plainPasteGestureTracker, readClipboard } from './paste-layer.ts'
+import { decideRichPaste, plainPasteGestureTracker, readClipboard } from './paste-decision.ts'
 
 export type EditMode = 'render' | 'source'
 
@@ -118,9 +118,9 @@ function enterCommand(submit: () => void): (view: EditorView) => boolean {
 }
 
 /**
- * The takeover editor's paste face (T6): the paste-layer decision core —
- * readClipboard + decideRichPaste, the same engine PasteDock runs over the
- * native fallback composer — so the two surfaces cannot drift. Files and
+ * The takeover editor's paste face (T6): the paste decision core —
+ * readClipboard + decideRichPaste — is the one paste surface since T7
+ * retired the dock occupant over the native fallback composer. Files and
  * images are intercepted first and ride the host attachment intake; a
  * converted rich paste lands at the selection in one transaction; every
  * other paste (plain-only, Ctrl/Cmd+Shift+V, no-op conversion, no
@@ -142,10 +142,10 @@ function enterCommand(submit: () => void): (view: EditorView) => boolean {
  * text around it.
  *
  * The plain-paste gesture reads two signals: the modifier keys browsers
- * put on the paste event itself, and PasteDock's validated keydown-window
- * tracker (plainPasteGestureTracker) — the mechanism the alpha.2/3 native
- * path shipped — fed from contentDOM keydowns as the engine-independent
- * floor for hosts whose paste events omit modifier state.
+ * put on the paste event itself, and the validated keydown-window tracker
+ * (plainPasteGestureTracker) — the mechanism the alpha.2/3 native path
+ * shipped — fed from contentDOM keydowns as the engine-independent floor
+ * for hosts whose paste events omit modifier state.
  * @param onFiles - the host attachment intake (admission → consume).
  */
 function pasteHandler(onFiles: (files: readonly File[]) => boolean): Extension {

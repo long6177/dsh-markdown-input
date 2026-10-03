@@ -1,15 +1,14 @@
 /**
- * Seam 2 tests: the paste layer's decision core. The engine decides, per
- * paste, whether the native host path must stay untouched and when the
- * clipboard HTML converts to clean Markdown and inserts through the
- * version-guarded face — with every guard miss degrading to the native
- * paste, never swallowing the user's clipboard.
+ * Seam 2 tests: the paste decision core the CM6 surface drives. The engine
+ * decides, per paste, whether the native host path must stay untouched and
+ * when the clipboard HTML converts to clean Markdown for the editor's one
+ * transaction — with every miss degrading to the native paste, never
+ * swallowing the user's clipboard.
  */
 import { describe, expect, it } from 'vitest'
 import {
-  composerEditorRoot, decideRichPaste, insertGuarded, plainPasteGestureTracker,
-  readClipboard, type InsertionFace, type PasteClipboard,
-} from '../src/client/paste-layer.ts'
+  decideRichPaste, plainPasteGestureTracker, readClipboard, type PasteClipboard,
+} from '../src/client/paste-decision.ts'
 
 /** A clipboard payload summary. */
 function clipboard(overrides: Partial<PasteClipboard> = {}): PasteClipboard {
@@ -54,41 +53,6 @@ describe('decideRichPaste', () => {
     // caption) must still paste through the host path.
     const imageOnly = clipboard({ html: '<img src="x.png">', plain: 'x' })
     expect(decideRichPaste(imageOnly, false)).toEqual({ action: 'native' })
-  })
-})
-
-/** An insertion face with scripted insert results. */
-function faceOf(results: boolean[]): { face: InsertionFace, inserts: string[] } {
-  const inserts: string[] = []
-  return {
-    face: {
-      captureInsertion: () => ({ start: 0, end: 0, draftRev: 7 }),
-      insertText: (text, _span) => {
-        inserts.push(text)
-        return results[inserts.length - 1] ?? true
-      },
-    },
-    inserts,
-  }
-}
-
-describe('insertGuarded', () => {
-  it('captures the span and inserts in one guarded step', () => {
-    const { face, inserts } = faceOf([true])
-    expect(insertGuarded(face, '# hi')).toBe(true)
-    expect(inserts).toEqual(['# hi'])
-  })
-
-  it('re-captures once on a revision miss and succeeds', () => {
-    const { face, inserts } = faceOf([false, true])
-    expect(insertGuarded(face, 'x')).toBe(true)
-    expect(inserts).toEqual(['x', 'x'])
-  })
-
-  it('answers false after a second refusal without inserting a third time', () => {
-    const { face, inserts } = faceOf([false, false])
-    expect(insertGuarded(face, 'x')).toBe(false)
-    expect(inserts).toEqual(['x', 'x'])
   })
 })
 
@@ -198,47 +162,5 @@ describe('plainPasteGestureTracker', () => {
     gesture.keydown({ key: 'v', ctrlKey: false, metaKey: false, shiftKey: true })
     gesture.keydown({ key: 'x', ctrlKey: true, metaKey: false, shiftKey: true })
     expect(gesture.active()).toBe(false)
-  })
-})
-
-describe('composerEditorRoot', () => {
-  /** The composer fixture: card with the editor root, dock beside it. */
-  function fixture(): { anchor: HTMLElement, editor: HTMLElement } {
-    const wrapper = document.createElement('div')
-    const card = document.createElement('div')
-    const editor = document.createElement('div')
-    editor.setAttribute('data-lexical-editor', 'true')
-    const dock = document.createElement('div')
-    const anchor = document.createElement('span')
-    card.appendChild(editor)
-    dock.appendChild(anchor)
-    wrapper.appendChild(card)
-    wrapper.appendChild(dock)
-    return { anchor, editor }
-  }
-
-  it('finds the composer editor root from the dock anchor', () => {
-    const { anchor, editor } = fixture()
-    expect(composerEditorRoot(anchor)).toBe(editor)
-  })
-
-  it('answers null without an anchor or without an editor in reach', () => {
-    expect(composerEditorRoot(null)).toBe(null)
-    const lone = document.createElement('span')
-    // Detached: no parent chain exists, the walk ends immediately.
-    expect(composerEditorRoot(lone)).toBe(null)
-  })
-
-  it('answers null when the walk exceeds its bounded hop count', () => {
-    // A deep ancestor chain must not walk away into app-level editors.
-    let node = document.createElement('div')
-    for (let i = 0; i < 12; i += 1) {
-      const child = document.createElement('div')
-      node.appendChild(child)
-      node = child
-    }
-    const anchor = document.createElement('span')
-    node.appendChild(anchor)
-    expect(composerEditorRoot(anchor)).toBe(null)
   })
 })

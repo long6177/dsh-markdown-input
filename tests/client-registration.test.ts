@@ -16,8 +16,6 @@ import { en, NS, zh } from '../src/client/locales.ts'
 import { en as modelEn, zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
 import { MODEL_NS } from '../src/client/model-face.ts'
 import { FallbackNotice } from '../src/client/FallbackNotice.tsx'
-import { PaintDock } from '../src/client/PaintDock.tsx'
-import { PasteDock } from '../src/client/PasteDock.tsx'
 
 interface RecordedRegistration {
   name: string
@@ -115,25 +113,19 @@ describe('client apply registration', () => {
     }
   })
 
-  it('occupies the composer dock with the paste, paint, and fallback-notice entries', () => {
+  it('occupies the composer dock with the fallback-notice entry alone', () => {
     const { ctx, registrations } = recordedContext()
     apply(ctx)
     const docks = registrations.filter(entry => entry.name === 'conversation.composer.dock')
-    expect(docks).toHaveLength(3)
-    // List-slot occupants: stable ids, default priority (render order is
-    // irrelevant for invisible anchors). Each dock owns its capability
-    // probe — registration is unconditional, the same idiom as the paste
-    // layer at HEAD. The notice dock alone carries copy, so it alone
-    // declares the locale namespace.
-    expect(docks.map(entry => entry.id).sort())
-      .toEqual(['markdown-input-fallback', 'markdown-input-paint', 'markdown-input-paste'])
-    for (const dock of docks) {
-      expect(dock.key).toBeUndefined()
-    }
-    expect(docks.find(entry => entry.id === 'markdown-input-paste')).toMatchObject({ component: PasteDock, locale: undefined })
-    expect(docks.find(entry => entry.id === 'markdown-input-paint')).toMatchObject({ component: PaintDock, locale: undefined })
-    expect(docks.find(entry => entry.id === 'markdown-input-fallback'))
-      .toMatchObject({ component: FallbackNotice, locale: NS })
+    // T7 retired the paste/paint dock occupants; the notice is the only one
+    // left, and the only dock that declares a locale namespace (its copy).
+    expect(docks).toHaveLength(1)
+    expect(docks[0]).toMatchObject({
+      id: 'markdown-input-fallback',
+      component: FallbackNotice,
+      locale: NS,
+      key: undefined,
+    })
   })
 
   it('ships the markdown-input dictionaries (zh/en) for the card copy', () => {
@@ -152,8 +144,8 @@ describe('client apply registration', () => {
     // Degraded earlier in the page life (boundary crash, editor-face probe
     // failure): re-running apply — a later session scope's re-inject — must
     // not re-attempt the takeover (ADR-0005 Q5). Dictionaries, chat-node
-    // seats, and the dock occupants (the fallback notice among them) are
-    // not part of the latch.
+    // seats, and the dock occupant (the fallback notice) are not part of
+    // the latch.
     degradeTakeover('editor face probe failed (setDraft missing)')
     const { ctx, registrations } = recordedContext()
     apply(ctx)
@@ -161,7 +153,7 @@ describe('client apply registration', () => {
     expect(names).not.toContain('conversation.composer')
     expect(names).toContain('conversation.chat.node')
     expect(names).toContain('conversation.composer.dock')
-    expect(registrations.filter(entry => entry.name === 'conversation.composer.dock')).toHaveLength(3)
+    expect(registrations.filter(entry => entry.name === 'conversation.composer.dock')).toHaveLength(1)
   })
 })
 

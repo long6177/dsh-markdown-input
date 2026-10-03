@@ -367,7 +367,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   // admitted state mutation rides the public addAttachments (a busy-phase
   // refusal releases the just-created drafts instead of leaking them).
   // Returns whether the intake was admitted — the paste seam consumes the
-  // event only then, mirroring the paste layer's cancel-after-landing rule.
+  // event only then, mirroring the paste handler's cancel-after-landing rule.
   function intakeFiles(files: readonly File[]): boolean {
     if (attachmentFace === undefined || sessionId === undefined || files.length === 0) return false
     if (session?.subagent != null || machineBusy) return false

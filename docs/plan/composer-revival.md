@@ -40,7 +40,7 @@
   - ② 权限预设：Menu + RiskConfirmation（完全权限确认门），读 `permissions` 投影，写 `/permission <preset>`。
   - ③ 模型/推理等级：两行 pane 卡片，数据走 `modelDirectories`（可达性 spike 先行）。
   - ④ 发送/停止/排队（v1 #11 已解，对齐 rc.2）。
-- 附件栏 v1 水准；粘贴转 Markdown 迁入 CM6 paste handler（复用 `paste-layer.ts` 转换器；图片/文件粘贴交宿主 intake）。
+- 附件栏 v1 水准；粘贴转 Markdown 迁入 CM6 paste handler（复用 `paste-decision.ts` 转换器；图片/文件粘贴交宿主 intake）。
 - chip 纯文本透传（不装饰、不丢内容）。
 - 硬化：error boundary + 一次性轻提示 + 会话内闩锁；逐面能力探测（编辑器面/工具行各控件面/弹层面独立降级）。
 - 退役：PaintDock/PasteDock 与 dock 注册移除；绘制层引擎归档（git 历史保留）。

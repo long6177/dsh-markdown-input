@@ -32,7 +32,7 @@ function content(): HTMLElement {
   return document.querySelector('.cm-content') as HTMLElement
 }
 
-/** A paste event with a duck-typed clipboard payload (PasteDock's fixture shape). */
+/** A paste event with a duck-typed clipboard payload. */
 function pasteEvent(clipboard: { html?: string, plain?: string, fileKinds?: readonly string[], files?: readonly File[] }): Event {
   const event = new MouseEvent('paste', { bubbles: true, cancelable: true })
   const items = [
@@ -137,7 +137,7 @@ describe('createMarkdownEditor', () => {
     expect(handle.getText()).toBe('nihao')
   })
 
-  describe('paste (T6 migration of the PasteDock semantics)', () => {
+  describe('paste (T6 migration of the dock-path semantics)', () => {
     it('converts a rich paste at the caret and one undo step reverts it', () => {
       const { handle } = mount()
       handle.setText('a')
@@ -181,8 +181,8 @@ describe('createMarkdownEditor', () => {
 
     it('honors the Ctrl+Shift+V keydown window even when the paste event omits modifiers', () => {
       const { handle } = mount()
-      // PasteDock's validated mechanism: the keydown arms the window, the
-      // paste carries no modifier state at all.
+      // The validated mechanism from the alpha.2/3 native path: the keydown
+      // arms the window, the paste carries no modifier state at all.
       fireEvent.keyDown(content(), { key: 'v', ctrlKey: true, shiftKey: true })
       content().dispatchEvent(pasteEvent({ html: '<h2>noise</h2>', plain: 'raw text' }))
       expect(handle.getText()).toBe('raw text')
