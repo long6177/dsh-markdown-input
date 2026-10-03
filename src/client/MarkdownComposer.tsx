@@ -153,6 +153,11 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   inputActionsRef.current = inputActions
   const tRef = useRef(t)
   tRef.current = t
+  // The mounted-once editor reads the paste intake through this ref: the
+  // intakeFiles closure is re-created every render, the editor's onFiles
+  // seam is installed once (the same reason submit reads mirrored faces).
+  const intakeFilesRef = useRef(intakeFiles)
+  intakeFilesRef.current = intakeFiles
 
   // Busy admission phases — the machine refuses attachment add/remove there,
   // and the built-in bar read-onlys the editor while keeping the draft
@@ -255,6 +260,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
         placeholder: '',
         mode: storedMode(),
         onSubmit: submit,
+        onFiles: (files) => intakeFilesRef.current(files),
         onDocChange: (text) => {
           // Any document change invalidates the `+` menu's trigger track
           // (host parity: the menu closes; a claim insertion closes first,
@@ -360,16 +366,21 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   // File intake through the conversation service's own validation path; the
   // admitted state mutation rides the public addAttachments (a busy-phase
   // refusal releases the just-created drafts instead of leaking them).
-  function intakeFiles(files: readonly File[]): void {
-    if (attachmentFace === undefined || sessionId === undefined || files.length === 0) return
-    if (session?.subagent != null || machineBusy) return
+  // Returns whether the intake was admitted — the paste seam consumes the
+  // event only then, mirroring the paste layer's cancel-after-landing rule.
+  function intakeFiles(files: readonly File[]): boolean {
+    if (attachmentFace === undefined || sessionId === undefined || files.length === 0) return false
+    if (session?.subagent != null || machineBusy) return false
     try {
       const drafts = attachmentFace.createDrafts(sessionId, files) as ComposerAttachment[]
       if (!inputActionsRef.current.addAttachments(drafts.map((draft) => draft.id))) {
         attachmentFace.releaseDraftAttachments(drafts)
+        return false
       }
+      return true
     } catch (error: unknown) {
       showBanner(error instanceof Error ? error.message : String(error))
+      return false
     }
   }
 

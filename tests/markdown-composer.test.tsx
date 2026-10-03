@@ -356,6 +356,20 @@ describe('MarkdownComposer attachments', () => {
     expect(inputActions.addAttachments).toHaveBeenCalledWith(['d0'])
   })
 
+  it('intakes pasted files through the same attachment channel as drops', () => {
+    const conversation = fakeConversation()
+    setConversationSource(() => conversation)
+    const inputActions = { addAttachments: vi.fn(() => true) }
+    const { container } = render(<MarkdownComposer {...chainProps({ inputActions })} />)
+    const content = container.querySelector('.cm-content') as HTMLElement
+    const file = new File(['x'], 'c.txt')
+    fireEvent.paste(content, {
+      clipboardData: { items: [{ kind: 'file' }], files: [file], getData: () => '' },
+    })
+    expect(conversation.createDrafts).toHaveBeenCalledWith('s1', [file])
+    expect(inputActions.addAttachments).toHaveBeenCalledWith(['d0'])
+  })
+
   it('refuses intake while busy: the drop placeholder never appears', () => {
     const conversation = fakeConversation()
     setConversationSource(() => conversation)

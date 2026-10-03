@@ -109,22 +109,54 @@ describe('readClipboard', () => {
       'text/html': '<p>hi</p>',
       'text/plain': 'hi',
     }))
-    expect(read).toEqual({ hasFiles: true, html: '<p>hi</p>', plain: 'hi' })
+    expect(read).toEqual({ hasFiles: true, files: [], html: '<p>hi</p>', plain: 'hi' })
   })
 
   it('answers an empty payload without files when no item is a file', () => {
     const read = readClipboard(dataTransfer(['string'], { 'text/plain': 'text' }))
-    expect(read).toEqual({ hasFiles: false, html: '', plain: 'text' })
+    expect(read).toEqual({ hasFiles: false, files: [], html: '', plain: 'text' })
   })
 
   it('tolerates a missing clipboard payload and throwing reads', () => {
-    expect(readClipboard(null)).toEqual({ hasFiles: false, html: '', plain: '' })
-    expect(readClipboard(undefined)).toEqual({ hasFiles: false, html: '', plain: '' })
+    expect(readClipboard(null)).toEqual({ hasFiles: false, files: [], html: '', plain: '' })
+    expect(readClipboard(undefined)).toEqual({ hasFiles: false, files: [], html: '', plain: '' })
     const hostile = {
       items: [{ kind: 'string' }],
       getData: () => { throw new Error('denied') },
     }
-    expect(readClipboard(hostile)).toEqual({ hasFiles: false, html: '', plain: '' })
+    expect(readClipboard(hostile)).toEqual({ hasFiles: false, files: [], html: '', plain: '' })
+  })
+
+  it('reads files from the FileList flavor first', () => {
+    const file = new File(['x'], 'a.png', { type: 'image/png' })
+    const read = readClipboard({
+      files: [file],
+      items: [{ kind: 'file' }],
+      getData: () => '',
+    })
+    expect(read.hasFiles).toBe(true)
+    expect(read.files).toEqual([file])
+  })
+
+  it('extracts files from the item list when the FileList flavor is empty', () => {
+    const file = new File(['x'], 'b.png', { type: 'image/png' })
+    const read = readClipboard({
+      files: [],
+      items: [{ kind: 'file', getAsFile: () => file }],
+      getData: () => '',
+    })
+    expect(read.hasFiles).toBe(true)
+    expect(read.files).toEqual([file])
+  })
+
+  it('reports hasFiles even when the engine hides the extractable file', () => {
+    const read = readClipboard({
+      files: [],
+      items: [{ kind: 'file' }],
+      getData: () => '',
+    })
+    expect(read.hasFiles).toBe(true)
+    expect(read.files).toEqual([])
   })
 })
 

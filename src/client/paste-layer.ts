@@ -2,9 +2,12 @@
  * L3 paste layer (issue #14, ADR-0003): rich-text paste converts to clean
  * Markdown (paste-converter.ts) and writes through the host's version-guarded
  * insertion API — one undo step at the caret, while plain text, file, and
- * image pastes keep their native behavior. The engine below is the decision
- * core (clipboard summary → decision → guarded insertion); the DOM wiring
- * that feeds it lives in PasteDock.tsx.
+ * image pastes keep their native behavior. The engine below is the shared
+ * decision core (clipboard summary → decision → guarded insertion): since
+ * T6 both paste surfaces run it — PasteDock.tsx (the native fallback
+ * composer; the dock retirement planned for T7 removes it) feeds it from
+ * document-level listeners, and the takeover editor (markdown-editor.ts)
+ * feeds it from its contentDOM paste handler.
  */
 import { probe, type Capability, type KillSwitch } from './capability.ts'
 import { convertHtmlToMarkdown } from './paste-converter.ts'
@@ -43,6 +46,8 @@ export function insertionCapability(face: unknown): Capability {
 export interface PasteClipboard {
   /** Whether any clipboard item carries a file (images included). */
   readonly hasFiles: boolean
+  /** The extractable File objects (empty when the engine hides them). */
+  readonly files: readonly File[]
   /** The `text/html` flavor; '' when absent. */
   readonly html: string
   /** The `text/plain` flavor; '' when absent. */
@@ -59,24 +64,17 @@ export type PasteDecision =
 /**
  * Read one paste event's clipboard payload, duck-typed because test engines
  * deliver `clipboardData` in varied shapes (the host keymap makes the same
- * concession). A throwing `getData` reads as an absent flavor.
+ * concession). A throwing `getData` reads as an absent flavor. Files read
+ * from the FileList flavor first (every real engine pastes files through
+ * it), then from the item list — `hasFiles` is true whenever either shows a
+ * file, even when the engine hides the extractable File objects.
  * @param data - the event's `clipboardData`, of any shape.
  */
 export function readClipboard(data: unknown): PasteClipboard {
   if (typeof data !== 'object' || data === null) {
-    return { hasFiles: false, html: '', plain: '' }
+    return { hasFiles: false, files: [], html: '', plain: '' }
   }
   const transfer = data as DataTransfer
-  let hasFiles = false
-  const items = transfer.items
-  if (items !== undefined) {
-    for (let index = 0; index < items.length; index += 1) {
-      if (items[index]?.kind === 'file') {
-        hasFiles = true
-        break
-      }
-    }
-  }
   const read = (type: string): string => {
     try {
       return transfer.getData(type) ?? ''
@@ -84,7 +82,24 @@ export function readClipboard(data: unknown): PasteClipboard {
       return ''
     }
   }
-  return { hasFiles, html: read('text/html'), plain: read('text/plain') }
+  const direct = transfer.files
+  if (direct !== undefined && direct.length > 0) {
+    return { hasFiles: true, files: [...direct], html: read('text/html'), plain: read('text/plain') }
+  }
+  let hasFiles = false
+  const files: File[] = []
+  const items = transfer.items
+  if (items !== undefined) {
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]
+      if (item?.kind !== 'file') continue
+      hasFiles = true
+      // Duck-typed fixtures may omit the extractor; real items carry it.
+      const file = typeof item.getAsFile === 'function' ? item.getAsFile() : null
+      if (file !== null) files.push(file)
+    }
+  }
+  return { hasFiles, files, html: read('text/html'), plain: read('text/plain') }
 }
 
 /**

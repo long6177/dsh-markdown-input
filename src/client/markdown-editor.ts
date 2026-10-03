@@ -1,10 +1,12 @@
 /**
  * The CodeMirror 6 surface of the taken-over composer: one factory that
  * mounts the editor, owns the key semantics (Enter sends, Shift+Enter and
- * code-fence Enter newline, IME composition never sends), converts pasted
- * HTML to clean Markdown, and reconfigures render/source mode and the
- * placeholder through compartments so undo history and scroll survive a
- * mode switch. Component tests drive this handle directly.
+ * code-fence Enter newline, IME composition never sends), owns the paste
+ * migration (T6: the paste-layer decision core converts rich text to clean
+ * Markdown, plain/gesture/file pastes keep host intake semantics), and
+ * reconfigures render/source mode and the placeholder through compartments
+ * so undo history and scroll survive a mode switch. Component tests drive
+ * this handle directly.
  */
 import {
   history, historyKeymap, defaultKeymap, insertNewlineAndIndent,
@@ -15,7 +17,7 @@ import {
   EditorView, keymap, placeholder,
 } from '@codemirror/view'
 import { liveRender } from './live-render.ts'
-import { convertHtmlToMarkdown } from './paste-converter.ts'
+import { decideRichPaste, plainPasteGestureTracker, readClipboard } from './paste-layer.ts'
 
 export type EditMode = 'render' | 'source'
 
@@ -58,6 +60,13 @@ export interface MarkdownEditorOptions {
   onSubmit(): void
   /** The document text changed (draft surfaced to the component). */
   onDocChange(text: string): void
+  /**
+   * Pasted files and images ride the host attachment intake (the same
+   * channel as drag-and-drop and the attach button). True means the intake
+   * admitted them and the paste is consumed; a false return leaves the
+   * event to the default path, which does nothing with files.
+   */
+  onFiles(files: readonly File[]): boolean
 }
 
 export interface MarkdownEditorHandle {
@@ -108,22 +117,68 @@ function enterCommand(submit: () => void): (view: EditorView) => boolean {
   }
 }
 
-function pasteHandler(onDocChange: (text: string) => void): Extension {
+/**
+ * The takeover editor's paste face (T6): the paste-layer decision core —
+ * readClipboard + decideRichPaste, the same engine PasteDock runs over the
+ * native fallback composer — so the two surfaces cannot drift. Files and
+ * images are intercepted first and ride the host attachment intake; a
+ * converted rich paste lands at the selection in one transaction; every
+ * other paste (plain-only, Ctrl/Cmd+Shift+V, no-op conversion, no
+ * clipboard payload) returns false and CM6's own paste handler inserts the
+ * plain flavor untouched.
+ *
+ * Paste priority design (the T6 note for T9/T10): paste rides a
+ * contentDOM DOM handler, NOT the keymap — `paste` is not a keymap event,
+ * so this holds no keymap rank and can neither preempt nor be preempted by
+ * the Prec.highest menu-combobox bindings (T5), defaultKeymap, or the
+ * completion keymaps T9/T10 will add. The conversion dispatches one
+ * ordinary replaceSelection transaction: the live-render decorations
+ * (mark/replace, no atomicRanges) simply recompute from the new document —
+ * a paste can never wedge on decoration bounds — and any active completion
+ * popup (T9/T10) observes the standard `input.paste` userEvent and reacts
+ * as it would to CM6's own paste (dismiss on document change). The same
+ * single transaction with its `input.paste` annotation is one history
+ * entry: one undo step reverts a converted paste without touching typed
+ * text around it.
+ *
+ * The plain-paste gesture reads two signals: the modifier keys browsers
+ * put on the paste event itself, and PasteDock's validated keydown-window
+ * tracker (plainPasteGestureTracker) — the mechanism the alpha.2/3 native
+ * path shipped — fed from contentDOM keydowns as the engine-independent
+ * floor for hosts whose paste events omit modifier state.
+ * @param onFiles - the host attachment intake (admission → consume).
+ */
+function pasteHandler(onFiles: (files: readonly File[]) => boolean): Extension {
+  const gesture = plainPasteGestureTracker()
   return EditorView.domEventHandlers({
+    // Arming the plain-paste window needs no consumption: every keydown
+    // feeds the tracker, which filters for Ctrl/Cmd+Shift+V itself.
+    keydown(event) {
+      gesture.keydown(event)
+      return false
+    },
     paste(event, view) {
       const transfer = event.clipboardData
       if (transfer === null) return false
+      const clipboard = readClipboard(transfer)
+      // Files and images never reach the text converter: the host intake
+      // owns them, and only an admitted intake consumes the paste.
+      if (clipboard.hasFiles) {
+        if (clipboard.files.length === 0 || !onFiles(clipboard.files)) return false
+        event.preventDefault()
+        return true
+      }
       // The DOM types omit keyboard modifiers on ClipboardEvent; real paste
       // events carry them, and the plain-text gesture needs them.
       const modifiers = event as ClipboardEvent & { ctrlKey?: boolean, metaKey?: boolean, shiftKey?: boolean }
-      const plainGesture = (modifiers.ctrlKey === true || modifiers.metaKey === true) && modifiers.shiftKey === true
-      const html = transfer.getData('text/html')
-      if (plainGesture || html === '') return false
+      const eventGesture = (modifiers.ctrlKey === true || modifiers.metaKey === true) && modifiers.shiftKey === true
+      const decision = decideRichPaste(clipboard, eventGesture || gesture.active())
+      if (decision.action !== 'convert') return false
       event.preventDefault()
-      view.dispatch(view.state.replaceSelection(convertHtmlToMarkdown(html)), {
+      view.dispatch(view.state.replaceSelection(decision.markdown), {
         scrollIntoView: true,
+        userEvent: 'input.paste',
       })
-      onDocChange(view.state.doc.toString())
       return true
     },
   })
@@ -176,7 +231,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     EditorView.updateListener.of((update) => {
       if (update.docChanged) options.onDocChange(update.state.doc.toString())
     }),
-    pasteHandler(options.onDocChange),
+    pasteHandler(options.onFiles),
   ]
 
   const view = new EditorView({
