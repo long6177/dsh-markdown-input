@@ -33,6 +33,10 @@ _Avoid_: 前后端（误导为 Web 服务架构）
 **草稿（Draft）**:
 输入区中尚未发送的文本与附件引用状态；归宿主原生编辑器持有，插件经官方草稿 API 程序化读写。
 
+**幽灵提示（Ghost hint）**:
+命令 claim 相位的尾随弱化文案：claim token 的参数仍为空白时，在草稿尾部显示该命令的下一步指引（goal/plan 对齐原生文案键），输入法组合期间隐藏。
+_Avoid_: placeholder（是通用占位机制，不是 claim 相位文案）
+
 ### Markdown 体验
 
 **实时渲染（Live render）**:

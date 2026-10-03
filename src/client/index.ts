@@ -30,6 +30,7 @@ import { probe, type Capability } from './capability.ts'
 import { installConversationSource } from './conversation-face.ts'
 import { installPermissionSource } from './permission-face.ts'
 import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
+import { installSkillSource } from './skill-face.ts'
 import { TakeoverCard } from './composer-card.tsx'
 import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
@@ -102,6 +103,11 @@ export function apply(ctx: ClientContext): void {
   // the service is deliberately not a declared inject dependency, which
   // would hold the whole plugin pending until it materializes.
   installModelSource(ctx)
+  // The skill lexicon face (T9) reads the host `remote.skills` catalog —
+  // the same hot `/` dictionary the native completion source polls — the
+  // same lazy way; without it the chip decorations' `/` arm degrades to
+  // plain text while the shape-only arms stay.
+  installSkillSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // The vendored picker's copy is the verbatim ui-model-selection dictionary
   // under the plugin's own namespace; the bound translate rides

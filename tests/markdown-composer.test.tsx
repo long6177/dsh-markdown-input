@@ -12,6 +12,7 @@ import { setConversationSource } from '../src/client/conversation-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
 import { resetFaces } from '../src/client/face.ts'
 import { en } from '../src/client/locales.ts'
+import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 
 interface FakeDraft {
   kind: 'file' | 'image'
@@ -62,6 +63,8 @@ function chainProps(overrides: {
   phase?: 'plain' | 'adjudicating' | 'claimed' | 'submitting'
   attachmentIds?: string[]
   session?: Record<string, unknown> | undefined
+  claim?: { readonly name: string; readonly token: string; readonly hint?: string }
+  goal?: unknown
   inputActions?: Partial<Record<'setDraft' | 'submit', ReturnType<typeof vi.fn>>>
 } = {}): MarkdownComposerProps {
   const inputActions = {
@@ -79,6 +82,7 @@ function chainProps(overrides: {
     draftRev: 0,
     occurrences: [],
     queue: [],
+    claim: overrides.claim,
   }
   return {
     matched: MARKDOWN_TAKEOVER,
@@ -86,6 +90,8 @@ function chainProps(overrides: {
     session: overrides.session,
     useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
     inputActions: inputActions as unknown as MarkdownComposerProps['inputActions'],
+    useProjection: ((key: string, selector?: (value: unknown) => unknown) =>
+      selector?.(key === 'goal' ? overrides.goal ?? null : undefined)) as MarkdownComposerProps['useProjection'],
     t: ((key: keyof typeof en, params?: Record<string, string>) =>
       en[key].replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`)
     ) as unknown as MarkdownComposerProps['t'],
@@ -110,6 +116,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   setConversationSource(() => undefined)
+  resetSkillFace()
   window.localStorage.clear()
   resetFaces()
   resetTakeoverDegradation()
@@ -528,5 +535,76 @@ describe('MarkdownComposer editor face degradation (ADR-0005 hardening #2)', () 
     const { container } = render(<MarkdownComposer {...chainProps()} />)
     expect(container.querySelector('.cm-content')).not.toBeNull()
     expect(takeoverDegraded()).toBe(false)
+  })
+})
+
+describe('MarkdownComposer — chip decorations and claim ghost (T9)', () => {
+  it('keeps slash tokens plain while the skill lexicon face is absent', () => {
+    render(<MarkdownComposer {...chainProps({ draft: 'use /plan now' })} />)
+    expect(document.querySelector('.cm-mdx-ref-skill')).toBeNull()
+  })
+
+  it('decorates a skill token once the lexicon face answers', async () => {
+    setSkillSource(() => ({
+      skills: {
+        list: vi.fn(() => Promise.resolve({
+          ok: true as const,
+          value: { skills: [{ name: 'plan', description: '', modelInvocable: true }] },
+        })),
+      },
+      remoteEvents: undefined,
+    }))
+    render(<MarkdownComposer {...chainProps({ draft: 'use /plan now' })} />)
+    await waitFor(() => expect(document.querySelector('.cm-mdx-ref-skill')).not.toBeNull())
+    expect(document.querySelector('.cm-mdx-ref-skill')?.textContent).toBe('/plan')
+  })
+
+  it('shows the goal ghost hint while a goal claim holds on a blank-args draft', () => {
+    render(<MarkdownComposer {...chainProps({ draft: '/goal ', phase: 'claimed', claim: { name: 'goal', token: '/goal ', hint: 'machine hint' } })} />)
+    expect(document.querySelector('.cm-mdx-claim-token')?.textContent).toBe('/goal')
+    expect(document.querySelector('.cm-mdx-claim-hint')?.textContent)
+      .toBe(en['composer.hint.goal'])
+  })
+
+  it('switches to the active-goal copy while the goal projection is set', () => {
+    render(<MarkdownComposer {...chainProps({ draft: '/goal ', phase: 'claimed', claim: { name: 'goal', token: '/goal ' }, goal: { id: 'g1' } })} />)
+    expect(document.querySelector('.cm-mdx-claim-hint')?.textContent)
+      .toBe(en['composer.hint.goal.active'])
+  })
+
+  it('shows the plan copy for a plan claim and the machine hint for other claims', () => {
+    const first = render(<MarkdownComposer {...chainProps({ draft: '/plan ', phase: 'claimed', claim: { name: 'plan', token: '/plan ' } })} />)
+    expect(document.querySelector('.cm-mdx-claim-hint')?.textContent)
+      .toBe(en['composer.hint.plan'])
+    first.unmount()
+    render(<MarkdownComposer {...chainProps({ draft: '/permission ', phase: 'claimed', claim: { name: 'permission', token: '/permission ', hint: 'choose a preset' } })} />)
+    expect(document.querySelector('.cm-mdx-claim-hint')?.textContent).toBe('choose a preset')
+  })
+
+  it('drops the ghost hint once the args are typed and when the claim leaves', async () => {
+    const props = chainProps({ draft: '/goal ', phase: 'claimed', claim: { name: 'goal', token: '/goal ' } })
+    const { rerender } = render(<MarkdownComposer {...props} />)
+    expect(document.querySelector('.cm-mdx-claim-hint')).not.toBeNull()
+    // Typed args: the machine draft is blank no more — the editor hides the hint.
+    rerender(<MarkdownComposer {...chainProps({ draft: '/goal ship it', phase: 'claimed', claim: { name: 'goal', token: '/goal ' } })} />)
+    await waitFor(() => expect(document.querySelector('.cm-mdx-claim-hint')).toBeNull())
+    expect(document.querySelector('.cm-mdx-claim-token')).not.toBeNull()
+    // Claim left (phase plain): both clear.
+    rerender(<MarkdownComposer {...chainProps({ draft: '/goal ship it', phase: 'plain' })} />)
+    await waitFor(() => expect(document.querySelector('.cm-mdx-claim-token')).toBeNull())
+  })
+})
+
+describe('MarkdownComposer — chip text round-trip (T9)', () => {
+  it('mirrors chip-bearing drafts into the machine draft verbatim (host line format intact)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const draft = 'see @"path with spaces" + @[Old chat](dsh-session:s-1) + /plan'
+    const { getByText } = render(<MarkdownComposer {...chainProps({ draft, inputActions })} />)
+    // Submit (and the unmount/pagehide flushes) ride setDraft(getText());
+    // the chip decorations never touch the text, so the host's own
+    // setDraft/restoreDraft contract receives the exact draft.
+    fireEvent.click(getByText(en['composer.action.submit']))
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith(draft))
+    expect(inputActions.submit).toHaveBeenCalledTimes(1)
   })
 })

@@ -18,6 +18,7 @@ import {
 } from '@codemirror/view'
 import { liveRender } from './live-render.ts'
 import { decideRichPaste, plainPasteGestureTracker, readClipboard } from './paste-decision.ts'
+import { refChipDecorations, setClaimGhostEffect, setSkillLexiconEffect, type ClaimGhost } from './ref-chip-decor.ts'
 
 export type EditMode = 'render' | 'source'
 
@@ -86,6 +87,14 @@ export interface MarkdownEditorHandle {
    * absent handler returns the keys to the editor's own commands.
    */
   setMenuKeyHandler(handler: MenuKeyHandler | null): void
+  /**
+   * Replace the hot skill dictionary behind the chip decorations' `/` arm
+   * (the `remote.skills` face resolves after mount; an empty roll keeps
+   * slash tokens plain text — the per-face degradation contract).
+   */
+  setSkillLexicon(names: readonly string[]): void
+  /** Set (or clear) the active command claim's token mark and ghost hint. */
+  setClaimGhost(ghost: ClaimGhost | null): void
   /**
    * Whether only whitespace precedes the selection (the leading-trigger
    * position of the host's command pipeline — claim rows only make sense
@@ -232,6 +241,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       if (update.docChanged) options.onDocChange(update.state.doc.toString())
     }),
     pasteHandler(options.onFiles),
+    refChipDecorations,
   ]
 
   const view = new EditorView({
@@ -275,6 +285,12 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     focus: () => view.focus(),
     setMenuKeyHandler(handler) {
       menuHandler.current = handler
+    },
+    setSkillLexicon(names) {
+      view.dispatch({ effects: setSkillLexiconEffect.of([...names]) })
+    },
+    setClaimGhost(ghost) {
+      view.dispatch({ effects: setClaimGhostEffect.of(ghost) })
     },
     isLeadingSelection(): boolean {
       const selection = view.state.selection.main

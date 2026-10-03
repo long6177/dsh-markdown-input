@@ -49,6 +49,7 @@ import { modelFaceDefinition } from './model-face.ts'
 import { ModelSelectFace } from './ModelSelectFace.tsx'
 import { permissionFaceDefinition } from './permission-face.ts'
 import { PermissionSelectFace } from './PermissionSelectFace.tsx'
+import { skillFace } from './skill-face.ts'
 
 /** Selector marker this entry returns to win the composer chain election. */
 export interface MarkdownTakeover {
@@ -190,6 +191,13 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   const attachmentFace = detectAttachmentFace()
   const uploads = useObservable(attachmentFace?.fileUploads)
 
+  // Skill lexicon face (T9): the hot `/` dictionary behind the editor's
+  // chip decorations, capability-detected per call — a host build without
+  // the `remote.skills` surface keeps slash tokens plain text while the
+  // shape-only `@`/session arms still decorate (they need no data plane).
+  const skills = skillFace()
+  const skillLexicon = useObservable(skills?.lexicons)
+
   // Prompt failures are ordinary failures: the banner announces them, the
   // draft stays in the machine, the user resubmits. A remount over a session
   // whose failure is still pending re-announces it once (resident-bar
@@ -317,6 +325,38 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     seedingRef.current = false
     setHasText(input.draft.trim().length > 0)
   }, [input.draft])
+
+  // Chip decorations (T9). Warm the skill lexicon once per session and push
+  // the live roll into the editor — the RPC resolves after mount, so the
+  // effect re-fires on arrival; until then (or without the face at all)
+  // the editor holds an empty roll and slash tokens stay plain text.
+  useEffect(() => {
+    if (skills !== undefined && sessionId !== undefined) skills.ensure(sessionId)
+    const names = skills !== undefined && sessionId !== undefined
+      ? skillLexicon?.value.get(sessionId)
+      : undefined
+    editorHandle?.setSkillLexicon(names ?? [])
+  }, [skills, sessionId, skillLexicon, editorHandle])
+
+  // Claim ghost hint (T9): the native claim decoration — while a command
+  // claim holds, the resolved per-command hint (the translated native key
+  // wins, the machine's own hint answers for other claimed commands) rides
+  // into the editor, which decides blank-args from its live document.
+  const hasGoal = useProjection('goal', (goal: unknown) => goal != null) === true
+  useEffect(() => {
+    const claim = input.claim
+    const claimed = input.phase === 'claimed' || input.phase === 'submitting'
+    if (!claimed || claim === undefined) {
+      editorHandle?.setClaimGhost(null)
+      return
+    }
+    const hint = claim.name === 'goal'
+      ? tRef.current(hasGoal ? 'composer.hint.goal.active' : 'composer.hint.goal')
+      : claim.name === 'plan'
+        ? tRef.current('composer.hint.plan')
+        : claim.hint ?? null
+    editorHandle?.setClaimGhost(hint === null ? null : { token: claim.token, hint })
+  }, [input.claim, input.phase, hasGoal, editorHandle])
 
   // Tool-row collapse measurement (the model pill's truncation ladder, host
   // parity): flips `data-model-compact` when the expanded controls cannot

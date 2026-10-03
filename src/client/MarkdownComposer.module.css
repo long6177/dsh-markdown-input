@@ -305,3 +305,42 @@
     linear-gradient(45deg, transparent 42%, currentColor 42%, currentColor 55%, transparent 55%),
     linear-gradient(-45deg, transparent 55%, currentColor 55%, currentColor 68%, transparent 68%);
 }
+
+/* Reference chips (T9): marks over the plain draft, styled after the host
+   composer's shared inline reference treatment (`.reference`) — padding and
+   radius, business color, hover background, identical text metrics on
+   hover. Source mode keeps the chips: they decorate content semantics, not
+   Markdown syntax. Class prefixes: `cm-md-` is the live-render presentation
+   (render mode only); `cm-mdx-` is this plugin's content semantics
+   (reference chips, claim decoration), mounted in both modes. */
+.surface :global(.cm-mdx-ref) {
+  padding: 0 4px;
+  border-radius: var(--dsw-radius-sm, 4px);
+  color: var(--dsw-alias-state-business-primary, color-mix(in srgb, currentColor 80%, #2470ff));
+  background: transparent;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.surface :global(.cm-mdx-ref:hover) {
+  background: var(--dsw-alias-state-business-tertiary, color-mix(in srgb, currentColor 10%, transparent));
+}
+
+.surface :global(.cm-mdx-ref-skill) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+}
+
+/* Claim token + trailing ghost hint: the native claim decoration. The hint
+   hides while an IME composition is active (the host's own CSS gate). */
+.surface :global(.cm-mdx-claim-token) {
+  color: var(--dsw-alias-state-business-primary, color-mix(in srgb, currentColor 80%, #2470ff));
+}
+
+.surface :global(.cm-mdx-claim-hint) {
+  color: var(--dsw-alias-label-caption, color-mix(in srgb, currentColor 55%, transparent));
+}
+
+.surface :global(.cm-editor[data-mdx-composing]) :global(.cm-mdx-claim-hint) {
+  display: none;
+}
