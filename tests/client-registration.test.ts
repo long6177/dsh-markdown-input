@@ -12,6 +12,7 @@ import { apply, userMessageCapability } from '../src/client/index.ts'
 import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
 import { TakeoverCard } from '../src/client/composer-card.tsx'
 import { degradeTakeover, resetTakeoverDegradation } from '../src/client/degrade.ts'
+import { commandFaceSupported, resetCommandFace } from '../src/client/command-face.ts'
 import { en, NS, zh } from '../src/client/locales.ts'
 import { en as modelEn, zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
 import { MODEL_NS } from '../src/client/model-face.ts'
@@ -27,7 +28,7 @@ interface RecordedRegistration {
 }
 
 /** A context that runs `inject` thunks eagerly and records registrations. */
-function recordedContext(): {
+function recordedContext(options: { remote?: unknown } = {}): {
   ctx: ClientContext
   injected: readonly string[]
   registrations: readonly RecordedRegistration[]
@@ -37,6 +38,9 @@ function recordedContext(): {
   const registrations: RecordedRegistration[] = []
   const dictionaries: unknown[][] = []
   const ctx = {
+    get(key: string): unknown {
+      return key === 'remote' ? options.remote : undefined
+    },
     effect(fn: () => unknown): unknown {
       return fn()
     },
@@ -72,6 +76,7 @@ function recordedContext(): {
 
 afterEach(() => {
   resetTakeoverDegradation()
+  resetCommandFace()
 })
 
 describe('client apply registration', () => {
@@ -88,6 +93,22 @@ describe('client apply registration', () => {
     expect(composer[0]?.priority).toBe(2)
     expect(composer[0]?.locale).toBe(NS)
     expect(composer[0]?.component).toBe(TakeoverCard)
+  })
+
+  it('wires the command-menu face source so the tool-row ① probe can pass', () => {
+    // The face installers bind lazy resolvers; apply() must wire every one —
+    // a missed installer latches its FaceGate verdict off for the page life
+    // and the tool row silently renders the fallback attach button (#29).
+    const remote = { commands: { list: () => {}, execute: () => {} } }
+    const { ctx } = recordedContext({ remote })
+    apply(ctx)
+    expect(commandFaceSupported()).toBe(true)
+  })
+
+  it('the command-menu face stays degraded when the host lacks the namespace', () => {
+    const { ctx } = recordedContext()
+    apply(ctx)
+    expect(commandFaceSupported()).toBe(false)
   })
 
   it('touches only the composer chain, chat-node slot, and composer dock', () => {
