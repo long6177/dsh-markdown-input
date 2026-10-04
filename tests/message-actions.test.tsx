@@ -67,6 +67,10 @@ describe('MessageActions', () => {
   })
 
   it('renders the copy button and the start-position clock', () => {
+    // The clock's day cut reads the host wall clock (and the row's calendar-day
+    // seat re-arms at local midnight), so pin the clock to the message's own
+    // day: the assertion must not start failing the day after it was written.
+    vi.useFakeTimers({ now: localMs(2026, 10, 4, 9, 30) })
     const { container, getByRole } = render(<MessageActions {...actionsProps({ time: localMs(2026, 10, 4, 9, 5) })} />)
     expect(getByRole('button', { name: 'copy' })).toBeInTheDocument()
     const row = container.querySelector('[data-message-actions]')
