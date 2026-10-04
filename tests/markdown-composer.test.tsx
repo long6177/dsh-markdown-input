@@ -25,6 +25,7 @@ function fakeConversation(options: {
   uploads?: Record<string, { status: string, loaded?: number }>
   notice?: { level: 'info' | 'error'; text: string; seq: number } | null
   drafts?: readonly FakeDraft[]
+  block?: { reason: string }
 } = {}) {
   const drafts = options.drafts ?? []
   const created: FakeDraft[] = []
@@ -32,7 +33,9 @@ function fakeConversation(options: {
   // updates, or useSyncExternalStore would loop.
   const uploadsSnapshot = options.uploads ?? {}
   const noticeSnapshot = options.notice ?? null
+  const blockSnapshot = options.block
   return {
+    cancel: vi.fn(() => Promise.resolve()),
     createDrafts: vi.fn((_sessionId: string, files: readonly File[]): readonly FakeDraft[] => {
       const made = files.map((file, index) => ({ kind: 'file' as const, id: `d${index}`, file }))
       created.push(...made)
@@ -53,6 +56,12 @@ function fakeConversation(options: {
     input: {
       shell: vi.fn(() => ({
         notices: { subscribe: () => () => {}, getSnapshot: () => noticeSnapshot },
+      })),
+    },
+    blocks: {
+      storeFor: vi.fn(() => ({
+        subscribe: () => () => {},
+        getSnapshot: () => blockSnapshot,
       })),
     },
   }
@@ -762,5 +771,136 @@ describe('MarkdownComposer — queue strip (issue #30)', () => {
     const { getByText, queryByRole } = render(<MarkdownComposer {...queuedProps()} />)
     expect(getByText('排队补充')).toBeInTheDocument()
     expect(queryByRole('button', { name: en['queue.remove'] })).toBeNull()
+  })
+})
+
+describe('MarkdownComposer — stop actions (issue #32)', () => {
+  /** A running-session snapshot; `session` is plain data for the card. */
+  function stopSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { running: true, subagent: null, pendingSubmissions: [], ...overrides }
+  }
+
+  /**
+   * Bind the fake conversation the way production resolves it: the root
+   * face (blocks registry, notices, attachments) and the session-scope walk
+   * (the stopOf/queueUpdateOf verbs). Order matters — the install's root
+   * thunk wins otherwise.
+   */
+  function installStopScope(conversation: FakeConversation | undefined): void {
+    installConversationSource({
+      get: (name: string) => name === 'sessions'
+        ? { scope: () => ({ get: (n: string) => n === 'conversation' ? conversation : undefined }) }
+        : undefined,
+    } as never)
+    setConversationSource(() => conversation)
+  }
+
+  it('turns the primary into stop on a running session with an empty composer', async () => {
+    const conversation = fakeConversation()
+    installStopScope(conversation)
+    const { getByRole } = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+    const stop = getByRole('button', { name: en['composer.action.stop'] })
+    expect(stop).toBeEnabled()
+    expect(stop).toHaveTextContent(en['composer.action.stop'])
+    fireEvent.click(stop)
+    await waitFor(() => expect(conversation.cancel).toHaveBeenCalledTimes(1))
+  })
+
+  it('reverts the primary to send when the session stops running', () => {
+    const view = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+    expect(view.getByRole('button', { name: en['composer.action.stop'] })).toBeInTheDocument()
+    view.rerender(<MarkdownComposer {...chainProps({ session: stopSession({ running: false }) })} />)
+    expect(view.queryByRole('button', { name: en['composer.action.stop'] })).toBeNull()
+    expect(view.getByText(en['composer.action.submit'])).toBeInTheDocument()
+  })
+
+  it('keeps the send gesture while an actionable draft is typed on a running session', () => {
+    installStopScope(fakeConversation())
+    const { getByRole, getByText, queryByRole } = render(
+      <MarkdownComposer {...chainProps({ draft: '排队的话', session: stopSession() })} />,
+    )
+    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
+    expect(queryByRole('button', { name: en['composer.action.stop'] })).toBeNull()
+    expect(getByRole('button', { name: en['composer.action.submit'] })).toBeEnabled()
+  })
+
+  it('renders the stop arm disabled when the cancel verb is absent', () => {
+    // Native parity: the stop button sheds its click, never its seat
+    // (`disabled: stop === undefined`).
+    installStopScope(undefined)
+    const { getByRole } = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+    expect(getByRole('button', { name: en['composer.action.stop'] })).toBeDisabled()
+  })
+
+  it('exposes the dedicated stop on a running continuable child with Send primary', async () => {
+    const conversation = fakeConversation()
+    installStopScope(conversation)
+    const { getByRole, getByText } = render(<MarkdownComposer {...chainProps({
+      draft: '子会话里的话',
+      session: stopSession({ subagent: { address: { mode: 'continuable' } } }),
+    })} />)
+    const dedicated = getByRole('button', { name: en['composer.action.stop'] })
+    expect(dedicated).toBeEnabled()
+    // Native dedicated stop: the inline square glyph, the primary stays Send.
+    expect(dedicated.querySelector('svg rect')).not.toBeNull()
+    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
+    fireEvent.click(dedicated)
+    await waitFor(() => expect(conversation.cancel).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps nothing dedicated on other subagent address modes', () => {
+    installStopScope(fakeConversation())
+    const { getByText, queryByRole } = render(<MarkdownComposer {...chainProps({
+      session: stopSession({ subagent: { address: { mode: 'supervised' } } }),
+    })} />)
+    expect(queryByRole('button', { name: en['composer.action.stop'] })).toBeNull()
+    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
+  })
+
+  it('substitutes a raised owner block for the empty composer', async () => {
+    const conversation = fakeConversation({ block: { reason: '等待审批' } })
+    installStopScope(conversation)
+    const { getByRole } = render(<MarkdownComposer {...chainProps({
+      draft: '被阻塞时也停',
+      session: stopSession(),
+    })} />)
+    const stop = getByRole('button', { name: en['composer.action.stop'] })
+    fireEvent.click(stop)
+    await waitFor(() => expect(conversation.cancel).toHaveBeenCalledTimes(1))
+  })
+
+  it('reads an absent blocks plane as unblocked', () => {
+    const conversation = fakeConversation() as Record<string, unknown>
+    delete conversation.blocks
+    installStopScope(conversation as never)
+    const { getByText } = render(<MarkdownComposer {...chainProps({
+      draft: '无阻塞面时保持发送',
+      session: stopSession(),
+    })} />)
+    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
+  })
+
+  it('swallows a failed cancel without degrading the card', async () => {
+    const conversation = fakeConversation()
+    conversation.cancel = vi.fn(() => Promise.reject(new Error('cancel failed')))
+    installStopScope(conversation)
+    const { getByRole, findByRole } = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+    fireEvent.click(getByRole('button', { name: en['composer.action.stop'] }))
+    // The rejection rides the Session promptError surface, not the click —
+    // the card stays mounted either way (native stop swallows too).
+    await findByRole('button', { name: en['composer.action.stop'] })
+    expect(document.querySelector('[data-markdown-composer]')).not.toBeNull()
+    expect(takeoverDegraded()).toBe(false)
+  })
+
+  it('announces a failed stop through the Session promptError', () => {
+    setConversationSource(() => fakeConversation())
+    const session = stopSession({
+      promptError: { op: 'stop', error: { code: 'session/cancel-failed', message: '停止失败' } },
+    })
+    const { container } = render(<MarkdownComposer {...chainProps({ session })} />)
+    const banner = container.querySelector('[data-markdown-banner]')
+    expect(banner?.textContent).toContain('停止失败')
+    expect(banner?.textContent).toContain('session/cancel-failed')
   })
 })

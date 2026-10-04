@@ -12,7 +12,10 @@
  * bar's toast is invisible, so this is the only notice surface. Busy
  * admission phases (adjudicating/submitting) disable the submit, attach,
  * drop, and remove actions and read-only the editor, matching the built-in
- * bar.
+ * bar. The stop semantics (#32) mirror the native bar's arms: on a running
+ * ordinary session the primary names stop while the composer is empty or
+ * owner-blocked and cancels the in-flight turn (queue preserved); a running
+ * continuable child keeps Send primary and gains a dedicated stop button.
  *
  * The tool row is a federation of faces: the `+` command menu (T5), the
  * rebuilt permission preset selector (T3) and the vendored model/reasoning
@@ -40,8 +43,8 @@ import type { CompletionGuard } from './completion-core.ts'
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
-  attachmentFace as detectAttachmentFace, conversationFace, noticesOf, queueUpdateOf,
-  useObservable,
+  attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, noticesOf,
+  queueUpdateOf, stopOf, useObservable,
   type AttachmentFace,
 } from './conversation-face.ts'
 import { registerFace } from './face.ts'
@@ -55,6 +58,7 @@ import { PermissionSelectFace } from './PermissionSelectFace.tsx'
 import { QueueFace } from './QueueFace.tsx'
 import { queueMutableOf, queueViewRows } from './queue-core.ts'
 import { skillFace } from './skill-face.ts'
+import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
 
 /** Selector marker this entry returns to win the composer chain election. */
 export interface MarkdownTakeover {
@@ -223,6 +227,32 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   )
   const queueMutable = queueMutableOf(session?.subagent)
 
+  // Stop arms (issue #32): the native bar's send/stop semantics over the
+  // card's planes. The cancel verb rides the session-scoped conversation
+  // service (the native stop inject's resolution), capability-detected per
+  // call — without it the stop buttons render disabled, the seat never
+  // disappears. The blocked plane rides the conversation service's blocks
+  // registry (the native bar's `blocked` read); hosts without it read as
+  // unblocked and the empty-composer arm stands alone.
+  const stop = sessionId === undefined ? undefined : stopOf(sessionId)
+  const blockSource = useMemo(
+    () => conversation !== undefined && sessionId !== undefined
+      ? composerBlockOf(conversation, sessionId)
+      : undefined,
+    [conversation, sessionId],
+  )
+  const composerBlock = useObservable(blockSource)
+  const draftEmpty = !hasText && input.attachmentIds.length === 0
+  const stopConditions = {
+    // No session id, no session-scoped verb: the arms stay off entirely.
+    running: sessionId !== undefined && (session?.running ?? false),
+    subagent: session?.subagent,
+    empty: draftEmpty,
+    blocked: composerBlock !== undefined,
+  }
+  const primaryStops = primaryStopsOf(stopConditions)
+  const dedicatedStop = dedicatedStopOf(stopConditions)
+
   // Prompt failures are ordinary failures: the banner announces them, the
   // draft stays in the machine, the user resubmits. A remount over a session
   // whose failure is still pending re-announces it once (resident-bar
@@ -281,6 +311,12 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     window.setTimeout(() => {
       if (inputRef.current.phase === 'plain') inputActionsRef.current.submit()
     }, 0)
+  }
+
+  // The stop arms' click: the session-scoped cancel verb (queue preserved;
+  // a failed cancel surfaces through the Session promptError — see stopOf).
+  function stopRunning(): void {
+    stop?.()
   }
 
   useEffect(() => {
@@ -418,7 +454,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     editorRef.current?.setMode(mode, placeholderOf(t, mode))
   }, [mode, t])
 
-  const canSubmit = (hasText || input.attachmentIds.length > 0) && input.phase === 'plain' && !uploadsPending
+  const canSubmit = !draftEmpty && input.phase === 'plain' && !uploadsPending
   // Native canAcceptDrop parity: subagent === null, not locked (a session id
   // exists), not busy, and the intake face present.
   const canIntake = attachmentFace !== undefined && sessionId !== undefined
@@ -656,8 +692,28 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
             subagent={session?.subagent ?? null}
           />
         </FaceGate>
-        <button type="button" className={css.submitButton} disabled={!canSubmit} onClick={submit}>
-          {t('composer.action.submit')}
+        {/* Dedicated stop (tool row ④, native `interruptible`): a running
+            continuable child keeps Send primary and stops through its own
+            button — the native inline square glyph, disabled while the cancel
+            verb is missing. Mutually exclusive with the primary stop arm. */}
+        {dedicatedStop && (
+          <button type="button" className={`${css.submitButton} ${css.stopButton}`}
+            aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
+            disabled={stop === undefined} onClick={stopRunning}>
+            <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+              <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+            </svg>
+          </button>
+        )}
+        {/* Send/stop semantics (native `primaryStops`): on a running ordinary
+            session the primary names stop while the composer is empty or
+            owner-blocked, and clicks cancel (queue preserved); every other
+            state keeps the send action. A missing cancel verb disables the
+            arm, never hides the seat. */}
+        <button type="button" className={css.submitButton}
+          disabled={primaryStops ? stop === undefined : !canSubmit}
+          onClick={primaryStops ? stopRunning : submit}>
+          {primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
         </button>
       </div>
     </div>

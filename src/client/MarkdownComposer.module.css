@@ -392,6 +392,15 @@
   cursor: default;
 }
 
+/* The dedicated stop (continuable child): icon-only seat over the submit
+   pill, glyph centered like the native bar's square stop. */
+.stopButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+}
+
 /* Live-render presentation (render mode): folded markers, styled content.
    Source mode mounts none of these. */
 .surface :global(.cm-md-h1) { font-size: 1.5em; font-weight: 600; }

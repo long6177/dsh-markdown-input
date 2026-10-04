@@ -6,6 +6,9 @@ const zh = {
   'composer.placeholder.render': '以 Markdown 撰写…（Enter 发送，Shift+Enter 换行）',
   'composer.placeholder.source': 'Markdown 源码…（Enter 发送，Shift+Enter 换行）',
   'composer.action.submit': '发送',
+  // Stop action (issue #32) — the host `conversation` namespace's `input.stop`
+  // copied verbatim: the takeover card names stop exactly as the native bar.
+  'composer.action.stop': '停止生成',
   'composer.mode.render': '渲染',
   'composer.mode.source': '源码',
   'composer.mode.toggle': '切换到{mode}模式',
@@ -108,6 +111,7 @@ const en: Record<ComposerKey, string> = {
   'composer.placeholder.render': 'Write in Markdown… (Enter to send, Shift+Enter for newline)',
   'composer.placeholder.source': 'Markdown source… (Enter to send, Shift+Enter for newline)',
   'composer.action.submit': 'Send',
+  'composer.action.stop': 'Stop generating',
   'composer.mode.render': 'Render',
   'composer.mode.source': 'Source',
   'composer.mode.toggle': 'Switch to {mode} mode',

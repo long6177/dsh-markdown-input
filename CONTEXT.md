@@ -75,3 +75,7 @@ _Avoid_: pending steering（指尚未入场的瞬态输入回显，宿主直渲�
 
 **排队消息栏（Queue strip）**:
 接管卡内重建的排队消息视图（原生 composer 的 queue dock 随回退栏被接管隐藏）：行数据读输入货币 `queue` 与会话快照回显，撤回/编辑/插话走会话域 `updateQueue`；动作面缺席时只降按钮不降可见性。
+
+**停止臂（Stop arms）**:
+接管卡的发送/停止语义（#32，对齐原生 InputBar 的 `primaryStops`/`interruptible`）：普通会话运行中且草稿为空（或 owner 抬起 composer block）时主按钮切换为停止、点击经会话域 `cancel` 取消在飞回合并保留队列；可续子会话保留发送主钮、另设专属方形停止钮。cancel 动词缺席时按钮降为不可点，座位不消失。
+_Avoid_: 中断（宿主文案为「停止生成」）

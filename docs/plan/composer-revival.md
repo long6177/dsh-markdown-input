@@ -39,7 +39,7 @@
   - ① `+` 命令菜单：添加/指令两分节、八条目（file/goal/plan/feedback/compact/permission/model/export），goal/plan 点击插 claim token，permission/model 行链式打开第二层弹卡，feedback/compact/export 直达动作。
   - ② 权限预设：Menu + RiskConfirmation（完全权限确认门），读 `permissions` 投影，写 `/permission <preset>`。
   - ③ 模型/推理等级：两行 pane 卡片，数据走 `modelDirectories`（可达性 spike 先行）。
-  - ④ 发送/停止/排队（v1 #11 已解，对齐 rc.2）。
+  - ④ 发送/停止/排队（v1 #11 已解，对齐 rc.2；alpha.6 真机复测发现停止半件缺失，#32 补齐：普通会话主按钮 `primaryStops` 变停 + 可续子会话专属停止钮，走会话域 `conversation.cancel`，队列保留）。
 - 附件栏 v1 水准；粘贴转 Markdown 迁入 CM6 paste handler（复用 `paste-decision.ts` 转换器；图片/文件粘贴交宿主 intake）。
 - chip 纯文本透传（不装饰、不丢内容）。
 - 硬化：error boundary + 一次性轻提示 + 会话内闩锁；逐面能力探测（编辑器面/工具行各控件面/弹层面独立降级）。

@@ -140,7 +140,7 @@ export type QueueAction =
 /** The session-scoped queued-message mutation verb (the native dock's inject). */
 export type QueueUpdate = (itemId: string, action: QueueAction) => Promise<void>
 
-/** The sessions service reach the queue verb resolves through. */
+/** The sessions service reach the scoped verbs resolve through. */
 interface SessionScopeFace {
   scope(sessionId: SessionId): ClientContext | undefined
 }
@@ -159,27 +159,77 @@ export function installConversationSource(ctx: ClientContext): void {
 }
 
 /**
- * The queued-message mutation verb for one session, capability-detected per
- * call. The root-resolved conversation service cannot serve here — its
+ * The session-scoped conversation service, or undefined when the walk
+ * cannot resolve: the root-resolved service cannot serve here — its
  * scope-addressed verbs read the caller's scope tag and fail loud on root
  * contexts — so the resolution walks the sessions service into the session
- * scope and reads that scope's conversation, exactly the native queue
- * dock's inject path. Undefined sheds the strip's action buttons; the rows
- * stay visible.
- * @param sessionId - owning session.
+ * scope, exactly the native InputBar's `scopedConversation` inject path.
  */
-export function queueUpdateOf(sessionId: SessionId): QueueUpdate | undefined {
+function scopedConversation(sessionId: SessionId): ConversationFace | undefined {
   const ctx = rootContext
   if (ctx === undefined) return undefined
   try {
     const sessions = ctx.get('sessions') as Partial<SessionScopeFace> | undefined
     if (typeof sessions?.scope !== 'function') return undefined
-    const actx = sessions.scope(sessionId)
-    const conversation = actx?.get('conversation') as
-      | { updateQueue?(itemId: string, action: QueueAction): Promise<void> }
-      | undefined
-    if (typeof conversation?.updateQueue !== 'function') return undefined
-    return (itemId, action) => conversation.updateQueue!(itemId, action)
+    return sessions.scope(sessionId)?.get('conversation') as ConversationFace | undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The queued-message mutation verb for one session, capability-detected per
+ * call. Undefined sheds the strip's action buttons; the rows stay visible.
+ * @param sessionId - owning session.
+ */
+export function queueUpdateOf(sessionId: SessionId): QueueUpdate | undefined {
+  const conversation = scopedConversation(sessionId) as
+    | { updateQueue?(itemId: string, action: QueueAction): Promise<void> }
+    | undefined
+  if (typeof conversation?.updateQueue !== 'function') return undefined
+  return (itemId, action) => conversation.updateQueue!(itemId, action)
+}
+
+/** The session-scoped stop verb (the native InputBar's `stop` inject). */
+export type SessionStop = () => void
+
+/**
+ * The stop verb for one session (issue #32), capability-detected per call:
+ * `Conversation.cancel()` cancels the in-flight turn while preserving the
+ * queue. Without the verb the stop buttons render disabled — native parity
+ * (`disabled: stop === undefined`): the seat stays, only the click sheds.
+ * @param sessionId - owning session.
+ */
+export function stopOf(sessionId: SessionId): SessionStop | undefined {
+  const conversation = scopedConversation(sessionId) as
+    | { cancel?(): Promise<void> }
+    | undefined
+  if (typeof conversation?.cancel !== 'function') return undefined
+  // Native parity: the verb swallows the rejection — a failed cancel lands
+  // in the Session promptError (op "stop"), which the card banner reports.
+  return () => { conversation.cancel!().catch(() => {}) }
+}
+
+/**
+ * The session's composer-block source (the native bar's `blocked` plane,
+ * raised by owner plugins through `ctx.conversation.blocks`), resolved off
+ * the already-held conversation service. Capability-detected: hosts without
+ * the registry read as unblocked — the plane sheds, the stop math keeps its
+ * empty-composer arm. The registry is session-addressed by design, so this
+ * is safe from the root-resolved service (unlike the scoped verbs above).
+ * @param conversation - the conversation service face.
+ * @param sessionId - owning session.
+ */
+export function composerBlockOf(
+  conversation: ConversationFace,
+  sessionId: SessionId,
+): ObservableSource<unknown> | undefined {
+  try {
+    const blocks = (conversation as unknown as {
+      blocks?: { storeFor?(id: SessionId): ObservableSource<unknown> }
+    }).blocks
+    if (typeof blocks?.storeFor !== 'function') return undefined
+    return blocks.storeFor(sessionId)
   } catch {
     return undefined
   }
