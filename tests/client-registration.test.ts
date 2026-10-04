@@ -17,12 +17,15 @@ import { en, NS, zh } from '../src/client/locales.ts'
 import { en as modelEn, zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
 import { MODEL_NS } from '../src/client/model-face.ts'
 import { FallbackNotice } from '../src/client/FallbackNotice.tsx'
+import { ContextMeterOccupant } from '../src/client/ContextMeterOccupant.tsx'
+import { CONTEXT_NS } from '../src/client/context-meter-face.ts'
 
 interface RecordedRegistration {
   name: string
   key?: string
   id?: string
   priority?: number
+  order?: number
   locale?: string
   component: unknown
 }
@@ -67,6 +70,7 @@ function recordedContext(options: { remote?: unknown; remoteCommands?: unknown }
           key: options.key as string | undefined,
           id: options.id as string | undefined,
           priority: options.priority as number | undefined,
+          order: options.order as number | undefined,
           locale: options.locale as string | undefined,
           component,
         })
@@ -139,19 +143,43 @@ describe('client apply registration', () => {
     }
   })
 
-  it('occupies the composer dock with the fallback-notice entry alone', () => {
+  it('occupies the composer dock with the fallback-notice entry and the context meter', () => {
     const { ctx, registrations } = recordedContext()
     apply(ctx)
     const docks = registrations.filter(entry => entry.name === 'conversation.composer.dock')
-    // T7 retired the paste/paint dock occupants; the notice is the only one
-    // left, and the only dock that declares a locale namespace (its copy).
-    expect(docks).toHaveLength(1)
+    // T7 retired the paste/paint dock occupants; two remain: the one-shot
+    // notice and, since #43, the context meter. The notice is the only dock
+    // occupant that declares a locale namespace (its copy rides the plugin's
+    // own dictionaries); the meter reads the HOST `conversation` namespace
+    // through the seat apply binds, so it declares none.
+    expect(docks).toHaveLength(2)
     expect(docks[0]).toMatchObject({
       id: 'markdown-input-fallback',
       component: FallbackNotice,
       locale: NS,
       key: undefined,
     })
+    // The meter must land AFTER the slot contents, exactly where the native
+    // bar renders its ContextMeter: the dock is a centered flex list, so the
+    // registration's `order` (default 0) is what puts it there.
+    expect(docks[1]).toMatchObject({
+      id: 'markdown-input-context-meter',
+      component: ContextMeterOccupant,
+      locale: undefined,
+      key: undefined,
+      order: 1,
+    })
+  })
+
+  it('binds the host conversation copy for the context meter without registering it', () => {
+    const { ctx, dictionaries } = recordedContext()
+    apply(ctx)
+    // The meter's words are the host `conversation` namespace's own keys
+    // (`context.*`, `number.*`); the plugin registers NO dictionary under it —
+    // a duplicate registration would shadow the host's copy in the locale
+    // plugin's merge chain.
+    expect(dictionaries.map(entry => entry[0])).not.toContain(CONTEXT_NS)
+    expect(CONTEXT_NS).toBe('conversation')
   })
 
   it('ships the markdown-input dictionaries (zh/en) for the card copy', () => {
@@ -170,8 +198,8 @@ describe('client apply registration', () => {
     // Degraded earlier in the page life (boundary crash, editor-face probe
     // failure): re-running apply — a later session scope's re-inject — must
     // not re-attempt the takeover (ADR-0005 Q5). Dictionaries, chat-node
-    // seats, and the dock occupant (the fallback notice) are not part of
-    // the latch.
+    // seats, and the dock occupants (the fallback notice and the context
+    // meter) are not part of the latch.
     degradeTakeover('editor face probe failed (setDraft missing)')
     const { ctx, registrations } = recordedContext()
     apply(ctx)
@@ -179,7 +207,7 @@ describe('client apply registration', () => {
     expect(names).not.toContain('conversation.composer')
     expect(names).toContain('conversation.chat.node')
     expect(names).toContain('conversation.composer.dock')
-    expect(registrations.filter(entry => entry.name === 'conversation.composer.dock')).toHaveLength(1)
+    expect(registrations.filter(entry => entry.name === 'conversation.composer.dock')).toHaveLength(2)
   })
 })
 

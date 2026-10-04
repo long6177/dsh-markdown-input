@@ -36,6 +36,8 @@ import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
 import { installSkillSource } from './skill-face.ts'
 import { installFileReferenceSource } from './file-reference-face.ts'
 import { TakeoverCard } from './composer-card.tsx'
+import { ContextMeterOccupant } from './ContextMeterOccupant.tsx'
+import { CONTEXT_NS, resetContextLocale, setContextLocale } from './context-meter-face.ts'
 import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
@@ -151,6 +153,18 @@ export function apply(ctx: ClientContext): void {
     setModelLocale(ctx.locale.bind(MODEL_NS))
     return disposeModels
   }, 'markdown-input: model dictionaries')
+  // The context meter (issue #43) reads the HOST `conversation` namespace's
+  // own dictionary — its `context.*` copy and the shared `number.*` compact
+  // templates — so nothing is registered here, only bound: a read of a
+  // namespace ui-conversation owns and ships, never a claim on it. `bind`
+  // reads the active locale at call time, so a locale switch repaints the
+  // meter in the host's own words (model-face's idiom, minus the
+  // registration); the teardown only drops the seat, since `bind` holds no
+  // subscription of its own.
+  ctx.effect(() => {
+    setContextLocale(ctx.locale.bind(CONTEXT_NS))
+    return resetContextLocale
+  }, 'markdown-input: context meter copy')
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
   // (degrade.ts), which latches the takeover off for the page life and
@@ -214,4 +228,18 @@ export function apply(ctx: ClientContext): void {
     id: 'markdown-input-fallback',
     locale: NS,
   }, FallbackNotice))
+  // The context meter (issue #43), the second occupant of the same ambient
+  // slot and the one whose presence is NATIVE position: the host InputBar's
+  // own root `.dock` renders the slot contents first and its ContextMeter
+  // after them, so this entry carries `order: 1` to keep that row position
+  // against every other occupant while the dock's centered justification
+  // keeps a lone meter exactly where the native one sits. No locale namespace
+  // is declared: the copy is the host `conversation` namespace's, bound in
+  // apply (the occupant reads it per render), so the framework seat would
+  // only duplicate what the component already resolves.
+  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
+    name: 'conversation.composer.dock',
+    id: 'markdown-input-context-meter',
+    order: 1,
+  }, ContextMeterOccupant))
 }
