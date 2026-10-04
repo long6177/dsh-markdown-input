@@ -33,7 +33,12 @@ export function setContextLocale(t: TranslateNS<typeof CONTEXT_NS>): void {
 /**
  * The meter's translate seat, or undefined before apply binds it — the face
  * component renders nothing then (a host composition that never bound the
- * namespace has no copy to show, and the plugin ships no fallback copy).
+ * namespace has no copy to show, and the plugin ships no fallback copy). The
+ * card-top workspace row (#42) reads the SAME seat for its chip and
+ * placeholder words: they are this namespace's own keys
+ * (`hero.chooseWorkspace`, `placeholder.workspace`, plus the shared
+ * `workspace.defaultName` the namespace-bound lookup consults after its own
+ * miss), so one read-only binding serves both surfaces.
  */
 export function contextLocale(): ContextTranslate | undefined {
   return localeT

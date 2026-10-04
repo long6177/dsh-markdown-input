@@ -138,6 +138,15 @@ const zh = {
   'todo.status.completed': '已完成',
   'todo.status.inProgress': '进行中',
   'todo.status.pending': '待处理',
+  // Agent-preset seat (issue #42, ADR-0006 option B). The host's
+  // `settings.agentPreset` dictionary belongs to the ui-agent-preset plugin,
+  // which is NOT in this build's dependency tree, so its keys are not ours to
+  // bind — the seat ships its own three strings instead of guessing host copy
+  // (the one user-visible cost is that a shipped preset publishes no `name`,
+  // so the roster's own id is what the chip and the rows show).
+  'agentPreset.hint': '选择新任务使用的 Agent 预设',
+  'agentPreset.noDescription': '暂无描述。',
+  'agentPreset.switchRefused': '无法切换 Agent 预设：{reason}',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -252,6 +261,9 @@ const en: Record<ComposerKey, string> = {
   'todo.status.completed': 'Completed',
   'todo.status.inProgress': 'In progress',
   'todo.status.pending': 'Pending',
+  'agentPreset.hint': 'Choose the agent preset for your new task',
+  'agentPreset.noDescription': 'No description.',
+  'agentPreset.switchRefused': 'Could not switch the agent preset: {reason}',
 }
 
 export { zh, en }

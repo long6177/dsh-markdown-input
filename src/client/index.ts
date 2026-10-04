@@ -43,6 +43,8 @@ import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
 import { en as modelEn, zh as modelZh, type ModelKey } from './ModelSelectFace.locales.ts'
 import { MarkdownUserMessage } from './UserMessage.tsx'
+import { installWorkspaceVerbSource } from './workspace-verb.ts'
+import { installAgentPresetsSource } from './agent-preset-face.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -143,6 +145,18 @@ export function apply(ctx: ClientContext): void {
   // with the forwarded activation edges; without it the strip keeps
   // rendering and its buttons shed alone.
   installGoalSource(ctx)
+  // The card-top workspace row's pick verb (issue #42, ADR-0006 option B)
+  // reads the host `uiWorkspace` service the same lazy way: the New Session
+  // flow (reuse-or-create the blank Session in the picked Workspace, then
+  // switch) is what the native hero's `selectWorkspace` wraps. Without the
+  // service the row hides whole — a pick target with no verb is a dead
+  // control, and the card must behave exactly as it does today.
+  installWorkspaceVerbSource(ctx)
+  // The agent-preset seat beside it (issue #42) reads the host
+  // `remote.agentPresets` namespace — the preset registry's roster read and
+  // its composition switch — the same lazy way; without the registry the seat
+  // hides whole while the workspace row (and the text face) stay.
+  installAgentPresetsSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // The vendored picker's copy is the verbatim ui-model-selection dictionary
   // under the plugin's own namespace; the bound translate rides
@@ -156,15 +170,17 @@ export function apply(ctx: ClientContext): void {
   // The context meter (issue #43) reads the HOST `conversation` namespace's
   // own dictionary — its `context.*` copy and the shared `number.*` compact
   // templates — so nothing is registered here, only bound: a read of a
-  // namespace ui-conversation owns and ships, never a claim on it. `bind`
-  // reads the active locale at call time, so a locale switch repaints the
-  // meter in the host's own words (model-face's idiom, minus the
-  // registration); the teardown only drops the seat, since `bind` holds no
-  // subscription of its own.
+  // namespace ui-conversation owns and ships, never a claim on it. The card-top
+  // workspace row (issue #42) reads the SAME seat for its chip and placeholder
+  // words (`hero.chooseWorkspace`, `placeholder.workspace`, and the shared
+  // `workspace.defaultName`), so one binding serves both surfaces. `bind` reads
+  // the active locale at call time, so a locale switch repaints both in the
+  // host's own words (model-face's idiom, minus the registration); the teardown
+  // only drops the seat, since `bind` holds no subscription of its own.
   ctx.effect(() => {
     setContextLocale(ctx.locale.bind(CONTEXT_NS))
     return resetContextLocale
-  }, 'markdown-input: context meter copy')
+  }, 'markdown-input: context meter and workspace row copy')
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
   // (degrade.ts), which latches the takeover off for the page life and

@@ -44,12 +44,15 @@ import {
 import type {
   ComposerAttachment, DraftAttachmentId,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { PropsLocale, PropsRuntime, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
+import { AgentPresetFace, agentPresetFaceDefinition } from './AgentPresetFace.tsx'
+import { agentPresetsRemoteFace } from './agent-preset-face.ts'
 import { CommandMenuFace } from './CommandMenuFace.tsx'
 import { commandFaceDefinition } from './command-face.ts'
 import { CompletionFace, completionFaceDefinition } from './CompletionFace.tsx'
 import type { CompletionGuard } from './completion-core.ts'
+import { contextLocale } from './context-meter-face.ts'
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
@@ -73,6 +76,12 @@ import { queueMutableOf, queueViewRows } from './queue-core.ts'
 import { skillFace } from './skill-face.ts'
 import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
 import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
+import {
+  workspaceLabelState, workspaceMenuItems, workspaceRowSupported, workspaceTriggerPosture,
+  type WorkspaceRowSnapshot,
+} from './workspace-row-core.ts'
+import { workspaceVerbFace } from './workspace-verb.ts'
+import { WorkspaceRowFace } from './WorkspaceRowFace.tsx'
 
 /** Selector marker this entry returns to win the composer chain election. */
 export interface MarkdownTakeover {
@@ -87,6 +96,38 @@ export type MarkdownComposerProps =
   PropsRuntime<'conversation.composer'>
   & { matched: MarkdownTakeover }
   & PropsLocale<typeof NS>
+
+/**
+ * The session list read the workspace chip's cwd bridge needs (issue #42,
+ * level 4 of the native label chain). `useSessions` is a GLOBAL standard
+ * seat (ui-session's `provideRoot` contribution,
+ * `ui-session/src/client/index.ts:672-680`), so the renderer materializes it
+ * into every session-scope entry — the same way it materializes
+ * `useWorkspaces` (ui-workspace's contribution). Structural on purpose: the
+ * composer chain props type carries the owner share, and this narrowed shape
+ * pins exactly the two fields the chip reads.
+ */
+interface SessionsStandardSeat {
+  readonly byId: Record<string, { readonly cwd?: string | undefined } | undefined>
+}
+
+/**
+ * The host `conversation` namespace keys the workspace row reads: the chip's
+ * accessible name and placeholder and the picker rows' shared default name.
+ * All three come from a dictionary this plugin does not own
+ * (`ui-conversation/src/client/locales.ts:24,79`; `workspace.defaultName`
+ * lives in the shared `common` vocabulary the namespace-bound translate
+ * consults after its own miss). The row therefore registers NO dictionary and
+ * invents no words: apply binds `conversation` once (the context-meter
+ * binding, reused) and `workspace` beside it for the picker's status line.
+ */
+export type WorkspaceCopyKey =
+  | 'hero.chooseWorkspace'
+  | 'placeholder.workspace'
+  | 'workspace.defaultName'
+
+/** The workspace row's `conversation` translate seat, narrowed to the keys above. */
+type WorkspaceConversationTranslate = Translate<WorkspaceCopyKey>
 
 /** localStorage key the render/source preference persists under. */
 export const MODE_STORAGE_KEY = 'dsh-markdown-input.mode'
@@ -157,7 +198,19 @@ export function shouldFocusEditorFromCard(
  * @param props - chain election marker plus standard session input props and copy.
  * @returns The composer replacement card.
  */
-export function MarkdownComposer({ useInput, inputActions, useProjection, t, sessionId, session }: MarkdownComposerProps) {
+export function MarkdownComposer({
+  useInput, inputActions, useProjection, t, sessionId, session, useWorkspaces, useSessions,
+}: MarkdownComposerProps & {
+  /**
+   * Chain props this entry reads with a widened shape. The owner share is
+   * typed as `ComposerChainProps`, so the global standard seats the renderer
+   * merges in (`useWorkspaces` from ui-workspace, `useSessions` from
+   * ui-session) are declared here structurally and default to undefined on a
+   * composition that never contributed them — the row then hides whole.
+   */
+  readonly useWorkspaces?: ((selector: (state: WorkspaceRowSnapshot) => unknown) => unknown) | undefined
+  readonly useSessions?: ((selector: (state: SessionsStandardSeat) => unknown) => unknown) | undefined
+}) {
   // Editor face (ADR-0005 hardening #2): the text face probes its own host
   // dependencies — the input hook and the two machine verbs it mirrors and
   // submits through — before anything else runs. The gate sits before the
@@ -488,6 +541,81 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     editorHandle?.setClaimGhost(hint === null ? null : { token: claim.token, hint })
   }, [input.claim, input.phase, hasGoal, editorHandle])
 
+  // ------------------------------------------------------------------
+  // Workspace row + trigger posture (issue #42, ADR-0006 option B)
+  // ------------------------------------------------------------------
+  // A new conversation is a BLANK session, and the chain's `overlay: true`
+  // election hides the whole fallback bar the native `heroWorkspaceRow` lives
+  // in — so the card rebuilds that row's two seats. The row is blank-session
+  // only, exactly like the native hero, and every piece of its data is read
+  // through the same standard seats the native row reads:
+  const workspaces = (typeof useWorkspaces === 'function'
+    ? useWorkspaces((state) => state)
+    : undefined) as WorkspaceRowSnapshot | undefined
+  const sessionCwd = typeof useSessions === 'function'
+    ? useSessions((state) => sessionId === undefined ? undefined : state.byId[sessionId]?.cwd)
+    : undefined
+  const workspaceVerb = workspaceVerbFace()
+  // The row owns the trigger posture, so its capability verdict is also the
+  // card's: without the list hook, the copy, or the reuse-or-create verb there
+  // is no pick surface to trigger and the card must stay exactly as it is
+  // today (an ordinary editable composer).
+  const workspaceCopy = contextLocale() as WorkspaceConversationTranslate | undefined
+  const blank = session?.blank === true
+  const rowSupported = workspaceRowSupported({
+    sessionId,
+    blank,
+    hookPresent: workspaces !== undefined,
+    verbPresent: workspaceVerb !== undefined,
+  }) && workspaceCopy !== undefined
+  const workspaceItems = workspaces?.items ?? []
+  const sessionWorkspace = workspaceItems.find(item => sessionId !== undefined && item.sessionIds.includes(sessionId))
+  // The pending pick (the native `pendingWorkspaceId`): the label reads back
+  // the just-clicked Workspace's title instead of flashing the old/absent one
+  // while the host connects. Cleared by the effect below on two triggers — the
+  // session landed in it, or a ready list no longer carries it (deleted).
+  const [pendingWorkspaceId, setPendingWorkspaceId] = useState<string | undefined>(undefined)
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const pendingWorkspace = pendingWorkspaceId === undefined
+    ? undefined
+    : workspaceItems.find(item => item.workspaceId === pendingWorkspaceId)
+  useEffect(() => {
+    if (pendingWorkspaceId === undefined) return
+    if (sessionWorkspace?.workspaceId === pendingWorkspaceId
+      || (workspaces?.phase === 'ready' && pendingWorkspace === undefined)) {
+      setPendingWorkspaceId(undefined)
+    }
+  }, [pendingWorkspaceId, sessionWorkspace?.workspaceId, workspaces?.phase, pendingWorkspace])
+  const rowLabel = rowSupported
+    ? workspaceLabelState({
+      sessionId,
+      sessionWorkspace,
+      pendingWorkspace,
+      cwd: sessionCwd,
+      phase: workspaces?.phase ?? 'pending',
+      localizedDefaultTitle: workspaceCopy?.('workspace.defaultName') ?? '',
+    })
+    : undefined
+  // The native `inert` formula (`ConversationContent.tsx:141`): a blank session
+  // whose chip resolved no title turns the whole card into the picker.
+  const triggerPosture = rowSupported && workspaceTriggerPosture({ blank, label: rowLabel })
+  const openPicker = useCallback(() => { setPickerOpen(true) }, [])
+  const closePicker = useCallback(() => { setPickerOpen(false) }, [])
+  // Native pick semantics: the card's blank session IS the session being moved,
+  // so the reuse-or-create flow is the whole verb — no draft transfer (that is
+  // `selectWorkspace`'s job for a non-blank session with something to carry).
+  const pickWorkspace = useCallback((workspaceId: string) => {
+    setPickerOpen(false)
+    setPendingWorkspaceId(workspaceId)
+    if (workspaceVerb === undefined) return
+    try {
+      workspaceVerb.startSession(workspaceId)
+    } catch (error: unknown) {
+      setPendingWorkspaceId(undefined)
+      showBanner(error instanceof Error ? error.message : String(error))
+    }
+  }, [workspaceVerb, showBanner])
+
   // Tool-row collapse measurement (the model pill's truncation ladder, host
   // parity): flips `data-model-compact` when the expanded controls cannot
   // share the line, which switches the pill to pure icon. The row exists on
@@ -499,10 +627,13 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   }, [])
 
   // Aligned with the built-in bar: busy phases read-only the surface so the
-  // draft stays visible but cannot change under the in-flight submit.
+  // draft stays visible but cannot change under the in-flight submit. The
+  // workspace trigger posture (#42) joins it — the native `cardWorkspaceTrigger`
+  // card is not an input until a workspace resolves, and the placeholder below
+  // says what the click does instead.
   useEffect(() => {
-    editorRef.current?.setEditable(!machineBusy)
-  }, [machineBusy])
+    editorRef.current?.setEditable(!machineBusy && !triggerPosture)
+  }, [machineBusy, triggerPosture])
 
   // Mode and placeholder live in compartments, so a switch keeps undo
   // history and scroll; the choice persists across page loads.
@@ -529,11 +660,16 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   const canSteerQueue = sessionId !== undefined && !machineBusy && draftEmpty
     && (session?.running ?? false) && session?.subagent == null && !menuOpen
     && input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued')
-  const placeholderText = canSteerQueue
-    ? t('composer.placeholder.steerQueue')
-    : planActive
-      ? t('composer.placeholder.plan')
-      : placeholderOf(t, mode)
+  // The native placeholder ladder's FIRST arm (#42): while the card is the
+  // workspace picker, `placeholder.workspace` outranks every steering/plan/
+  // render arm — the surface is not an editor then, it is the pick target.
+  const placeholderText = triggerPosture
+    ? workspaceCopy?.('placeholder.workspace') ?? placeholderOf(t, mode)
+    : canSteerQueue
+      ? t('composer.placeholder.steerQueue')
+      : planActive
+        ? t('composer.placeholder.plan')
+        : placeholderOf(t, mode)
   useEffect(() => {
     editorRef.current?.setMode(mode, placeholderText)
   }, [mode, placeholderText])
@@ -616,8 +752,15 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
    * the handle's public surface — never CodeMirror internals. No
    * `preventDefault`: native text selection inside the editor (and the drag
    * gestures that start on the card) must survive untouched.
+   *
+   * In the workspace trigger posture (#42) a card mousedown must NOT pull
+   * focus back into a surface that is not an editor: the native
+   * `cardWorkspaceTrigger` card is one pick target, and its click opens the
+   * picker. This is the explicit guard the ticket asked for against breaking
+   * the #41 hit area on the way in.
    */
   function onCardMouseDown(event: MouseEvent<HTMLDivElement>): void {
+    if (triggerPosture) return
     if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
     editorRef.current?.focus()
   }
@@ -669,12 +812,29 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   }
 
   const otherMode: EditMode = mode === 'render' ? 'source' : 'render'
+  // The agent-preset seat's own copy (the plugin's `markdown-input` namespace):
+  // the host UI package's dictionary is not ours to bind, so no host key is
+  // guessed here — the seat ships its own words.
+  const agentPresetCopy = {
+    seatHint: t('agentPreset.hint'),
+    noDescription: t('agentPreset.noDescription'),
+    switchRefused: t('agentPreset.switchRefused'),
+  }
+  const agentPresetsRemote = agentPresetsRemoteFace()
 
   return (
     // `data-composer-card` is the host card contract (the shared Toast
     // anchor and popup-dismissal marker); `data-markdown-composer` is ours.
+    // The trigger posture (#42) mirrors the native `cardWorkspaceTrigger`
+    // contract: `data-workspace-trigger` for styling/tests, a card-level click
+    // that opens the pick menu, and a pointerdown stop so the Menu's
+    // outside-close listener cannot race the click's reopen (the native bar's
+    // own trick — close-then-open flickers the chip's open echo).
     <div className={css.card} data-markdown-composer data-composer-card ref={cardRef}
-      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onMouseDown={onCardMouseDown}>
+      {...triggerPosture ? { 'data-workspace-trigger': '' } : {}}
+      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onMouseDown={onCardMouseDown}
+      onClick={triggerPosture ? openPicker : undefined}
+      onPointerDown={triggerPosture ? (event) => { event.stopPropagation() } : undefined}>
       {banner !== null && (
         <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
           <IconWarningOutlineMedium size={14} />
@@ -689,6 +849,38 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
         <div className={css.notice} role="status" data-markdown-notice>
           {notice.text}
         </div>
+      )}
+      {/* Workspace row (issue #42, ADR-0006 option B): the native
+          `heroWorkspaceRow` — blank-session only, and the card's very first
+          seat when it exists (the native order puts the row above the dock).
+          The row's two halves are independent faces: the chip+menu (and the
+          trigger posture it owns) hides whole when the list hook, the copy, or
+          the reuse-or-create verb is missing, the preset seat when the roster
+          or the projection is — either can shed without the other. */}
+      {rowSupported && workspaceCopy !== undefined && (
+        <WorkspaceRowFace
+          label={rowLabel}
+          selectedWorkspaceId={pendingWorkspaceId ?? sessionWorkspace?.workspaceId}
+          menuItems={workspaceMenuItems(workspaceItems, workspaceCopy('workspace.defaultName'))}
+          open={pickerOpen}
+          onToggleMenu={() => { setPickerOpen(value => !value) }}
+          onCloseMenu={closePicker}
+          onPick={pickWorkspace}
+          triggerPosture={triggerPosture}
+          copy={{ choose: workspaceCopy('hero.chooseWorkspace') }}
+          testId="hero-workspace"
+        />
+      )}
+      {rowSupported && (
+        <FaceGate definition={agentPresetFaceDefinition(useProjection, agentPresetsRemote !== undefined)}>
+          <AgentPresetFace
+            useProjection={useProjection as unknown as (key: 'agentPreset') => unknown}
+            sessionId={sessionId}
+            remote={agentPresetsRemote}
+            copy={agentPresetCopy}
+            onError={showBanner}
+          />
+        </FaceGate>
       )}
       {/* Todo panel (issue #38): the native TodoDock, the FIRST dock seat
           (order 0) the takeover hides with the whole fallback bar, rebuilt

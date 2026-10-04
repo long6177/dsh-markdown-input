@@ -834,3 +834,152 @@
   width: 16px;
   height: 16px;
 }
+
+/* Workspace row + Agent-preset seat (issue #42, ADR-0006 option B): the two
+   native hero seats the takeover's overlay election hides with the whole
+   fallback bar, rebuilt on the card's TOP line (native order: the workspace
+   chip leads, the preset seat follows). Geometry mirrors the native
+   `heroWorkspaceRow` — a quiet, compact, left-aligned row. */
+.workspaceRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+}
+
+/* Native chip (`EmptyHero.module.css` `.workspace`): no chrome at rest, a
+   hover wash, 16px folder glyph + label + 12px chevron. Both seats of the row
+   share the geometry; the property blocks are repeated rather than
+   `composes:`d so the rule text is what every consumer reads (and the CSS
+   module transform stays a pure rename). */
+.workspaceChip,
+.agentPresetChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+  background: transparent;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+}
+
+.workspaceChip:hover:not(:disabled),
+.agentPresetChip:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  color: inherit;
+}
+
+.workspaceChip:focus-visible,
+.agentPresetChip:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary,
+    color-mix(in srgb, currentColor 80%, #2470ff));
+  outline-offset: 1px;
+}
+
+.workspaceChip:disabled,
+.agentPresetChip:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.workspaceFolder,
+.workspaceChevron {
+  display: inline-flex;
+  flex: none;
+}
+
+.workspaceChevron {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.workspaceChipLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agentPreset {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.agentPresetGlyph {
+  display: inline-flex;
+  flex: none;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+}
+
+.agentPresetChevron {
+  display: inline-flex;
+  flex: none;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.agentPresetLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Native chip rows (`AgentPresetSeat.module.css` `.item`): name over one
+   muted description line, the whole pair inside the menu row. */
+.agentPresetItem {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  text-align: left;
+}
+
+.agentPresetItemName {
+  font-weight: 500;
+}
+
+.agentPresetItemDesc {
+  font-size: 0.85em;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+/* Workspace trigger posture (issue #42): the native `cardWorkspaceTrigger`
+   rebuilt (host `InputBar.module.css:82-108`). The whole card is the pick
+   target, so the dashed outline marks the surface and the disabled controls
+   stop swallowing the click. `.card` is already `position: relative` (#41),
+   which is what lets `inset: 0` describe the card. */
+.card[data-workspace-trigger] {
+  cursor: pointer;
+}
+
+.card[data-workspace-trigger]::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  border: 1px dashed currentColor;
+  border-radius: var(--dsw-radius-panel, 28px);
+  color: var(--dsw-alias-border-l4, color-mix(in srgb, currentColor 35%, transparent));
+  transition: color 100ms ease;
+  pointer-events: none;
+}
+
+.card[data-workspace-trigger]:hover::after {
+  color: var(--dsw-alias-state-business-primary, color-mix(in srgb, currentColor 80%, #2470ff));
+}
+
+/* Disabled toolbar controls neither receive nor swallow clicks in the
+   trigger state: pointer events fall through to the card's own click
+   handler, making the whole card one pick target (native parity). */
+.card[data-workspace-trigger] :disabled {
+  pointer-events: none;
+}

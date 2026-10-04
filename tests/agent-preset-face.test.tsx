@@ -1,0 +1,245 @@
+/**
+ * The Agent-preset seat (issue #42, ADR-0006 option B) at the component seam:
+ * the chip names the current value, the menu switches it, a refused switch
+ * surfaces through the card's banner callback, and the whole face hides when
+ * the roster service or the projection is absent.
+ *
+ * The seat's own words are this plugin's (`markdown-input`); nothing here
+ * asserts host copy, because the host dictionary is not in this build's
+ * dependency graph.
+ */
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import {
+  AgentPresetFace, agentPresetFaceDefinition,
+  type AgentPresetFaceProps,
+} from '../src/client/AgentPresetFace.tsx'
+import {
+  agentPresetsRemoteFace, resetAgentPresetsSource, setAgentPresetsSource,
+  type AgentPresetsRemoteFace,
+} from '../src/client/agent-preset-face.ts'
+import { FaceGate } from '../src/client/FaceGate.tsx'
+import { resetFaces } from '../src/client/face.ts'
+import { en } from '../src/client/locales.ts'
+
+const copy = {
+  seatHint: en['agentPreset.hint'],
+  noDescription: en['agentPreset.noDescription'],
+  switchRefused: en['agentPreset.switchRefused'],
+}
+
+const ROSTER: AgentPresetsRemoteFace = {
+  list: () => Promise.resolve({
+    ok: true,
+    value: {
+      presets: [
+        { id: 'standard', isDefault: true },
+        { id: 'cordis', name: 'Creator mode', description: 'Build plugins by talking.' },
+        { id: 'broken', broken: 'cannot mount', isDefault: false },
+      ],
+    },
+  }),
+  select: () => Promise.resolve({ ok: true, value: undefined }),
+}
+
+/** Read one projection key off a table, undefined for any absent key. */
+function projection(table: Record<string, unknown>): AgentPresetFaceProps['useProjection'] {
+  return ((key: string) => key in table ? table[key] : undefined) as AgentPresetFaceProps['useProjection']
+}
+
+function chip(): HTMLButtonElement | null {
+  return document.querySelector<HTMLButtonElement>('[data-markdown-agent-preset] button')
+}
+
+function menuRows(): HTMLElement[] {
+  return [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+}
+
+function renderFace(overrides: {
+  projection?: Record<string, unknown>
+  remote?: AgentPresetRemote
+  sessionId?: string | undefined
+  onError?: (message: string) => void
+} = {}) {
+  return render(
+    <AgentPresetFace
+      useProjection={projection(overrides.projection ?? { agentPreset: null })}
+      sessionId={overrides.sessionId === undefined ? 's1' : overrides.sessionId}
+      remote={overrides.remote === undefined ? ROSTER : overrides.remote as AgentPresetsRemoteFace | undefined}
+      copy={copy}
+      onError={overrides.onError ?? (() => {})}
+    />,
+  )
+}
+
+/** A roster stub whose `select` settles with the given result. */
+type AgentPresetRemote = {
+  list: AgentPresetsRemoteFace['list']
+  select: AgentPresetsRemoteFace['select']
+}
+
+afterEach(() => {
+  cleanup()
+  resetFaces()
+  resetAgentPresetsSource()
+})
+
+describe('AgentPresetFace visibility', () => {
+  it('renders nothing when the projection key was never contributed', async () => {
+    const { container } = renderFace({ projection: {} })
+    await waitFor(() => { expect(container).toBeEmptyDOMElement() })
+    expect(chip()).toBeNull()
+  })
+
+  it('renders nothing when the roster offers no healthy preset', async () => {
+    const empty: AgentPresetRemote = {
+      list: () => Promise.resolve({ ok: true, value: { presets: [{ id: 'broken', broken: 'x' }] } }),
+      select: ROSTER.select,
+    }
+    const { container } = renderFace({ remote: empty })
+    await waitFor(() => { expect(container).toBeEmptyDOMElement() })
+    expect(chip()).toBeNull()
+  })
+
+  it('renders nothing when the roster service is absent', () => {
+    const { container } = renderFace({ remote: undefined, projection: { agentPreset: null } })
+    expect(container).toBeEmptyDOMElement()
+    expect(chip()).toBeNull()
+  })
+
+  it('names the deployment default on a live projection with no recorded preset', async () => {
+    renderFace()
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    expect(chip()).toHaveTextContent('standard')
+    expect(chip()).toHaveAttribute('aria-haspopup', 'menu')
+    expect(chip()).toHaveAttribute('aria-expanded', 'false')
+    expect(chip()).toHaveAttribute('title', copy.seatHint)
+  })
+
+  it('names the recorded preset when the session projection carries one', async () => {
+    renderFace({ projection: { agentPreset: 'cordis' } })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    expect(chip()).toHaveTextContent('Creator mode')
+  })
+
+  it('reports a failed roster read through the card banner and stays hidden', async () => {
+    const onError = vi.fn()
+    const failing: AgentPresetRemote = {
+      list: () => Promise.resolve({
+        ok: false,
+        error: { code: 'gateway/error', message: 'roster unavailable' },
+      }),
+      select: ROSTER.select,
+    }
+    const { container } = renderFace({ remote: failing, onError })
+    await waitFor(() => { expect(onError).toHaveBeenCalledWith('roster unavailable') })
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('AgentPresetFace menu', () => {
+  it('lists the healthy roster as name over description, with the current row checked', async () => {
+    renderFace()
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    const rows = menuRows()
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.textContent).toContain('standard')
+    expect(rows[0]?.textContent).toContain(copy.noDescription)
+    expect(rows[1]?.textContent).toContain('Creator mode')
+    expect(rows[1]?.textContent).toContain('Build plugins by talking.')
+    // The current value carries the trailing check.
+    expect(rows[0]?.querySelector('svg')).not.toBeNull()
+    expect(rows[1]?.querySelector('svg')).toBeNull()
+    expect(chip()).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('switches through the remote verb and closes the menu', async () => {
+    const select = vi.fn(() => Promise.resolve({ ok: true as const, value: undefined }))
+    const remote: AgentPresetRemote = { list: ROSTER.list, select }
+    renderFace({ remote })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    fireEvent.click(menuRows()[1] as HTMLElement)
+    expect(select).toHaveBeenCalledWith('s1', 'cordis')
+    expect(menuRows()).toHaveLength(0)
+  })
+
+  it('surfaces a refused switch through the banner callback with the reason detail', async () => {
+    const onError = vi.fn()
+    const refusing: AgentPresetRemote = {
+      list: ROSTER.list,
+      select: () => Promise.resolve({
+        ok: false,
+        error: {
+          code: 'agent-preset/locked',
+          message: 'wrapped',
+          details: { sessionId: 's1', reason: 'the conversation has started' },
+        },
+      }),
+    }
+    renderFace({ remote: refusing, onError })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledWith(
+        copy.switchRefused.replace('{reason}', 'the conversation has started'),
+      )
+    })
+  })
+
+  it('closes the menu on Escape', async () => {
+    renderFace()
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(2)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(menuRows()).toHaveLength(0)
+    expect(chip()).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+describe('AgentPresetFace gate', () => {
+  it('renders no seat at all when the remote namespace is missing', () => {
+    const { container } = render(
+      <FaceGate definition={agentPresetFaceDefinition(projection({ agentPreset: null }), false)}>
+        <AgentPresetFace
+          useProjection={projection({ agentPreset: null })}
+          sessionId="s1"
+          remote={undefined}
+          copy={copy}
+          onError={() => {}}
+        />
+      </FaceGate>,
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it('renders no seat when the projection seat is absent', () => {
+    const { container } = render(
+      <FaceGate definition={agentPresetFaceDefinition(undefined, true)}>
+        <AgentPresetFace
+          useProjection={projection({})}
+          sessionId="s1"
+          remote={undefined}
+          copy={copy}
+          onError={() => {}}
+        />
+      </FaceGate>,
+    )
+    expect(container).toBeEmptyDOMElement()
+  })
+})
+
+describe('resolveAgentPresetsRemote', () => {
+  it('resolves the namespace lazily and refuses an incomplete surface', () => {
+    setAgentPresetsSource(() => ROSTER)
+    expect(agentPresetsRemoteFace()).toBe(ROSTER)
+    setAgentPresetsSource(() => undefined)
+    expect(agentPresetsRemoteFace()).toBeUndefined()
+    // A throwing resolver (sealed globals, exotic host builds) reads as absent.
+    setAgentPresetsSource(() => { throw new Error('sealed') })
+    expect(agentPresetsRemoteFace()).toBeUndefined()
+  })
+})

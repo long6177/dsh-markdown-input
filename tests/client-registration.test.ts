@@ -19,6 +19,8 @@ import { MODEL_NS } from '../src/client/model-face.ts'
 import { FallbackNotice } from '../src/client/FallbackNotice.tsx'
 import { ContextMeterOccupant } from '../src/client/ContextMeterOccupant.tsx'
 import { CONTEXT_NS } from '../src/client/context-meter-face.ts'
+import { agentPresetsRemoteFace, resetAgentPresetsSource } from '../src/client/agent-preset-face.ts'
+import { resetWorkspaceVerbSource, workspaceVerbFace } from '../src/client/workspace-verb.ts'
 
 interface RecordedRegistration {
   name: string
@@ -31,7 +33,12 @@ interface RecordedRegistration {
 }
 
 /** A context that runs `inject` thunks eagerly and records registrations. */
-function recordedContext(options: { remote?: unknown; remoteCommands?: unknown } = {}): {
+function recordedContext(options: {
+  remote?: unknown
+  remoteCommands?: unknown
+  remoteAgentPresets?: unknown
+  uiWorkspace?: unknown
+} = {}): {
   ctx: ClientContext
   injected: readonly string[]
   registrations: readonly RecordedRegistration[]
@@ -45,6 +52,8 @@ function recordedContext(options: { remote?: unknown; remoteCommands?: unknown }
       // The host gateway installs namespaces as `remote.<ns>` services; the
       // bare `remote` service carries only `$on`/`$mount`.
       if (key === 'remote.commands') return options.remoteCommands
+      if (key === 'remote.agentPresets') return options.remoteAgentPresets
+      if (key === 'uiWorkspace') return options.uiWorkspace
       return key === 'remote' ? options.remote : undefined
     },
     effect(fn: () => unknown): unknown {
@@ -84,6 +93,8 @@ function recordedContext(options: { remote?: unknown; remoteCommands?: unknown }
 afterEach(() => {
   resetTakeoverDegradation()
   resetCommandFace()
+  resetWorkspaceVerbSource()
+  resetAgentPresetsSource()
 })
 
 describe('client apply registration', () => {
@@ -177,9 +188,29 @@ describe('client apply registration', () => {
     // The meter's words are the host `conversation` namespace's own keys
     // (`context.*`, `number.*`); the plugin registers NO dictionary under it —
     // a duplicate registration would shadow the host's copy in the locale
-    // plugin's merge chain.
+    // plugin's merge chain. The card-top workspace row (#42) reads the same
+    // seat for its own keys, so it registers nothing either.
     expect(dictionaries.map(entry => entry[0])).not.toContain(CONTEXT_NS)
     expect(CONTEXT_NS).toBe('conversation')
+  })
+
+  it('wires the workspace-row verb and the agent-preset roster sources (issue #42)', () => {
+    // The hero seats' installers bind lazy resolvers; apply() must wire both —
+    // a missed installer latches the row off for the page life, which is
+    // indistinguishable from a correct row that found no workspace.
+    const uiWorkspace = { startSession: () => {} }
+    const agentPresets = { list: () => {}, select: () => {} }
+    const { ctx } = recordedContext({ remoteAgentPresets: agentPresets, uiWorkspace })
+    apply(ctx)
+    expect(typeof workspaceVerbFace()?.startSession).toBe('function')
+    expect(agentPresetsRemoteFace()).toBe(agentPresets)
+  })
+
+  it('leaves the hero seats hidden when the host lacks ui-workspace or the preset registry', () => {
+    const { ctx } = recordedContext()
+    apply(ctx)
+    expect(workspaceVerbFace()).toBeUndefined()
+    expect(agentPresetsRemoteFace()).toBeUndefined()
   })
 
   it('ships the markdown-input dictionaries (zh/en) for the card copy', () => {
