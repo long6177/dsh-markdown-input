@@ -60,8 +60,10 @@ export function setFileReferenceSource(resolve: FileReferenceSource): void {
 export function installFileReferenceSource(ctx: ClientContext): void {
   setFileReferenceSource(() => {
     try {
-      const remote = ctx.get('remote') as { readonly fileReferences?: Partial<FileReferencesRemoteFace> } | undefined
-      const fileReferences = remote?.fileReferences
+      // The host gateway installs every Remote namespace as its own traced
+      // service (`remote.<namespace>`); the bare `remote` service carries
+      // only `$on`/`$mount` and never namespace properties (the #29 lesson).
+      const fileReferences = ctx.get('remote.fileReferences') as Partial<FileReferencesRemoteFace> | undefined
       if (typeof fileReferences?.list !== 'function') return undefined
       return { fileReferences: fileReferences as FileReferencesRemoteFace }
     } catch {

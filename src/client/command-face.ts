@@ -101,7 +101,7 @@ interface CommandsRemoteFace {
   execute(
     sessionId: SessionId,
     line: string,
-    attachments?: readonly unknown[],
+    submittedAttachments: readonly unknown[],
     signal?: AbortSignal,
   ): Promise<RemoteResult<{ readonly result: CommandOutcome } | undefined>>
 }
@@ -137,13 +137,17 @@ export function setCommandSource(resolve: CommandSource): void {
 export function installCommandSource(ctx: ClientContext): void {
   setCommandSource(() => {
     try {
-      const remote = ctx.get('remote') as
-        | (Partial<RemoteEventFace> & { readonly commands?: Partial<CommandsRemoteFace> })
-        | undefined
-      const commands = remote?.commands
+      // The host gateway installs every Remote namespace as its own traced
+      // service (`remote.<namespace>`); the bare `remote` service carries
+      // only `$on`/`$mount` and never namespace properties. Reading
+      // `ctx.get('remote').commands` resolved to nothing on every real host
+      // and latched this face off for the page life (real-device regression
+      // #29); the permission face reads its namespace by the same dotted key.
+      const commands = ctx.get('remote.commands') as Partial<CommandsRemoteFace> | undefined
       if (typeof commands?.list !== 'function' || typeof commands?.execute !== 'function') {
         return undefined
       }
+      const remote = ctx.get('remote') as Partial<RemoteEventFace> | undefined
       const remoteEvents = typeof remote?.$on === 'function' ? (remote as RemoteEventFace) : undefined
       return { commands: commands as CommandsRemoteFace, remoteEvents }
     } catch {
@@ -252,7 +256,7 @@ function createFace(surfaces: CommandSurfaces): CommandFace {
   }
   async function execute(sessionId: SessionId, line: string): Promise<CommandExecuteResult> {
     try {
-      const result = await surfaces.commands.execute(sessionId, line)
+      const result = await surfaces.commands.execute(sessionId, line, [])
       if (!result.ok) return { kind: 'failed', message: `${result.error.code}: ${result.error.message}` }
       if (result.value === undefined) return { kind: 'unmatched' }
       const outcome = result.value.result

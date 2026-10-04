@@ -307,7 +307,7 @@ describe('CommandMenuFace picks', () => {
     await openMenu()
     const compact = options().find((row) => row.getAttribute('data-command-name') === 'compact')
     fireEvent.mouseDown(compact as HTMLElement)
-    await waitFor(() => expect(surfaces.commands.execute).toHaveBeenCalledWith('s1', '/compact'))
+    await waitFor(() => expect(surfaces.commands.execute).toHaveBeenCalledWith('s1', '/compact', []))
     await waitFor(() => expect(onError).toHaveBeenCalledWith('命令执行失败：session/writer-held: busy'))
   })
 

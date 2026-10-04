@@ -449,7 +449,7 @@ describe('CompletionFace picks', () => {
     await openSlash(emit)
     const compact = options().find((row) => row.getAttribute('data-completion-option') === 'compact')!
     fireEvent.mouseDown(compact)
-    await waitFor(() => expect(commandExecute).toHaveBeenCalledWith('s1', '/compact'))
+    await waitFor(() => expect(commandExecute).toHaveBeenCalledWith('s1', '/compact', []))
     await waitFor(() => expect(onError).toHaveBeenCalledWith('命令执行失败：session/writer-held: busy'))
     expect(listbox()).toBeNull()
   })

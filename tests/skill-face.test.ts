@@ -37,7 +37,11 @@ function bindSurfaces(options: {
       }),
     },
   }
-  installSkillSource({ get: (key: string) => (key === 'remote' ? surfaces.remote : undefined) } as never)
+  installSkillSource({
+    get: (key: string) => (key === 'remote.skills'
+      ? surfaces.remote.skills
+      : key === 'remote' ? { $on: surfaces.remote.$on } : undefined),
+  } as never)
   return { surfaces, listeners }
 }
 
@@ -55,7 +59,7 @@ describe('skillFaceSupported', () => {
   })
 
   it('is undefined when the remote namespace lacks the skills list verb', () => {
-    installSkillSource({ get: () => ({ remote: { skills: {} } }) } as never)
+    installSkillSource({ get: (key: string) => (key === 'remote.skills' ? {} : undefined) } as never)
     expect(skillFace()).toBeUndefined()
   })
 

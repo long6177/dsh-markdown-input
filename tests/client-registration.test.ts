@@ -28,7 +28,7 @@ interface RecordedRegistration {
 }
 
 /** A context that runs `inject` thunks eagerly and records registrations. */
-function recordedContext(options: { remote?: unknown } = {}): {
+function recordedContext(options: { remote?: unknown; remoteCommands?: unknown } = {}): {
   ctx: ClientContext
   injected: readonly string[]
   registrations: readonly RecordedRegistration[]
@@ -39,6 +39,9 @@ function recordedContext(options: { remote?: unknown } = {}): {
   const dictionaries: unknown[][] = []
   const ctx = {
     get(key: string): unknown {
+      // The host gateway installs namespaces as `remote.<ns>` services; the
+      // bare `remote` service carries only `$on`/`$mount`.
+      if (key === 'remote.commands') return options.remoteCommands
       return key === 'remote' ? options.remote : undefined
     },
     effect(fn: () => unknown): unknown {
@@ -97,10 +100,12 @@ describe('client apply registration', () => {
 
   it('wires the command-menu face source so the tool-row ① probe can pass', () => {
     // The face installers bind lazy resolvers; apply() must wire every one —
-    // a missed installer latches its FaceGate verdict off for the page life
-    // and the tool row silently renders the fallback attach button (#29).
-    const remote = { commands: { list: () => {}, execute: () => {} } }
-    const { ctx } = recordedContext({ remote })
+    // a missed installer (or a wrong surface shape) latches its FaceGate
+    // verdict off for the page life and the tool row silently renders the
+    // fallback attach button (#29). The host shape: the namespace is its own
+    // `remote.commands` service, the bare `remote` service only carries `$on`.
+    const remoteCommands = { list: () => {}, execute: () => {} }
+    const { ctx } = recordedContext({ remote: { $on: () => () => {} }, remoteCommands })
     apply(ctx)
     expect(commandFaceSupported()).toBe(true)
   })

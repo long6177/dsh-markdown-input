@@ -22,18 +22,18 @@ describe('fileReferenceFaceSupported', () => {
   })
 
   it('fails when the remote lacks the fileReferences namespace', () => {
-    installFileReferenceSource({ get: () => ({ commands: {} }) } as never)
+    installFileReferenceSource({ get: () => undefined } as never)
     expect(fileReferenceFaceSupported()).toBe(false)
   })
 
   it('fails when list is not a function', () => {
-    installFileReferenceSource({ get: () => ({ fileReferences: {} }) } as never)
+    installFileReferenceSource({ get: (key: string) => (key === 'remote.fileReferences' ? {} : undefined) } as never)
     expect(fileReferenceFaceSupported()).toBe(false)
   })
 
   it('passes when the namespace exposes list', () => {
     installFileReferenceSource({
-      get: () => ({ fileReferences: { list: vi.fn() } }),
+      get: (key: string) => (key === 'remote.fileReferences' ? { list: vi.fn() } : undefined),
     } as never)
     expect(fileReferenceFaceSupported()).toBe(true)
     expect(fileReferenceFace()).not.toBeUndefined()

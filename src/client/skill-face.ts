@@ -86,11 +86,12 @@ export function setSkillSource(resolve: SkillSource): void {
 export function installSkillSource(ctx: ClientContext): void {
   setSkillSource(() => {
     try {
-      const remote = ctx.get('remote') as
-        | (Partial<SkillSurfaces['remoteEvents']> & { readonly skills?: Partial<SkillsRemoteFace> })
-        | undefined
-      const skills = remote?.skills
+      // The host gateway installs every Remote namespace as its own traced
+      // service (`remote.<namespace>`); the bare `remote` service carries
+      // only `$on`/`$mount` and never namespace properties (the #29 lesson).
+      const skills = ctx.get('remote.skills') as Partial<SkillsRemoteFace> | undefined
       if (typeof skills?.list !== 'function') return undefined
+      const remote = ctx.get('remote') as Partial<SkillSurfaces['remoteEvents']> | undefined
       const remoteEvents = typeof remote?.$on === 'function'
         ? remote as SkillSurfaces['remoteEvents']
         : undefined

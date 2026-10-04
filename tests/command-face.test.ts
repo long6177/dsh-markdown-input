@@ -87,14 +87,39 @@ describe('commandFaceSupported', () => {
 })
 
 describe('installCommandSource', () => {
-  it('resolves the remote.commands namespace through the client context', () => {
+  it('resolves the remote.commands namespace service through the client context', () => {
     const { surfaces } = bindSurfaces()
     const ctx = {
-      get: (key: string) => (key === 'remote' ? surfaces.remote : undefined),
+      get: (key: string) => (key === 'remote.commands'
+        ? surfaces.remote.commands
+        : key === 'remote' ? { $on: surfaces.remote.$on } : undefined),
     } as unknown as ClientContext
     setCommandSource(() => undefined)
     installCommandSource(ctx)
     expect(commandFaceSupported()).toBe(true)
+  })
+
+  it('reads the traced dotted service, not a property on the bare remote service (#29 real-host shape)', () => {
+    // The host gateway installs every namespace as its own `remote.<ns>`
+    // service; the bare `remote` service exposes only `$on`/`$mount`. The
+    // property read this installer once made resolved to nothing on every
+    // real host and latched the fallback paperclip for the page life.
+    const commands = { list: vi.fn(), execute: vi.fn() }
+    const realHost = {
+      get: (key: string) => (key === 'remote.commands'
+        ? commands
+        : key === 'remote' ? { $on: vi.fn() } : undefined),
+    } as unknown as ClientContext
+    installCommandSource(realHost)
+    expect(commandFaceSupported()).toBe(true)
+
+    // The inverse: a namespace-shaped property on the bare service alone is
+    // not a surface — only the traced service counts.
+    const propertyOnly = {
+      get: (key: string) => (key === 'remote' ? { commands, $on: vi.fn() } : undefined),
+    } as unknown as ClientContext
+    installCommandSource(propertyOnly)
+    expect(commandFaceSupported()).toBe(false)
   })
 
   it('is unsupported when the commands namespace is missing or incomplete', () => {
@@ -103,7 +128,7 @@ describe('installCommandSource', () => {
     expect(commandFaceSupported()).toBe(false)
 
     const partial = {
-      get: (key: string) => (key === 'remote' ? { commands: { list: vi.fn() } } : undefined),
+      get: (key: string) => (key === 'remote.commands' ? { list: vi.fn() } : undefined),
     } as unknown as ClientContext
     installCommandSource(partial)
     expect(commandFaceSupported()).toBe(false)
@@ -116,8 +141,10 @@ describe('installCommandSource', () => {
   })
 
   it('keeps working without the forwarded-event face (auto-invalidation sheds)', () => {
-    const remote = { commands: { list: vi.fn(), execute: vi.fn() } }
-    const ctx = { get: (key: string) => (key === 'remote' ? remote : undefined) } as unknown as ClientContext
+    const commands = { list: vi.fn(), execute: vi.fn() }
+    const ctx = {
+      get: (key: string) => (key === 'remote.commands' ? commands : undefined),
+    } as unknown as ClientContext
     installCommandSource(ctx)
     expect(commandFaceSupported()).toBe(true)
   })
@@ -225,7 +252,7 @@ describe('commandFace execute', () => {
     })
     const face = commandFace()
     await expect(face?.execute('s1', '/compact')).resolves.toEqual({ kind: 'success' })
-    expect(surfaces.remote.commands.execute).toHaveBeenCalledWith('s1', '/compact')
+    expect(surfaces.remote.commands.execute).toHaveBeenCalledWith('s1', '/compact', [])
   })
 
   it('maps a handler error result to an error carrying its text', async () => {
