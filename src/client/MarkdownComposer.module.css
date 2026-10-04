@@ -41,16 +41,41 @@
   outline: none;
 }
 
-.surface :global(.cm-scroller) {
+/* Hit area (issue #41). The surface autogrows (`height: auto` on
+   `.cm-editor`), so the scroller has no definite height; the base theme's
+   `.cm-content { min-height: 100% }` then resolves to nothing and the content
+   DOM is one line tall. The `min-height: 3lh` band below it is NOT part of
+   contentDOM, and CodeMirror binds its mousedown focus/caret placement on
+   contentDOM only — so that band was a dead click zone. Stretching the
+   content to the band's full height makes a dead-band click a contentDOM
+   click. `cursor: text` reads it as the text face it now is.
+
+   `!important` must beat the base theme's `align-items: flex-start
+   !important` on `.cm-scroller`. Source order alone would favour us in both
+   shipped bundles — tsdown's injector appends this stylesheet to
+   `document.head` at module-eval time, while CodeMirror mounts the base theme
+   later (`StyleModule.mount(this.root, this.styleModules.concat(baseTheme$1)
+   .reverse())`, and style-mod inserts its style tag at `target.firstChild`,
+   ahead of ours) — but the doubled `.surface` class raises this rule's
+   specificity above the base theme's `.ͼ.. .cm-scroller` too, so the win holds
+   regardless of injection order or a dev/HMR remount that repositions
+   either stylesheet. */
+.surface.surface :global(.cm-scroller) {
   overflow-y: auto;
   font: inherit;
   line-height: 1.5;
   min-height: 3lh;
+  align-items: stretch !important;
+  cursor: text;
 }
 
-.surface :global(.cm-content) {
+.surface.surface :global(.cm-content) {
   padding: 2px 0;
   caret-color: currentColor;
+  /* The scroller is a definite-height flex box now (it has `min-height: 3lh`),
+     so the base theme's own `min-height: 100%` resolves against it; restated
+     here so the content band cannot re-open through the cascade. */
+  min-height: 100%;
 }
 
 .surface :global(.cm-line) {

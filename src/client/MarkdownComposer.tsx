@@ -36,7 +36,7 @@
  * render/source copy).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, DragEvent, ReactNode } from 'react'
+import type { ChangeEvent, DragEvent, MouseEvent, ReactNode } from 'react'
 import {
   IconCloseOutlineMedium, IconCodeOutlineRegular, IconPaperclipOutlineMedium,
   IconWarningOutlineMedium, Tooltip,
@@ -114,6 +114,42 @@ function placeholderOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
 /** Mode → copy mapping: the visible label names the CURRENT mode. */
 function labelOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
   return t(mode === 'render' ? 'composer.mode.render' : 'composer.mode.source')
+}
+
+/**
+ * Elements that own the pointer gesture themselves. A mousedown inside one of
+ * them must not be turned into an editor focus — that is the whole point of
+ * the guard: tool-row buttons, the `+` menu's and the completion popups' items
+ * and containers (the popups portal INTO the card root, so their mousedowns
+ * bubble here), attachment chips and the goal/queue editors and their
+ * controls keep their behavior. The container roles matter as much as the
+ * item roles: a mousedown on a popup's own padding must not dismiss it by
+ * pulling focus back to the editor.
+ */
+const INTERACTIVE_SELECTOR = [
+  'button', 'input', 'textarea', 'a', 'select', '[contenteditable]',
+  '[role="button"]', '[role="menuitem"]', '[role="option"]', '[role="combobox"]',
+  '[role="menu"]', '[role="menubar"]', '[role="listbox"]', '[role="dialog"]',
+].join(', ')
+
+/**
+ * Whether a mousedown on the card may focus the editor (issue #41): the card
+ * root now carries the pointer so that a click on its padding or on a strip
+ * gap lands in the text face, the way the native card behaves. Clicks inside
+ * the editor's own contentDOM (or any other editable surface) already place
+ * the caret through CodeMirror/native focus, and clicks on an interactive
+ * element must keep their own behavior, so both are excluded.
+ * @param target - the event target, if it is a node.
+ * @param contentDom - the editor's contentDOM (null before the editor mounts).
+ * @returns Whether the card should focus the editor for this mousedown.
+ */
+export function shouldFocusEditorFromCard(
+  target: EventTarget | null,
+  contentDom: HTMLElement | null,
+): boolean {
+  if (!(target instanceof Element)) return false
+  if (contentDom !== null && contentDom.contains(target)) return false
+  return target.closest(INTERACTIVE_SELECTOR) === null
 }
 
 /**
@@ -573,6 +609,19 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     intakeFiles([...event.dataTransfer.files])
   }
 
+  /**
+   * Card-level hit area (issue #41): the stretched contentDOM covers the
+   * scroller band now, but the card's own padding and the gaps between the
+   * strips are still outside it. A mousedown there focuses the editor through
+   * the handle's public surface — never CodeMirror internals. No
+   * `preventDefault`: native text selection inside the editor (and the drag
+   * gestures that start on the card) must survive untouched.
+   */
+  function onCardMouseDown(event: MouseEvent<HTMLDivElement>): void {
+    if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
+    editorRef.current?.focus()
+  }
+
   function onRemoveAttachment(id: DraftAttachmentId): void {
     if (attachmentFace === undefined || machineBusy) return
     // The machine admits (not busy) and the release happens in the same tick,
@@ -625,7 +674,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     // `data-composer-card` is the host card contract (the shared Toast
     // anchor and popup-dismissal marker); `data-markdown-composer` is ours.
     <div className={css.card} data-markdown-composer data-composer-card ref={cardRef}
-      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop}>
+      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onMouseDown={onCardMouseDown}>
       {banner !== null && (
         <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
           <IconWarningOutlineMedium size={14} />

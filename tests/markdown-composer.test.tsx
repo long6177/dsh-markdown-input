@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
+import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { installConversationSource, setConversationSource } from '../src/client/conversation-face.ts'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
@@ -1116,5 +1116,126 @@ describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issu
   it('keeps the render-mode copy in the default arm', () => {
     render(<MarkdownComposer {...chainProps()} />)
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.render'])
+  })
+})
+
+describe('MarkdownComposer — hit area (issue #41)', () => {
+  const card = (): HTMLElement => document.querySelector('[data-markdown-composer]') as HTMLElement
+
+  /**
+   * The editor's focus path, spied at its DOM end: `handle.focus()` →
+   * `view.focus()` → `contentDOM.focus()`, so a focus call is the observable
+   * "the card focused the editor" event. jsdom has no layout, so this cannot
+   * observe the CSS stretch itself (the dead-band click) — that stays a
+   * real-device item.
+   */
+  function spyOnFocus(): ReturnType<typeof vi.spyOn> {
+    return vi.spyOn(HTMLElement.prototype, 'focus')
+  }
+
+  afterEach(() => {
+    // The focus spy patches a prototype; put it back so no later test in this
+    // file observes a recording focus method.
+    vi.restoreAllMocks()
+  })
+
+  it('focuses the editor on a mousedown on the card blank area (padding and strip gaps)', () => {
+    render(<MarkdownComposer {...chainProps()} />)
+    const focus = spyOnFocus()
+    // The card root is what the pointer hits on the card's own padding and in
+    // the gaps between the strips — the surface the stretch fix cannot cover.
+    fireEvent.mouseDown(card())
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(focus.mock.instances[0]).toBe(content())
+    expect(document.activeElement).toBe(content())
+  })
+
+  it('does not steal focus from a tool-row button on mousedown', () => {
+    render(<MarkdownComposer {...chainProps()} />)
+    const before = document.activeElement
+    const submit = seatNamed(en['composer.action.submit'])
+    const focus = spyOnFocus()
+    fireEvent.mouseDown(submit)
+    expect(focus).not.toHaveBeenCalled()
+    // jsdom does not focus a button on mousedown; what matters is that the
+    // card did not move focus to the editor behind the button's back.
+    expect(document.activeElement).toBe(before)
+    expect(document.activeElement).not.toBe(content())
+  })
+
+  it('excludes interactive-element targets, and the button click still fires', async () => {
+    // The exclusion walks ancestors: the tool row's mousedowns always land on
+    // an interactive element nested in the card, so no arm of the handler may
+    // claim them. The click that follows is untouched — the guard never
+    // preventDefaults.
+    const inputActions = { submit: vi.fn() }
+    render(<MarkdownComposer {...chainProps({ draft: 'text', inputActions })} />)
+    const submit = seatNamed(en['composer.action.submit'])
+    const focus = spyOnFocus()
+    // A real event object (not the testing-library return value) so
+    // `defaultPrevented` can be read back: the guard must not cancel the
+    // native gesture.
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    submit.dispatchEvent(press)
+    fireEvent.click(submit)
+    expect(focus).not.toHaveBeenCalled()
+    expect(press.defaultPrevented).toBe(false)
+    // Submit rides a 0ms window after setDraft (submit reads the host's
+    // projection), so the click's landing is observed on the timer.
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('excludes the editor and its contentDOM, and buttons, from the card focus arm', () => {
+    // The unit-level proof of the exclusion rules, with the real mounted
+    // editor: a mousedown inside contentDOM belongs to CodeMirror's own
+    // caret/selection handling (the card handler staying out of it is what
+    // keeps text selection uninstrumented), an interactive element belongs to
+    // itself, and only the card's own blank surface gets the focus arm.
+    const { container } = render(<MarkdownComposer {...chainProps()} />)
+    const surface = content()
+    expect(shouldFocusEditorFromCard(surface, surface)).toBe(false)
+    expect(shouldFocusEditorFromCard(container.querySelector('.cm-placeholder'), surface)).toBe(false)
+    expect(shouldFocusEditorFromCard(seatNamed(en['composer.action.submit']), surface)).toBe(false)
+    expect(shouldFocusEditorFromCard(card(), surface)).toBe(true)
+    expect(shouldFocusEditorFromCard(null, surface)).toBe(false)
+  })
+
+  it('leaves the hidden file input to the native picker, not the editor', () => {
+    const conversation = fakeConversation()
+    setConversationSource(() => conversation)
+    render(<MarkdownComposer {...chainProps()} />)
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement
+    const focus = spyOnFocus()
+    fireEvent.mouseDown(fileInput)
+    expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('excludes popup items, popup containers and nested button content', () => {
+    // The `+` menu and the completion popups portal INTO the card root, so
+    // their mousedowns bubble to this handler. Item roles and container roles
+    // both have to stand the card down — a mousedown on a popup's own padding
+    // must not dismiss it by pulling focus back to the editor — and a glyph
+    // inside a button has to walk up to its button.
+    const { container } = render(<MarkdownComposer {...chainProps()} />)
+    const surface = content()
+    const option = document.createElement('div')
+    option.setAttribute('role', 'option')
+    const listbox = document.createElement('div')
+    listbox.setAttribute('role', 'listbox')
+    const glyph = document.createElement('span')
+    const button = document.createElement('button')
+    button.appendChild(glyph)
+    container.appendChild(option)
+    container.appendChild(listbox)
+    container.appendChild(button)
+    try {
+      expect(shouldFocusEditorFromCard(option, surface)).toBe(false)
+      expect(shouldFocusEditorFromCard(listbox, surface)).toBe(false)
+      expect(shouldFocusEditorFromCard(glyph, surface)).toBe(false)
+    } finally {
+      option.remove()
+      listbox.remove()
+      button.remove()
+    }
   })
 })
