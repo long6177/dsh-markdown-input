@@ -6,7 +6,9 @@
  * contributions, availability filters rows, the non-leading position drops
  * claim rows, and the two-section order (添加 file/goal/plan/feedback,
  * 指令 compact/permission/model/export, unlisted rows closing 指令) follows
- * the host SECTION_ROWS table.
+ * the host SECTION_ROWS table. The feedback row's native decoration (#35)
+ * upgrades it to the dialog action while the host `feedbackUi` service is
+ * alive, and stays a claim row without it.
  */
 import { describe, expect, it } from 'vitest'
 import {
@@ -53,8 +55,12 @@ const FULL = {
   canPickFiles: true,
   canChainPermission: true,
   canChainModel: true,
+  canOpenFeedback: false,
   leading: true,
 }
+
+/** The host build whose ui-message-feedback decoration is alive (#35). */
+const FULL_WITH_FEEDBACK = { ...FULL, canOpenFeedback: true }
 
 function zhRows(descriptors: readonly CommandDescriptor[] | null, overrides: Partial<typeof FULL> = {}) {
   return assembleCommandRows({ descriptors, ...FULL, ...overrides, t: tZh })
@@ -172,6 +178,63 @@ describe('assembleCommandRows kinds', () => {
   it('gives an unknown args-taking command a claim row over its registered name', () => {
     const rows = zhRows([{ name: 'custom', description: 'x', input: { hint: '<arg>' } }])
     expect(rows.find((row) => row.name === 'custom')).toMatchObject({ kind: 'claim', token: '/custom ' })
+  })
+})
+
+describe('assembleCommandRows feedback decoration (#35)', () => {
+  it('opens the dialog without claiming while the feedbackUi service is alive', () => {
+    // The native host decoration (ui-message-feedback index.ts:139) outranks
+    // the descriptor's `input`: the row must carry no token and no line.
+    const feedback = zhRows(HOST_BUILTINS, FULL_WITH_FEEDBACK)
+      .find((row) => row.name === 'feedback')
+    expect(feedback).toMatchObject({
+      kind: 'feedback', label: '反馈', description: '发送关于当前会话的反馈',
+      icon: IconPaperPlaneOutlineRegular, section: '添加',
+    })
+    expect(feedback?.token).toBeUndefined()
+    expect(feedback?.line).toBeUndefined()
+  })
+
+  it('keeps the row order and the other kinds untouched by the upgrade', () => {
+    const rows = zhRows(HOST_BUILTINS, FULL_WITH_FEEDBACK)
+    expect(names(rows)).toEqual([
+      'file', 'goal', 'plan', 'feedback',
+      'compact', 'permission', 'model', 'export',
+    ])
+    const byName = new Map(rows.map((row) => [row.name, row]))
+    expect(byName.get('goal')).toMatchObject({ kind: 'claim', token: '/目标 ' })
+    expect(byName.get('permission')).toMatchObject({ kind: 'popup', popup: 'permission' })
+    expect(byName.get('compact')).toMatchObject({ kind: 'execute', line: '/compact' })
+    expect(byName.get('file')?.kind).toBe('action')
+  })
+
+  it('keeps the action visible at an inline caret (the decoration carries no hint)', () => {
+    // The host position filter drops rows with a hint only
+    // (service.ts:247); a decorated row has none and stays visible.
+    const rows = zhRows(HOST_BUILTINS, { ...FULL_WITH_FEEDBACK, leading: false })
+    expect(names(rows)).toEqual(['file', 'feedback', 'compact', 'permission', 'model', 'export'])
+    expect(rows.find((row) => row.name === 'feedback')?.kind).toBe('feedback')
+  })
+
+  it('falls back to today\'s claim row on a host without the service', () => {
+    const feedback = zhRows(HOST_BUILTINS).find((row) => row.name === 'feedback')
+    expect(feedback).toMatchObject({ kind: 'claim', token: '/反馈 ' })
+  })
+
+  it('covers the static fallback catalog too: descriptor-less feedback is detected by definitionId', () => {
+    // The catalog read has not answered: the synthetic catalog still resolves
+    // the built-in by definitionId, so the upgrade needs no catalog.
+    const feedback = zhRows(null, FULL_WITH_FEEDBACK).find((row) => row.name === 'feedback')
+    expect(feedback).toMatchObject({ kind: 'feedback' })
+    expect(feedback?.token).toBeUndefined()
+  })
+
+  it('leaves a non-builtin feedback-shaped row on its own dispatch', () => {
+    // Only the first-party definition id is the decorated host command: a
+    // custom command that happens to be called `feedback` keeps its claim.
+    const foreign: CommandDescriptor = { name: 'feedback', description: 'A custom command', input: { hint: '<text>' } }
+    const row = zhRows([foreign], FULL_WITH_FEEDBACK).find((candidate) => candidate.name === 'feedback')
+    expect(row).toMatchObject({ kind: 'claim', token: '/feedback ' })
   })
 })
 

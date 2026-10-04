@@ -15,9 +15,12 @@
  * token over the document head (Enter submits through the host's trigger
  * adjudication), bare commands run detached through `remote.commands.
  * execute`, the permission/model rows chain into the second-layer popup
- * faces, and the file row rides the hidden file input. The face mounts
- * inside its FaceGate: a probe miss or a mid-life degrade hides it alone
- * (the gate's fallback carries the legacy attach button), never the card.
+ * faces, the file row rides the hidden file input, and the feedback row —
+ * while the host `feedbackUi` service is alive — opens the session feedback
+ * dialog with no insertion, the native decoration's own semantics. The face
+ * mounts inside its FaceGate: a probe miss or a mid-life degrade hides it
+ * alone (the gate's fallback carries the legacy attach button), never the
+ * card.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, RefObject } from 'react'
@@ -29,6 +32,7 @@ import { useObservable } from './conversation-face.ts'
 import { hasChainPopup, openChainPopup } from './chain-open.ts'
 import { commandFace } from './command-face.ts'
 import { assembleCommandRows, reportExecute } from './command-rows.ts'
+import { feedbackUiSupported, openFeedbackSession } from './feedback-face.ts'
 import { NS } from './locales.ts'
 import type { MarkdownEditorHandle, MenuKeyHandler } from './markdown-editor.ts'
 import css from './CommandMenuFace.module.css'
@@ -101,10 +105,12 @@ export function CommandMenuFace({
   const rows = useMemo(
     // hasChainPopup is a live registry read, not reactive state: the `open`
     // dep re-runs the assembly on every open so the chainable rows resolve
-    // fresh.
+    // fresh. feedbackUiSupported is the same kind of read (issue #35): the
+    // feedback row upgrades to the native action the moment the decoration
+    // owner has activated.
     () => assembleCommandRows({
       descriptors, canPickFiles, canChainPermission: hasChainPopup('permission'),
-      canChainModel: hasChainPopup('model'), leading, t,
+      canChainModel: hasChainPopup('model'), canOpenFeedback: feedbackUiSupported(), leading, t,
     }),
     [descriptors, canPickFiles, leading, t, open],
   )
@@ -164,6 +170,13 @@ export function CommandMenuFace({
         return
       case 'popup':
         if (row.popup !== undefined) openChainPopup(row.popup)
+        return
+      case 'feedback':
+        // The host `feedbackUi` decoration's own run verb (ui-message-feedback
+        // index.ts:139): open the session dialog, insert nothing. A typed
+        // `/反馈 …` line never reaches this row — the host keeps the argued
+        // line on the claim pipeline.
+        openFeedbackSession(sessionId)
         return
     }
   }, [face, onError, onPickFiles, sessionId, t, editor])

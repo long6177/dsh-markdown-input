@@ -29,6 +29,7 @@ import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
 import { installCommandSource } from './command-face.ts'
 import { installConversationSource } from './conversation-face.ts'
+import { installFeedbackSource } from './feedback-face.ts'
 import { installGoalSource } from './goal-face.ts'
 import { installPermissionSource } from './permission-face.ts'
 import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
@@ -129,6 +130,12 @@ export function apply(ctx: ClientContext): void {
   // the page life and the tool row silently stays on the paperclip
   // fallback (real-device regression #29).
   installCommandSource(ctx)
+  // The feedback row's native semantics (issue #35) read the host
+  // `feedbackUi` service the same lazy way: while the service is alive the
+  // `+` menu / popup feedback row opens the session dialog instead of
+  // inserting the claim token, mirroring the host's `/feedback` decoration;
+  // a host build without ui-message-feedback keeps today's claim row.
+  installFeedbackSource(ctx)
   // The goal strip (issue #34) reads the host `remote.goals` namespace the
   // same lazy way — the CAS mutation verbs plus the live activation read —
   // with the forwarded activation edges; without it the strip keeps

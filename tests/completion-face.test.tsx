@@ -14,13 +14,18 @@
  * and the model row chains into the real vendored ModelSelect face. The
  * chain settle (#36) is pinned end to end here too: a successful chained
  * pick consumes the typed trigger and refocuses the editor, while failures,
- * dismissals and direct pill picks leave the draft alone.
+ * dismissals and direct pill picks leave the draft alone. The #35 feedback
+ * decoration is pinned here too: while the host `feedbackUi` service is
+ * alive the feedback row opens the session dialog with no insertion (and a
+ * typed `/反馈 ` line still claims through the editor), while a host without
+ * the service keeps the row's claim shape.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { ReactNode, RefObject } from 'react'
 import { CompletionFace, completionFaceDefinition, type CompletionFaceProps } from '../src/client/CompletionFace.tsx'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
+import { resetFeedbackSource, setFeedbackSource } from '../src/client/feedback-face.ts'
 import { resetFileReferenceFace, setFileReferenceSource } from '../src/client/file-reference-face.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 import { createMarkdownEditor, type CompletionProbeListener, type MarkdownEditorHandle, type MenuKeyHandler } from '../src/client/markdown-editor.ts'
@@ -44,6 +49,7 @@ import { zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
 if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
   Element.prototype.scrollIntoView = function scrollIntoView(): void {}
 }
+
 function fakeT(locale: Record<string, string>): CompletionFaceProps['t'] {
   return ((key: string, params?: Record<string, string>) => {
     const template = locale[key] ?? key
@@ -184,6 +190,7 @@ async function openAt(emit: (probe: CompletionProbe | null) => void, query = 'sr
 afterEach(() => {
   cleanup()
   resetCommandFace()
+  resetFeedbackSource()
   resetSkillFace()
   resetFileReferenceFace()
   resetModelFace()
@@ -191,6 +198,18 @@ afterEach(() => {
   resetChainPopups()
   resetFaces()
 })
+
+/** Bind the host `feedbackUi` service a supported host exposes (#35). */
+function withFeedbackUi(): ReturnType<typeof vi.fn> {
+  const openSession = vi.fn()
+  setFeedbackSource(() => ({ openSession }))
+  return openSession
+}
+
+/** The feedback command option while the popup is open. */
+function feedbackOption(): HTMLElement {
+  return options().find((row) => row.getAttribute('data-completion-option') === 'feedback') as HTMLElement
+}
 
 describe('CompletionFace open/close contract', () => {
   it('renders nothing until a probe arrives, then opens on a / probe (interlock fires)', async () => {
@@ -520,6 +539,55 @@ describe('CompletionFace picks', () => {
   })
 })
 
+describe('CompletionFace feedback decoration (#35)', () => {
+  it('opens the session dialog on a mouse pick instead of inserting a token', async () => {
+    // The native decoration (ui-message-feedback index.ts:139): a bare row
+    // pick opens the session feedback dialog and lands NOTHING in the draft.
+    const openSession = withFeedbackUi()
+    const { emit, dispatch } = mountFace()
+    await openSlash(emit)
+    expect(fireEvent.mouseDown(feedbackOption(), { cancelable: true })).toBe(false)
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(listbox()).toBeNull()
+  })
+
+  it('picks the action through the key seam as well', async () => {
+    const openSession = withFeedbackUi()
+    // A landed skill roll keeps the view non-pending: Enter then picks the
+    // highlighted row instead of being consumed by the refinement.
+    const { emit, handler, dispatch } = mountFace({ skills: [] })
+    await openSlash(emit, 'fee')
+    await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+    expect(options().map((row) => row.getAttribute('data-completion-option'))).toEqual(['feedback'])
+    await act(async () => { handler()?.('pick') })
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(listbox()).toBeNull()
+  })
+
+  it('degrades to the claim row on a host without the feedbackUi service', async () => {
+    const { emit, dispatch, editor } = mountFace()
+    await openSlash(emit)
+    fireEvent.mouseDown(feedbackOption())
+    // Today's shape: the pick inserts the localized claim token over the span
+    // (the claim path rides claimSelection, never a direct dispatch).
+    expect(editor.claimSelection).toHaveBeenCalledWith('/反馈 ')
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(listbox()).toBeNull()
+  })
+
+  it('survives a service that vanished between assembly and pick (no crash)', async () => {
+    withFeedbackUi()
+    const { emit, dispatch } = mountFace()
+    await openSlash(emit)
+    setFeedbackSource(() => undefined)
+    expect(() => { fireEvent.mouseDown(feedbackOption()) }).not.toThrow()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(listbox()).toBeNull()
+  })
+})
+
 /** A real CM6 surface: the dispatch tests below ride the actual editor. */
 function mountRealEditor(): MarkdownEditorHandle {
   const host = document.createElement('div')
@@ -694,6 +762,51 @@ describe('CompletionFace real-surface claim dispatch (#28)', () => {
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
       off()
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('never hijacks the settled typed /反馈 line (claim pipeline preserved)', async () => {
+    // Acceptance 3 (#35): the typed remark keeps its own path. The dialog
+    // action is armed by a ROW PICK only — tracking, ranking and the settled
+    // token never call into it. A `/反馈 ` line is already settled (the
+    // trailing space closes the token), so the popup stays shut, the draft is
+    // byte-identical, and Enter reaches the card's submit untouched: the host
+    // then claims it as the typed remark it is (service.ts matchEnter).
+    const openSession = withFeedbackUi()
+    stubSources([])
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
+    try {
+      await act(async () => { handle.setText('/反馈 ') })
+      expect(handle.getText()).toBe('/反馈 ')
+      expect(listbox()).toBeNull()
+      expect(openSession).not.toHaveBeenCalled()
+      // An argued remark stays a plain draft too (no token left to track).
+      await act(async () => { handle.setText('/反馈 这句有点慢') })
+      expect(handle.getText()).toBe('/反馈 这句有点慢')
+      expect(listbox()).toBeNull()
+      expect(openSession).not.toHaveBeenCalled()
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('claims through the editor when the dialog action is absent (today\'s shape)', async () => {
+    // The same row with no feedbackUi service stays on the claim pipeline, so
+    // the two host builds differ in exactly one place (command-rows.ts).
+    stubSources([])
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
+    try {
+      await act(async () => { handle.setText('/fee') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+      const feedback = options().find((row) => row.getAttribute('data-completion-option') === 'feedback')!
+      fireEvent.mouseDown(feedback)
+      expect(handle.getText()).toBe('/反馈 ')
+      expect(listbox()).toBeNull()
     } finally {
       handle.destroy()
     }

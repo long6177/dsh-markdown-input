@@ -13,7 +13,9 @@
  * `remote.fileReferences` searches with stale-while-revalidate), the
  * combobox keyboard through the completion key seam, and the picks:
  * command rows dispatch exactly like the `+` menu's table (claim token /
- * detached execute / chained popup / file intake), a skill inserts its
+ * detached execute / chained popup / file intake), the feedback row — while
+ * the host `feedbackUi` service is alive — opens the session feedback dialog
+ * and inserts nothing (the native decoration, issue #35), a skill inserts its
  * `/name ` token, and a file inserts its `formatFileMention` wire form —
  * `@path` or `@"path with spaces"`, a directory with its trailing slash —
  * with Tab drilling into directories. Every insertion is an ordinary
@@ -40,6 +42,7 @@ import { useObservable, type SessionId } from './conversation-face.ts'
 import { hasChainPopup, openChainPopup, type ChainPopupSettle } from './chain-open.ts'
 import { commandFace, commandFaceSupported } from './command-face.ts'
 import { assembleCommandRows, reportExecute } from './command-rows.ts'
+import { feedbackUiSupported, openFeedbackSession } from './feedback-face.ts'
 import {
   assembleCompletionView, guardAllowsProbe, sameProbeIdentity, skillInsertion,
   type CompletionEntry, type CompletionGuard, type CompletionProbe,
@@ -225,9 +228,12 @@ export function CompletionFace({
         descriptors,
         canPickFiles,
         // Live registry reads, like the `+` menu: the chainable rows resolve
-        // fresh per assembly.
+        // fresh per assembly, and feedbackUiSupported upgrades the feedback
+        // row to the native dialog action whenever the decoration owner is
+        // active (issue #35).
         canChainPermission: hasChainPopup('permission'),
         canChainModel: hasChainPopup('model'),
+        canOpenFeedback: feedbackUiSupported(),
         leading: probe.position === 'leading',
         t,
       }),
@@ -378,6 +384,14 @@ export function CompletionFace({
           }
           return
         }
+        case 'feedback':
+          // The host `feedbackUi` decoration: the pick opens the session
+          // feedback dialog and replaces the token with NOTHING (no
+          // insertion, no dismissed memory — the settled token is simply
+          // gone, so the popup cannot reopen on a memory that has no text to
+          // remember).
+          openFeedbackSession(sessionId)
+          return
       }
       return
     }

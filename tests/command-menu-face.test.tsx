@@ -6,14 +6,17 @@
  * mousedown picks that keep editor focus, aria listbox/option/
  * activedescendant wiring, outside-pointerdown dismissal (card excluded),
  * the static fallback rows when the catalog RPC fails, chain-opens into the
- * permission/model popup faces, and a probe miss hiding the face behind the
- * gate's fallback.
+ * permission/model popup faces, the #35 feedback row opening the session
+ * dialog with no insertion while the host `feedbackUi` service is alive (and
+ * falling back to the claim row without it), and a probe miss hiding the face
+ * behind the gate's fallback.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import type { RefObject } from 'react'
 import { CommandMenuFace, type CommandMenuFaceProps } from '../src/client/CommandMenuFace.tsx'
 import { commandFaceDefinition, resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
+import { resetFeedbackSource, setFeedbackSource } from '../src/client/feedback-face.ts'
 import type { MarkdownEditorHandle, MenuKeyHandler } from '../src/client/markdown-editor.ts'
 import { registerChainPopup, resetChainPopups } from '../src/client/chain-open.ts'
 import { FaceGate } from '../src/client/FaceGate.tsx'
@@ -125,9 +128,21 @@ async function openMenu(): Promise<void> {
 afterEach(() => {
   cleanup()
   resetCommandFace()
+  resetFeedbackSource()
   resetChainPopups()
   resetFaces()
 })
+
+/** Bind the host `feedbackUi` service a supported host exposes (#35). */
+function withFeedbackUi(): ReturnType<typeof vi.fn> {
+  const openSession = vi.fn()
+  setFeedbackSource(() => ({ openSession }))
+  return openSession
+}
+
+function feedbackRow(): HTMLElement {
+  return options().find((row) => row.getAttribute('data-command-name') === 'feedback') as HTMLElement
+}
 
 describe('CommandMenuFace trigger', () => {
   it('renders the + trigger with listbox semantics and closed state', () => {
@@ -349,6 +364,71 @@ describe('CommandMenuFace picks', () => {
     expect(names).not.toContain('model')
     const permission = options().find((row) => row.getAttribute('data-command-name') === 'permission')
     expect(permission).not.toBeNull()
+  })
+})
+
+describe('CommandMenuFace feedback decoration (#35)', () => {
+  it('opens the session dialog on a pick and inserts no claim token', async () => {
+    // The native decoration semantics (ui-message-feedback index.ts:139): a
+    // bare menu invocation opens the dialog, never a draft chip.
+    const openSession = withFeedbackUi()
+    const { editor } = mountFace()
+    await openMenu()
+    const notCancelled = fireEvent.mouseDown(feedbackRow(), { cancelable: true })
+    expect(notCancelled).toBe(false) // the pick keeps the editor focused
+    expect(openSession).toHaveBeenCalledTimes(1)
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(editor.claimSelection).not.toHaveBeenCalled()
+    expect(listbox()).toBeNull()
+  })
+
+  it('picks the action through the keyboard seam exactly like a pointer pick', async () => {
+    const openSession = withFeedbackUi()
+    const { handler, editor } = mountFace()
+    await openMenu()
+    // The feedback row is the fourth option (index 3, behind file/goal/plan).
+    await act(async () => { handler()?.('down') })
+    await act(async () => { handler()?.('down') })
+    await act(async () => { handler()?.('down') })
+    expect(listbox()?.getAttribute('aria-activedescendant')).toBe('dsh-slash-option-command-3')
+    await act(async () => { handler()?.('pick') })
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(editor.claimSelection).not.toHaveBeenCalled()
+  })
+
+  it('keeps the action visible at an inline caret and still opens the dialog', async () => {
+    // The native decorated row carries no hint, so the host position filter
+    // keeps it (service.ts:247); picking it must not be gated on `leading`.
+    const openSession = withFeedbackUi()
+    const { editor } = mountFace({ leading: false })
+    await openMenu()
+    expect(feedbackRow()).not.toBeNull()
+    fireEvent.mouseDown(feedbackRow())
+    expect(openSession).toHaveBeenCalledWith('s1')
+    expect(editor.claimSelection).not.toHaveBeenCalled()
+  })
+
+  it('degrades to the claim row on a host without the feedbackUi service', async () => {
+    // No setFeedbackSource: the assembly keeps today's claim shape — a row
+    // with the localized token and no dialog call.
+    const { editor } = mountFace()
+    await openMenu()
+    fireEvent.mouseDown(feedbackRow())
+    expect(editor.claimSelection).toHaveBeenCalledWith('/反馈 ')
+    expect(listbox()).toBeNull()
+  })
+
+  it('survives a service that vanished between assembly and pick (no crash)', async () => {
+    // Hardening: the row was assembled while the service was alive; the
+    // service then disappears. The pick must be a silent no-op, never a throw
+    // into the card.
+    withFeedbackUi()
+    const { editor } = mountFace()
+    await openMenu()
+    setFeedbackSource(() => undefined)
+    expect(() => { fireEvent.mouseDown(feedbackRow()) }).not.toThrow()
+    expect(editor.claimSelection).not.toHaveBeenCalled()
+    expect(listbox()).toBeNull()
   })
 })
 

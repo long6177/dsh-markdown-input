@@ -10,12 +10,17 @@
  * host SECTION_ROWS table — 添加 (file/goal/plan/feedback) then 指令
  * (compact/permission/model/export), unlisted catalog rows closing 指令.
  *
- * The dispatch decision table (service.ts:252-275) collapses here into row
- * kinds: `claim` (host commands with input — the menu inserts the localized
- * claim token and Enter submits through the host's adjudication), `execute`
- * (bare commands — detached `remote.commands.execute`), `popup` (the
- * permission/model rows chain into the second-layer popup faces), and
- * `action` (the file row rides the hidden file input).
+ * The dispatch decision table (service.ts:251-275) collapses here into row
+ * kinds, in the host's own order contribution → decoration → input claim →
+ * bare execute: `claim` (host commands with input — the menu inserts the
+ * localized claim token and Enter submits through the host's adjudication),
+ * `execute` (bare commands — detached `remote.commands.execute`), `popup`
+ * (the permission/model rows chain into the second-layer popup faces),
+ * `action` (the file row rides the hidden file input), and `feedback` (the
+ * host `feedback` command while its `feedbackUi` decoration is alive — a
+ * pick opens the session feedback dialog and inserts nothing, exactly the
+ * native decoration; without the service the row stays a `claim`, see
+ * feedback-face.ts).
  */
 import type { ComponentType } from 'react'
 import {
@@ -32,7 +37,7 @@ import type { ComposerKey } from './locales.ts'
 export type CommandMenuSection = 'add' | 'commands'
 
 /** What picking a row does (host dispatch decision table). */
-export type CommandMenuRowKind = 'claim' | 'execute' | 'popup' | 'action'
+export type CommandMenuRowKind = 'claim' | 'execute' | 'popup' | 'action' | 'feedback'
 
 /** One assembled menu row. */
 export interface CommandMenuRow {
@@ -153,6 +158,11 @@ export interface CommandRowsInput {
   readonly canChainPermission: boolean
   /** The model popup face is alive and chainable. */
   readonly canChainModel: boolean
+  /**
+   * The host `feedbackUi` service is present (feedback-face.ts): the feedback
+   * row becomes the native decoration `feedback` row instead of a claim.
+   */
+  readonly canOpenFeedback: boolean
   /** Only whitespace precedes the caret (leading trigger position). */
   readonly leading: boolean
   readonly t: CommandRowsTranslate
@@ -164,7 +174,7 @@ export interface CommandRowsInput {
  * @returns the sectioned rows in display order.
  */
 export function assembleCommandRows(input: CommandRowsInput): readonly CommandMenuRow[] {
-  const { descriptors, canPickFiles, canChainPermission, canChainModel, leading, t } = input
+  const { descriptors, canPickFiles, canChainPermission, canChainModel, canOpenFeedback, leading, t } = input
   const addTitle = t('command.menu.section.add')
   const commandsTitle = t('command.menu.section.commands')
   const catalog = descriptors ?? SYNTHETIC_CATALOG
@@ -196,9 +206,15 @@ export function assembleCommandRows(input: CommandRowsInput): readonly CommandMe
     const popupId = descriptor.name === 'permission' && canChainPermission
       ? 'permission' as const
       : undefined
-    const kind: CommandMenuRowKind = popupId !== undefined
-      ? 'popup'
-      : descriptor.input !== undefined ? 'claim' : 'execute'
+    // The native decoration outranks the host `input` claim: while the
+    // feedbackUi service is alive the feedback row opens the dialog and
+    // inserts nothing; a service-less host keeps today's claim row.
+    const feedbackAction = builtin === 'feedback' && canOpenFeedback
+    const kind: CommandMenuRowKind = feedbackAction
+      ? 'feedback'
+      : popupId !== undefined
+        ? 'popup'
+        : descriptor.input !== undefined ? 'claim' : 'execute'
     rows.set(descriptor.name, {
       name: descriptor.name,
       label: face === undefined ? descriptor.name : t(face.label),
@@ -215,7 +231,9 @@ export function assembleCommandRows(input: CommandRowsInput): readonly CommandMe
   for (const [name, row] of contributions) rows.set(name, row)
 
   // The non-leading position drops claim rows (host position filter: a
-  // mid-draft `/goal` never claims).
+  // mid-draft `/goal` never claims) — a row the decoration upgraded to a
+  // `feedback` action carries no hint and stays visible inline, exactly like
+  // the native decorated row and our popup/execute rows.
   const visible = [...rows.values()].filter((row) => leading || row.kind !== 'claim')
 
   // Section order: the SECTION_ROWS table, then unlisted rows closing 指令
