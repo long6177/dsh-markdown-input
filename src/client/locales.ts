@@ -127,6 +127,17 @@ const zh = {
   'queue.editFailed': '编辑失败：这条消息可能已经开始发送。',
   'queue.removeFailed': '删除失败：这条消息可能已经开始发送。',
   'queue.steerFailed': '插话发送失败，请重试。',
+  // Todo panel (issue #38). The native TodoDock renders inside the composer
+  // chain's fallback bar, which the takeover hides whole, so the card
+  // rebuilds it; keys mirror the host `conversation` namespace copy verbatim
+  // (`todo.title` / `todo.progress.*` / `todo.status.*`).
+  'todo.title': '任务',
+  'todo.progress.done': '{done} 已完成',
+  'todo.progress.active': '{active} 进行中',
+  'todo.progress.pending': '{pending} 待处理',
+  'todo.status.completed': '已完成',
+  'todo.status.inProgress': '进行中',
+  'todo.status.pending': '待处理',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -234,6 +245,13 @@ const en: Record<ComposerKey, string> = {
   'queue.editFailed': 'Edit failed: this message may have already started sending.',
   'queue.removeFailed': 'Removal failed: this message may have already started sending.',
   'queue.steerFailed': 'Steering failed. Try again.',
+  'todo.title': 'To-dos',
+  'todo.progress.done': '{done} completed',
+  'todo.progress.active': '{active} in progress',
+  'todo.progress.pending': '{pending} pending',
+  'todo.status.completed': 'Completed',
+  'todo.status.inProgress': 'In progress',
+  'todo.status.pending': 'Pending',
 }
 
 export { zh, en }

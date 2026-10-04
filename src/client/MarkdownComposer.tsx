@@ -28,7 +28,9 @@
  * (issue #34) rebuilds the native `conversation.input.plan` seat the
  * takeover replaces, beside the permission face like the native row; the
  * goal strip (issue #34) rebuilds the native GoalDock the takeover hides
- * with the whole fallback bar, above the queue strip (native dock order).
+ * with the whole fallback bar, and the todo panel (issue #38) rebuilds the
+ * native TodoDock the same way — above the goal strip, the native dock
+ * order (todo 0, goal 10, queue 20).
  * The runtime placeholders follow the native bar's ladder
  * (`placeholder.steerQueue` / `placeholder.plan` over the card's own
  * render/source copy).
@@ -69,6 +71,7 @@ import { QueueFace } from './QueueFace.tsx'
 import { queueMutableOf, queueViewRows } from './queue-core.ts'
 import { skillFace } from './skill-face.ts'
 import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
+import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
 
 /** Selector marker this entry returns to win the composer chain election. */
 export interface MarkdownTakeover {
@@ -637,6 +640,20 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
           {notice.text}
         </div>
       )}
+      {/* Todo panel (issue #38): the native TodoDock, the FIRST dock seat
+          (order 0) the takeover hides with the whole fallback bar, rebuilt
+          above the goal strip — the native dock order (todo 0, goal 10,
+          queue 20). Probed and gated on the projection hook, the panel's one
+          hard dependency; an absent `todos` key or an empty list renders
+          nothing, never a dead seat. The key is widened structurally: the
+          `todos` declaration lives in the todo tool package, outside this
+          build's dependency graph (the `plan` key precedent). */}
+      <FaceGate definition={todoStripFaceDefinition(useProjection)}>
+        <TodoStripFace
+          useProjection={(useProjection as unknown) as (key: 'todos') => unknown}
+          t={t}
+        />
+      </FaceGate>
       {/* Goal strip (issue #34): the native GoalDock the takeover hides
           with the whole fallback bar (the `conversation.input.dock` strip
           renders inside the chain fallback), rebuilt above the queue strip

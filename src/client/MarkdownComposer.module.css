@@ -679,3 +679,99 @@
 .surface :global(.cm-editor[data-mdx-composing]) :global(.cm-mdx-claim-hint) {
   display: none;
 }
+
+/* Todo panel (issue #38): the native TodoDock rebuilt — the checklist dock
+   seat `conversation.input.dock` order 0, which the takeover hides with the
+   whole fallback bar. One collapsible block above the goal strip (native dock
+   order 0 < 10 < 20) sharing the queue strip's row metrics, with the native
+   panel's geometry: an icon + title + progress header over roomy, ellipsized
+   rows in a capped scrolling list. */
+.todo {
+  display: flex;
+  flex-direction: column;
+}
+
+.todoHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  border-radius: 8px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 0.85em;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  color: inherit;
+}
+
+.todoHeader:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.todoLead {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.todoTitle {
+  flex: none;
+  font-weight: 500;
+}
+
+/* The progress line takes the slack and ellipsizes first: the title and the
+   chevron stay pinned while counts overflow (native `.progress`). */
+.todoProgress {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todoChevron {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.todoList {
+  max-height: 11lh;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.todoItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 6px;
+  font-size: 0.85em;
+  line-height: 20px;
+}
+
+/* Figma strip is single-line; long items ellipsize with no inline expand. */
+.todoContent {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todoGlyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
