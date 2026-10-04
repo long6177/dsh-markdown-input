@@ -38,7 +38,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, ReactNode } from 'react'
 import {
-  IconCloseOutlineMedium, IconPaperclipOutlineMedium, IconWarningOutlineMedium,
+  IconCloseOutlineMedium, IconCodeOutlineRegular, IconPaperclipOutlineMedium,
+  IconWarningOutlineMedium, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
   ComposerAttachment, DraftAttachmentId,
@@ -767,10 +768,15 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
             t={t}
           />
         </FaceGate>
-        {/* Action semantics: the button names the mode it switches TO. */}
+        {/* Action semantics: the copy names the mode it switches TO. The seat
+            is plugin-invented (no native counterpart), so it stays a
+            permanently icon-only toggle: text here is row budget the native
+            row never spends, and that surplus is what folded the model pill
+            to a pure icon (#39). */}
         <button type="button" className={css.modeButton} onClick={toggleMode}
+          aria-label={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}
           title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
-          {labelOf(t, otherMode)}
+          <IconCodeOutlineRegular />
         </button>
         <span className={css.spring} />
         {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
@@ -789,7 +795,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
             button — the native inline square glyph, disabled while the cancel
             verb is missing. Mutually exclusive with the primary stop arm. */}
         {dedicatedStop && (
-          <button type="button" className={`${css.submitButton} ${css.stopButton}`}
+          <button type="button" className={css.stopButton}
             aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
             disabled={stop === undefined} onClick={stopRunning}>
             <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
@@ -801,12 +807,29 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
             session the primary names stop while the composer is empty or
             owner-blocked, and clicks cancel (queue preserved); every other
             state keeps the send action. A missing cancel verb disables the
-            arm, never hides the seat. */}
-        <button type="button" className={css.submitButton}
-          disabled={primaryStops ? stop === undefined : !canSubmit}
-          onClick={primaryStops ? stopRunning : submit}>
-          {primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
-        </button>
+            arm, never hides the seat. The seat itself is the native pure-icon
+            circle — the arrow glyph while sending, the square while stopping
+            — so the row spends the native demand width, not a text button's
+            (issue #39). Tooltip and aria carry the same localized copy the
+            text button used to. */}
+        <Tooltip label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+          side="top" delayMs={500}
+          disabled={primaryStops ? stop === undefined : !canSubmit}>
+          <button type="button" className={css.submitButton}
+            aria-label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+            disabled={primaryStops ? stop === undefined : !canSubmit}
+            onClick={primaryStops ? stopRunning : submit}>
+            {primaryStops ? (
+              <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
+              </svg>
+            )}
+          </button>
+        </Tooltip>
       </div>
     </div>
   )

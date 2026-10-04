@@ -13,7 +13,7 @@ import { resetCommandFace, setCommandSource } from '../src/client/command-face.t
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
 import { resetFaces } from '../src/client/face.ts'
-import { en } from '../src/client/locales.ts'
+import { en, zh } from '../src/client/locales.ts'
 import type { QueueRow } from '../src/client/queue-core.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 
@@ -123,6 +123,22 @@ function content(): HTMLElement {
   return document.querySelector('.cm-content') as HTMLElement
 }
 
+/**
+ * The tool row's seats are icon-only (#39), so they are addressed by their
+ * accessible name — the same localized copy their tooltip carries.
+ */
+function seatNamed(label: string): HTMLButtonElement {
+  const all = [...document.querySelectorAll('button')]
+    .filter((button) => button.getAttribute('aria-label') === label)
+  return all[0] as HTMLButtonElement
+}
+
+/** The mode toggle's copy: `composer.mode.toggle` filled with the mode it switches TO. */
+function modeToggleCopy(mode: 'render' | 'source'): string {
+  return en['composer.mode.toggle']
+    .replace('{mode}', mode === 'render' ? en['composer.mode.render'] : en['composer.mode.source'])
+}
+
 /** Paste rich-text HTML into the editor surface (the conversion gesture). */
 function pasteHtml(html: string): void {
   fireEvent.paste(content(), {
@@ -160,30 +176,35 @@ describe('MarkdownComposer', () => {
   })
 
   it('toggles render/source mode and persists the choice', () => {
-    const { getByText, rerender } = render(<MarkdownComposer {...chainProps()} />)
-    // Action semantics: the button names the mode it switches TO.
-    fireEvent.click(getByText(en['composer.mode.source']))
+    const { rerender } = render(<MarkdownComposer {...chainProps()} />)
+    // Action semantics: the icon-only seat's copy names the mode it switches TO.
+    fireEvent.click(seatNamed(modeToggleCopy('source')))
     expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('source')
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.source'])
+    // Icon-only since #39: no text node, one code glyph, copy in aria/title.
+    const back = seatNamed(modeToggleCopy('render'))
+    expect(back.textContent).toBe('')
+    expect(back.querySelector('svg')).not.toBeNull()
+    expect(back).toHaveAttribute('title', modeToggleCopy('render'))
     // The same instance keeps the mode across a host rerender (the F5 path —
     // a genuinely fresh mount reading localStorage — is tested below).
     rerender(<MarkdownComposer {...chainProps()} />)
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.source'])
-    fireEvent.click(getByText(en['composer.mode.render']))
+    fireEvent.click(seatNamed(modeToggleCopy('render')))
     expect(window.localStorage.getItem(MODE_STORAGE_KEY)).toBe('render')
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.render'])
   })
 
   it('a fresh mount restores the persisted mode and it acts on the editor (F5 path)', () => {
     window.localStorage.setItem(MODE_STORAGE_KEY, 'source')
-    const { getByText } = render(<MarkdownComposer {...chainProps()} />)
+    render(<MarkdownComposer {...chainProps()} />)
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.source'])
-    expect(getByText(en['composer.mode.render'])).toBeInTheDocument()
+    expect(seatNamed(modeToggleCopy('render'))).toBeInTheDocument()
     // Source mode leaves typed markdown raw — no folding decorations.
     pasteHtml('<h2>标题</h2>')
     expect(document.querySelector('.cm-md-h2')).toBeNull()
     // Switching back acts on the editor immediately.
-    fireEvent.click(getByText(en['composer.mode.render']))
+    fireEvent.click(seatNamed(modeToggleCopy('render')))
     expect(document.querySelector('.cm-md-h2')).not.toBeNull()
   })
 
@@ -196,22 +217,38 @@ describe('MarkdownComposer', () => {
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
   })
 
+  it('keeps the icon-only seats localized: the copy follows the active language', () => {
+    const zhT = ((key: keyof typeof zh, params?: Record<string, string>) =>
+      zh[key].replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`)
+    ) as unknown as MarkdownComposerProps['t']
+    const { rerender } = render(<MarkdownComposer {...chainProps({ draft: '写点东西' })} t={zhT} />)
+    const zhToggle = zh['composer.mode.toggle'].replace('{mode}', zh['composer.mode.source'])
+    expect(seatNamed(zhToggle)).toBeInTheDocument()
+    expect(seatNamed(zhToggle)).toHaveAttribute('title', zhToggle)
+    expect(seatNamed(zh['composer.action.submit'])).toBeEnabled()
+    // A language switch on the same instance relabels both seats, never the glyphs.
+    rerender(<MarkdownComposer {...chainProps({ draft: '写点东西' })} />)
+    expect(seatNamed(modeToggleCopy('source'))).toBeInTheDocument()
+    expect(seatNamed(en['composer.action.submit'])).toBeEnabled()
+    expect(document.querySelector(`button[aria-label="${zh['composer.action.submit']}"]`)).toBeNull()
+  })
+
   it('does not send while the input machine is busy', () => {
     const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
-    const { getByText } = render(<MarkdownComposer {...chainProps({ phase: 'adjudicating', inputActions })} />)
+    render(<MarkdownComposer {...chainProps({ phase: 'adjudicating', inputActions })} />)
     pasteHtml('<p>text</p>')
     fireEvent.keyDown(content(), { key: 'Enter' })
     expect(inputActions.setDraft).not.toHaveBeenCalled()
     expect(inputActions.submit).not.toHaveBeenCalled()
-    expect(getByText(en['composer.action.submit'])).toBeDisabled()
+    expect(seatNamed(en['composer.action.submit'])).toBeDisabled()
   })
 
   it('enables submit only with text or attachments', () => {
     const empty = render(<MarkdownComposer {...chainProps()} />)
-    expect(empty.getByText(en['composer.action.submit'])).toBeDisabled()
+    expect(seatNamed(en['composer.action.submit'])).toBeDisabled()
     empty.unmount()
-    const attached = render(<MarkdownComposer {...chainProps({ attachmentIds: ['a1'] as never })} />)
-    expect(attached.getByText(en['composer.action.submit'])).toBeEnabled()
+    render(<MarkdownComposer {...chainProps({ attachmentIds: ['a1'] as never })} />)
+    expect(seatNamed(en['composer.action.submit'])).toBeEnabled()
   })
 
   it('flushes the current text to the host draft when a takeover unmounts the card', () => {
@@ -259,9 +296,9 @@ describe('MarkdownComposer', () => {
 
   it('sends the current document when the submit button is clicked', async () => {
     const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
-    const view = render(<MarkdownComposer {...chainProps({ inputActions })} />)
+    render(<MarkdownComposer {...chainProps({ inputActions })} />)
     pasteHtml('<ul><li>a</li></ul>')
-    fireEvent.click(view.getByText(en['composer.action.submit']))
+    fireEvent.click(seatNamed(en['composer.action.submit']))
     await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith('- a'))
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
   })
@@ -355,7 +392,7 @@ describe('MarkdownComposer attachments', () => {
       <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
     )
     expect(getByText(en['composer.file.uploading'])).toBeInTheDocument()
-    expect(getByText(en['composer.action.submit'])).toBeDisabled()
+    expect(seatNamed(en['composer.action.submit'])).toBeDisabled()
   })
 
   it('offers the retry control for a failed upload', () => {
@@ -622,11 +659,11 @@ describe('MarkdownComposer — chip text round-trip (T9)', () => {
   it('mirrors chip-bearing drafts into the machine draft verbatim (host line format intact)', async () => {
     const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
     const draft = 'see @"path with spaces" + @[Old chat](dsh-session:s-1) + /plan'
-    const { getByText } = render(<MarkdownComposer {...chainProps({ draft, inputActions })} />)
+    render(<MarkdownComposer {...chainProps({ draft, inputActions })} />)
     // Submit (and the unmount/pagehide flushes) ride setDraft(getText());
     // the chip decorations never touch the text, so the host's own
     // setDraft/restoreDraft contract receives the exact draft.
-    fireEvent.click(getByText(en['composer.action.submit']))
+    fireEvent.click(seatNamed(en['composer.action.submit']))
     await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith(draft))
     expect(inputActions.submit).toHaveBeenCalledTimes(1)
   })
@@ -809,30 +846,38 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
   it('turns the primary into stop on a running session with an empty composer', async () => {
     const conversation = fakeConversation()
     installStopScope(conversation)
-    const { getByRole } = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
-    const stop = getByRole('button', { name: en['composer.action.stop'] })
+    render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+    const stop = seatNamed(en['composer.action.stop'])
     expect(stop).toBeEnabled()
-    expect(stop).toHaveTextContent(en['composer.action.stop'])
+    // Icon-only seat (#39): the native square glyph, no text — the copy that
+    // used to be the button's label now rides aria and the tooltip.
+    expect(stop.textContent).toBe('')
+    expect(stop.querySelector('svg rect')).not.toBeNull()
+    expect(stop.querySelector('svg path')).toBeNull()
     fireEvent.click(stop)
     await waitFor(() => expect(conversation.cancel).toHaveBeenCalledTimes(1))
   })
 
   it('reverts the primary to send when the session stops running', () => {
     const view = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
-    expect(view.getByRole('button', { name: en['composer.action.stop'] })).toBeInTheDocument()
+    expect(seatNamed(en['composer.action.stop'])).toBeInTheDocument()
     view.rerender(<MarkdownComposer {...chainProps({ session: stopSession({ running: false }) })} />)
-    expect(view.queryByRole('button', { name: en['composer.action.stop'] })).toBeNull()
-    expect(view.getByText(en['composer.action.submit'])).toBeInTheDocument()
+    expect(document.querySelector(`button[aria-label="${en['composer.action.stop']}"]`)).toBeNull()
+    const send = seatNamed(en['composer.action.submit'])
+    expect(send).toBeInTheDocument()
+    // The send arm keeps the native arrow glyph (host `InputBar.tsx:490`).
+    expect(send.textContent).toBe('')
+    expect(send.querySelector('svg path')).not.toBeNull()
+    expect(send.querySelector('svg rect')).toBeNull()
   })
 
   it('keeps the send gesture while an actionable draft is typed on a running session', () => {
     installStopScope(fakeConversation())
-    const { getByRole, getByText, queryByRole } = render(
-      <MarkdownComposer {...chainProps({ draft: '排队的话', session: stopSession() })} />,
-    )
-    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
-    expect(queryByRole('button', { name: en['composer.action.stop'] })).toBeNull()
-    expect(getByRole('button', { name: en['composer.action.submit'] })).toBeEnabled()
+    render(<MarkdownComposer {...chainProps({ draft: '排队的话', session: stopSession() })} />)
+    const send = seatNamed(en['composer.action.submit'])
+    expect(send).toBeInTheDocument()
+    expect(send).toBeEnabled()
+    expect(seatNamed(en['composer.action.stop'])).toBeUndefined()
   })
 
   it('renders the stop arm disabled when the cancel verb is absent', () => {
@@ -846,7 +891,7 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
   it('exposes the dedicated stop on a running continuable child with Send primary', async () => {
     const conversation = fakeConversation()
     installStopScope(conversation)
-    const { getByRole, getByText } = render(<MarkdownComposer {...chainProps({
+    const { getByRole } = render(<MarkdownComposer {...chainProps({
       draft: '子会话里的话',
       session: stopSession({ subagent: { address: { mode: 'continuable' } } }),
     })} />)
@@ -854,18 +899,18 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     expect(dedicated).toBeEnabled()
     // Native dedicated stop: the inline square glyph, the primary stays Send.
     expect(dedicated.querySelector('svg rect')).not.toBeNull()
-    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
+    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
     fireEvent.click(dedicated)
     await waitFor(() => expect(conversation.cancel).toHaveBeenCalledTimes(1))
   })
 
   it('keeps nothing dedicated on other subagent address modes', () => {
     installStopScope(fakeConversation())
-    const { getByText, queryByRole } = render(<MarkdownComposer {...chainProps({
+    const { queryByRole } = render(<MarkdownComposer {...chainProps({
       session: stopSession({ subagent: { address: { mode: 'supervised' } } }),
     })} />)
     expect(queryByRole('button', { name: en['composer.action.stop'] })).toBeNull()
-    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
+    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
   })
 
   it('substitutes a raised owner block for the empty composer', async () => {
@@ -884,11 +929,11 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     const conversation = fakeConversation() as Record<string, unknown>
     delete conversation.blocks
     installStopScope(conversation as never)
-    const { getByText } = render(<MarkdownComposer {...chainProps({
+    render(<MarkdownComposer {...chainProps({
       draft: '无阻塞面时保持发送',
       session: stopSession(),
     })} />)
-    expect(getByText(en['composer.action.submit'])).toBeInTheDocument()
+    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
   })
 
   it('swallows a failed cancel without degrading the card', async () => {
@@ -914,6 +959,51 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     expect(banner?.textContent).toContain('停止失败')
     expect(banner?.textContent).toContain('session/cancel-failed')
   })
+
+  it('seats the primary as the native pure-icon circle without a wrapper element', () => {
+    render(<MarkdownComposer {...chainProps({ draft: '要发的话' })} />)
+    const send = seatNamed(en['composer.action.submit'])
+    expect(send.className).toContain('submitButton')
+    // The host Tooltip clones its anchor, so the seat stays a direct child of
+    // the row: the icon-only box is exactly the flex item the row measures.
+    expect(send.parentElement?.className).toContain('toolRow')
+    expect(send.textContent).toBe('')
+    expect(send.querySelectorAll('svg')).toHaveLength(1)
+    expect(send.querySelectorAll('svg path')).toHaveLength(1)
+    expect(document.querySelector('[role="tooltip"]')).toBeNull()
+  })
+
+  it('opens the same localized copy as a tooltip on the icon-only primary', async () => {
+    /** jsdom lacks ResizeObserver; the host Tooltip sizes its bubble through one. */
+    class StaticResizeObserver {
+      constructor(private readonly callback: (entries: unknown[]) => void) {}
+      observe(target: Element): void {
+        this.callback([{ target, borderBoxSize: [{ inlineSize: 120, blockSize: 30 }] }])
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', StaticResizeObserver)
+    try {
+      const view = render(<MarkdownComposer {...chainProps({ draft: '要发的话' })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.submit']))
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="tooltip"]')?.textContent)
+          .toBe(en['composer.action.submit'])
+      })
+      view.unmount()
+
+      installStopScope(fakeConversation())
+      render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
+      await vi.waitFor(() => {
+        expect(document.querySelector('[role="tooltip"]')?.textContent)
+          .toBe(en['composer.action.stop'])
+      })
+    } finally {
+      vi.stubGlobal('ResizeObserver', undefined)
+    }
+  })
 })
 
 describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issue #34)', () => {
@@ -938,13 +1028,14 @@ describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issu
 
   it('mounts the plan chip in the tool row ahead of the mode toggle', () => {
     bindPlanCommands(vi.fn())
-    const { getByText, container } = render(<MarkdownComposer {...chainProps({ plan: PLAN_ON })} />)
+    const { container } = render(<MarkdownComposer {...chainProps({ plan: PLAN_ON })} />)
     expect(planChip()).not.toBeNull()
     expect(planChip()!.textContent).toContain(en['plan.chip.label'])
     // Native row order: the plan chip sits in the leading modes cluster,
-    // ahead of the trailing controls (here: the mode toggle stands in — the
-    // permission pill's data plane is unbound and its face hides alone).
-    const modeButton = getByText(en['composer.mode.source'])
+    // ahead of the trailing controls (here: the icon-only mode toggle stands
+    // in — the permission pill's data plane is unbound and its face hides
+    // alone).
+    const modeButton = seatNamed(modeToggleCopy('source'))
     const row = planChip()!.closest('[class*="toolRow"]')
     expect(row).not.toBeNull()
     expect(container.querySelector('[data-markdown-surface]')).not.toBeNull()

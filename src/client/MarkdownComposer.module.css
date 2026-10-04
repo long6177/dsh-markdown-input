@@ -556,30 +556,64 @@
   cursor: default;
 }
 
-.modeButton,
-.submitButton {
+/* The render/source seat is plugin-invented (the native row has no
+   counterpart), so it stays a permanently icon-only toggle: its text was row
+   budget the native row never spends, and that surplus is what folded the
+   model pill to a pure icon at widths where the native pill keeps its name
+   (issue #39). The copy lives in aria-label/title only. */
+.modeButton {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
   border: none;
   border-radius: 8px;
-  padding: 4px 10px;
-  font: inherit;
-  font-size: 0.85em;
+  padding: 0;
   cursor: pointer;
   background: color-mix(in srgb, currentColor 8%, transparent);
   color: inherit;
 }
 
-.submitButton:disabled {
-  opacity: 0.4;
-  cursor: default;
+.modeButton:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 12%, transparent);
 }
 
-/* The dedicated stop (continuable child): icon-only seat over the submit
-   pill, glyph centered like the native bar's square stop. */
+/* Native primary seat, spot for spot (host `InputBar.module.css` .primary):
+   a pure-icon 34px circle, so the row's base demand width matches the native
+   row and the model pill keeps its name wherever the native pill does
+   (issue #39). Both stop seats — the primary arm and the dedicated
+   continuable-child seat — ride this one seat, exactly as the host row runs
+   both through `.primary`. Static white on the blue fill in both themes
+   (host design 34:10465); the literal fallbacks keep the seat visible when
+   the host tokens are absent. */
+.submitButton,
 .stopButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 4px 8px;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: 999px;
+  padding: 0;
+  background: var(--dsw-alias-button-info-fill, rgb(65, 118, 230));
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+
+.submitButton:hover:not(:disabled),
+.stopButton:hover:not(:disabled) {
+  background: var(--dsw-alias-button-info-hover, rgb(122, 170, 255));
+}
+
+.submitButton:disabled,
+.stopButton:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* Live-render presentation (render mode): folded markers, styled content.
