@@ -165,14 +165,23 @@ export function ModelSelect(
 
   useEffect(() => {
     if (!open) return
-    const closeOutside = (event: MouseEvent): void => {
+    const closeOutside = (event: MouseEvent | PointerEvent): void => {
       // The portaled card is outside the trigger subtree; check both.
       if (rootRef.current?.contains(event.target as Node) === true) return
       if (menuRef.current?.contains(event.target as Node) === true) return
       setOpen(false)
     }
-    document.addEventListener('mousedown', closeOutside)
-    return () => { document.removeEventListener('mousedown', closeOutside) }
+    // Outside-dismiss on POINTERDOWN, not the upstream seat's mousedown: the
+    // takeover chain opens this card from a menu row's mousedown (`+` menu
+    // and the typed-trigger popups both pick there), and a mousedown listener
+    // added during that discrete-event flush catches the still-bubbling
+    // opening press — the card closes ~1ms after opening, before paint (the
+    // real-browser #28 failure Enter never hits). Pointerdown precedes
+    // mousedown, so the opening gesture is always in the past when the
+    // listener attaches; this is also the native popupSelect family's own
+    // outside-dismiss signal for chained second-layer cards.
+    document.addEventListener('pointerdown', closeOutside)
+    return () => { document.removeEventListener('pointerdown', closeOutside) }
   }, [open])
 
   useLayoutEffect(() => {

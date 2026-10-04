@@ -353,14 +353,27 @@ describe('keyboard and dismissal (native parity)', () => {
     await waitFor(() => expect(openCard()).toBeNull())
   })
 
-  it('closes on an outside mousedown and reopens cleanly', async () => {
+  it('closes on an outside pointerdown and reopens cleanly', async () => {
+    const { view } = mountFace()
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="menu"]') as HTMLElement)
+    await waitFor(() => expect(openCard()).not.toBeNull())
+    fireEvent.pointerDown(document.body)
+    await waitFor(() => expect(openCard()).toBeNull())
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="menu"]') as HTMLElement)
+    await waitFor(() => expect(openCard()).not.toBeNull())
+  })
+
+  it('survives an outside mousedown (the chain-open gesture, #28)', async () => {
+    // The `+` menu and the typed-trigger popups open this card from a row's
+    // mousedown; in a real browser the dismiss listener attaches mid-dispatch
+    // and the still-bubbling opening press must not close the card (jsdom
+    // cannot reproduce that race, so the signal is pinned by the event type:
+    // mousedown alone never dismisses — pointerdown above does).
     const { view } = mountFace()
     fireEvent.click(view.container.querySelector('button[aria-haspopup="menu"]') as HTMLElement)
     await waitFor(() => expect(openCard()).not.toBeNull())
     fireEvent.mouseDown(document.body)
-    await waitFor(() => expect(openCard()).toBeNull())
-    fireEvent.click(view.container.querySelector('button[aria-haspopup="menu"]') as HTMLElement)
-    await waitFor(() => expect(openCard()).not.toBeNull())
+    expect(openCard()).not.toBeNull()
   })
 
   it('moves row focus with the arrow keys inside the root pane', async () => {
