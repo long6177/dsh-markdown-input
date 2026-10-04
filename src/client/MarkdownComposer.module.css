@@ -11,7 +11,14 @@
   flex-direction: column;
   gap: 4px;
   border: 1px solid var(--dsw-border, color-mix(in srgb, currentColor 14%, transparent));
-  border-radius: 12px;
+  /* Corner parity with the native input card (issue #40): the host card rounds
+     with the panel token, so the takeover keeps the same silhouette instead of
+     reading visibly squarer beside it. The fallback covers host builds without
+     the token. Only the radius matches: the 1px border above and the
+     transparent background below are this card's own chrome and deliberately
+     stay as they are — the native elevation hairline / input fill / soft shadow
+     are out of scope. */
+  border-radius: var(--dsw-radius-panel, 28px);
   padding: 8px 10px;
   background: var(--dsw-bg, transparent);
 }
@@ -448,7 +455,10 @@
   opacity: 0.4;
 }
 
-/* Drag-over invitation: the drop entry's placeholder overlay. */
+/* Drag-over invitation: the drop entry's placeholder overlay. It covers the
+   card with `inset: 0`, so it has to round with the same panel token as
+   `.card` (issue #40) — its own smaller radius would expose square overlay
+   corners inside the card's rounded corners. */
 .dropOverlay {
   position: absolute;
   inset: 0;
@@ -459,7 +469,7 @@
   color: color-mix(in srgb, currentColor 70%, transparent);
   background: color-mix(in srgb, canvas 80%, transparent);
   border: 1.5px dashed color-mix(in srgb, currentColor 35%, transparent);
-  border-radius: 12px;
+  border-radius: var(--dsw-radius-panel, 28px);
   pointer-events: none;
   z-index: 2;
 }
