@@ -306,8 +306,11 @@ export function CompletionFace({
           return
         case 'claim':
           // The leading guard re-checks at apply time (host beginCommand):
-          // a caret moved into text since the probe never claims.
-          if (editorHandle !== null && editorHandle.isLeadingSelection()) {
+          // the popup tracks the live probe, so the probe's own position IS
+          // the fresh verdict — whitespace before the TOKEN start, the typed
+          // trigger itself excluded (an isLeadingSelection caret check would
+          // count the token text and never claim).
+          if (current.position === 'leading' && editorHandle !== null) {
             // The claim token ends with a space: the post-insert probe is
             // none, and the armed memory clears itself through the seam.
             rememberNextRef.current = true
@@ -325,8 +328,11 @@ export function CompletionFace({
           }
           return
         case 'popup':
-          dismissedRef.current = current
-          if (option.row.popup !== undefined) openChainPopup(option.row.popup)
+          // Settle the memory only when the chained popup actually opened: a
+          // mid-life opener death must not silence the live token for good.
+          if (option.row.popup !== undefined && openChainPopup(option.row.popup)) {
+            dismissedRef.current = current
+          }
           return
       }
       return

@@ -8,20 +8,27 @@
  * dispatch (claim token / detached execute / chained popup / file intake /
  * skill token / file mention with drill), the aria wiring, and — over a
  * real CodeMirror view — the insertion→T9-decoration linkage the ticket
- * demands (insert → dictionary hit → chip).
+ * demands (insert → dictionary hit → chip) plus the #28 real-surface
+ * dispatch regression: the claim guard reads the probe's token position
+ * (mouse and key paths), a declined chain-open never silences the token,
+ * and the model row chains into the real vendored ModelSelect face.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import type { RefObject } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import { CompletionFace, completionFaceDefinition, type CompletionFaceProps } from '../src/client/CompletionFace.tsx'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetFileReferenceFace, setFileReferenceSource } from '../src/client/file-reference-face.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 import { createMarkdownEditor, type CompletionProbeListener, type MarkdownEditorHandle, type MenuKeyHandler } from '../src/client/markdown-editor.ts'
 import type { CompletionProbe } from '../src/client/completion-core.ts'
+import { ModelSelectFace } from '../src/client/ModelSelectFace.tsx'
+import { modelFaceDefinition, resetModelFace, setModelLocale, setModelSource, type ModelDirectoryState } from '../src/client/model-face.ts'
+import { registerChainPopup, resetChainPopups } from '../src/client/chain-open.ts'
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
 import { en, zh } from '../src/client/locales.ts'
+import { zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
 
 function fakeT(locale: Record<string, string>): CompletionFaceProps['t'] {
   return ((key: string, params?: Record<string, string>) => {
@@ -36,13 +43,12 @@ function probe(partial: Partial<CompletionProbe>): CompletionProbe {
 }
 
 /** Build a recording editor stub; the captured seams drive the behavior tests. */
-function stubEditor(leading = true) {
+function stubEditor() {
   let completionHandler: MenuKeyHandler | null = null
   let probeListener: CompletionProbeListener | null = null
   const dispatch = vi.fn()
   const editor = {
     focus: vi.fn(),
-    isLeadingSelection: vi.fn(() => leading),
     claimSelection: vi.fn(),
     view: { dispatch },
     setMenuKeyHandler: vi.fn(),
@@ -60,7 +66,6 @@ function stubEditor(leading = true) {
 
 interface MountOptions {
   sessionId?: string | undefined
-  leading?: boolean
   locale?: 'zh' | 'en'
   guard?: 'plain' | 'claimed' | 'frozen'
   fileResults?: readonly { path: string, kind: 'file' | 'directory' }[]
@@ -103,7 +108,7 @@ function mountFace(options: MountOptions = {}) {
     ],
   }))
   setFileReferenceSource(() => ({ fileReferences: { list: fileSearch } }))
-  const { editor, editorRef, handler, emit, dispatch } = stubEditor(options.leading ?? true)
+  const { editor, editorRef, handler, emit, dispatch } = stubEditor()
   const containerRef = { current: null as HTMLElement | null }
   const props = {
     sessionId: 'sessionId' in options ? options.sessionId : 's1',
@@ -163,6 +168,8 @@ afterEach(() => {
   resetCommandFace()
   resetSkillFace()
   resetFileReferenceFace()
+  resetModelFace()
+  resetChainPopups()
   resetFaces()
 })
 
@@ -256,7 +263,7 @@ describe('CompletionFace / popup', () => {
   })
 
   it('drops the claim rows at an inline position', async () => {
-    const { emit } = mountFace({ leading: false })
+    const { emit } = mountFace()
     await act(async () => {
       emit(probe({ trigger: '/', query: '', position: 'inline', start: 4, end: 5 }))
     })
@@ -428,14 +435,14 @@ describe('CompletionFace picks', () => {
     expect(listbox()).toBeNull()
   })
 
-  it('picks a claim row through the leading guard, and declines it inline', async () => {
-    const leading = mountFace({ leading: true })
+  it('picks a claim row at the leading position; inline assemblies drop the rows', async () => {
+    const leading = mountFace()
     await openSlash(leading.emit)
     const goal = options().find((row) => row.getAttribute('data-completion-option') === 'goal')!
     fireEvent.mouseDown(goal)
     expect(leading.editor.claimSelection).toHaveBeenCalledWith('/目标 ')
     cleanup()
-    const inline = mountFace({ leading: false })
+    const inline = mountFace()
     await openSlash(inline.emit)
     const compact = options().find((row) => row.getAttribute('data-completion-option') === 'compact')!
     fireEvent.mouseDown(compact)
@@ -494,39 +501,48 @@ describe('CompletionFace picks', () => {
   })
 })
 
-describe('CompletionFace real-surface linkage (T9)', () => {
-  function mountRealEditor(): MarkdownEditorHandle {
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    return createMarkdownEditor({
-      parent: host,
-      placeholder: 'ph',
-      mode: 'render',
-      onSubmit: () => {},
-      onDocChange: () => {},
-      onFiles: () => true,
-    })
-  }
+/** A real CM6 surface: the dispatch tests below ride the actual editor. */
+function mountRealEditor(): MarkdownEditorHandle {
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  return createMarkdownEditor({
+    parent: host,
+    placeholder: 'ph',
+    mode: 'render',
+    onSubmit: () => {},
+    onDocChange: () => {},
+    onFiles: () => true,
+  })
+}
 
-  it('decorates a picked skill the moment the text lands (insert → hit → chip)', async () => {
-    setCommandSource(() => ({
-      commands: { list: vi.fn(() => new Promise(() => {})), execute: vi.fn() },
-      remoteEvents: { $on: vi.fn(() => () => {}) },
-    }))
-    setSkillSource(() => ({
-      skills: {
-        list: vi.fn(() => Promise.resolve({
-          ok: true,
-          value: { skills: [{ name: 'core-review', description: 'Review', modelInvocable: true }] },
-        })),
-      },
-      remoteEvents: { $on: vi.fn(() => () => {}) },
-    }))
-    setFileReferenceSource(() => ({ fileReferences: { list: vi.fn() } }))
-    const handle = mountRealEditor()
-    const containerRef = { current: null as HTMLElement | null }
-    render(
-      <div ref={containerRef as never} data-composer-card>
+/**
+ * The three data planes behind the popup, with the catalog read left pending
+ * (the static fallback rows) and the skill lexicon pending unless a roll is
+ * given — a landed roll keeps the view's pending flag down, which the key
+ * seam's Enter pick requires (a pending refinement consumes Enter by design).
+ */
+function stubSources(skills?: readonly { name: string, description?: string, modelInvocable?: boolean }[]): void {
+  setCommandSource(() => ({
+    commands: { list: vi.fn(() => new Promise(() => {})), execute: vi.fn() },
+    remoteEvents: { $on: vi.fn(() => () => {}) },
+  }))
+  setSkillSource(() => ({
+    skills: {
+      list: skills === undefined
+        ? vi.fn(() => new Promise(() => {}))
+        : vi.fn(() => Promise.resolve({ ok: true, value: { skills } })),
+    },
+    remoteEvents: { $on: vi.fn(() => () => {}) },
+  }))
+  setFileReferenceSource(() => ({ fileReferences: { list: vi.fn() } }))
+}
+
+/** Mount the gated popup face over a real editor inside a card container. */
+function mountOverRealEditor(handle: MarkdownEditorHandle, siblings?: ReactNode): void {
+  const containerRef = { current: null as HTMLElement | null }
+  render(
+    <div ref={containerRef as never} data-composer-card>
+      <FaceGate definition={completionFaceDefinition()}>
         <CompletionFace
           sessionId="s1"
           t={tZh}
@@ -539,8 +555,18 @@ describe('CompletionFace real-surface linkage (T9)', () => {
           registerClose={() => {}}
           onOpen={() => {}}
         />
-      </div>,
-    )
+      </FaceGate>
+      {siblings}
+    </div>,
+  )
+}
+
+describe('CompletionFace real-surface linkage (T9)', () => {
+
+  it('decorates a picked skill the moment the text lands (insert → hit → chip)', async () => {
+    stubSources([{ name: 'core-review', description: 'Review', modelInvocable: true }])
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
     try {
       // The raw editor's hot dictionary is the caller's to feed (the card
       // does it in production): a chip needs the lexicon, not just the popup.
@@ -572,23 +598,7 @@ describe('CompletionFace real-surface linkage (T9)', () => {
       },
     }))
     const handle = mountRealEditor()
-    const containerRef = { current: null as HTMLElement | null }
-    render(
-      <div ref={containerRef as never} data-composer-card>
-        <CompletionFace
-          sessionId="s1"
-          t={tZh}
-          editor={handle}
-          container={containerRef}
-          guard="plain"
-          canPickFiles={false}
-          onPickFiles={() => {}}
-          onError={() => {}}
-          registerClose={() => {}}
-          onOpen={() => {}}
-        />
-      </div>,
-    )
+    mountOverRealEditor(handle)
     try {
       await act(async () => { handle.setText('see @in') })
       await waitFor(() => expect(listbox()).not.toBeNull())
@@ -597,6 +607,132 @@ describe('CompletionFace real-surface linkage (T9)', () => {
         expect(handle.getText()).toBe('see @src/index.ts')
         expect(document.querySelector('.cm-mdx-ref-file')).not.toBeNull()
       })
+      expect(listbox()).toBeNull()
+    } finally {
+      handle.destroy()
+    }
+  })
+})
+
+describe('CompletionFace real-surface claim dispatch (#28)', () => {
+  it('inserts the claim token over the typed trigger on a row click (mouse path)', async () => {
+    stubSources()
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
+    try {
+      // The typed trigger is document text: any caret-relative leading check
+      // sees '/p' before the caret and would decline forever (the alpha.6
+      // real-host defect). The guard must read the probe's token position.
+      await act(async () => { handle.setText('/p') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      const plan = options().find((row) => row.getAttribute('data-completion-option') === 'plan')!
+      fireEvent.mouseDown(plan)
+      expect(handle.getText()).toBe('/计划 ')
+      expect(listbox()).toBeNull()
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('picks the claim row through the key seam with the same result (keyboard path)', async () => {
+    stubSources([{ name: 'core-review' }])
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
+    try {
+      await act(async () => { handle.setText('/') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+      const content = handle.view.contentDOM
+      // Real-keystroke pacing: each keydown is its own task, so the highlight
+      // commit (and its ref mirror) lands before Enter reads it.
+      await act(async () => { fireEvent.keyDown(content, { key: 'ArrowDown' }) })
+      await act(async () => { fireEvent.keyDown(content, { key: 'Enter' }) })
+      expect(handle.getText()).toBe('/计划 ')
+      // The settling pick closed the popup and armed the dismissed memory.
+      expect(listbox()).toBeNull()
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('keeps the popup openable when a chained popup row fails to open (no dead settle)', async () => {
+    stubSources()
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
+    try {
+      // The model opener declines (a mid-life face death): the pick closes
+      // the popup but must NOT write the dismissed memory — the token stays
+      // alive for the user's next move instead of staying silenced.
+      const off = registerChainPopup('model', () => false)
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      const model = options().find((row) => row.getAttribute('data-completion-option') === 'model')!
+      fireEvent.mouseDown(model)
+      expect(listbox()).toBeNull()
+      // The same token reopens after the text rounds-trips (no memory).
+      await act(async () => { handle.setText('/mod') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      off()
+    } finally {
+      handle.destroy()
+    }
+  })
+})
+
+describe('CompletionFace model row chains into the real model face (#28)', () => {
+  it('opens the vendored ModelSelect card on a popup row click', async () => {
+    stubSources()
+    const state: ModelDirectoryState = {
+      current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
+      routable: true,
+      groups: [{
+        id: 'deepseek-account',
+        name: 'DeepSeek 账号',
+        models: [{ id: 'deepseek-chat', name: 'DeepSeek-V41-Flash' }],
+      }],
+      failures: [],
+      status: 'ready',
+      pending: null,
+      error: null,
+    }
+    const load = vi.fn(() => Promise.resolve(state))
+    setModelSource(() => ({
+      directoryFor: vi.fn(() => ({
+        store: {
+          subscribe: () => () => {},
+          getSnapshot: () => state,
+        },
+        load,
+        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
+      })),
+    }))
+    setModelLocale(fakeT(modelZh) as never)
+
+    const handle = mountRealEditor()
+    try {
+      mountOverRealEditor(
+        handle,
+        <FaceGate definition={modelFaceDefinition()}>
+          <ModelSelectFace sessionId={'s1' as never} locked={false} subagent={null} />
+        </FaceGate>,
+      )
+      await act(async () => { handle.setText('/') })
+      await waitFor(() => {
+        expect(options().map((row) => row.getAttribute('data-completion-option'))).toContain('model')
+      })
+      const model = options().find((row) => row.getAttribute('data-completion-option') === 'model')!
+      // The full pointer sequence of a real click (pointerdown → mousedown →
+      // mouseup → click); the pick happens on mousedown.
+      fireEvent.pointerDown(model)
+      fireEvent.mouseDown(model)
+      fireEvent.mouseUp(model)
+      fireEvent.click(model)
+      await waitFor(() => {
+        expect(document.body.querySelector('[role="menu"][aria-label]')).not.toBeNull()
+      })
+      expect(load).toHaveBeenCalled()
       expect(listbox()).toBeNull()
     } finally {
       handle.destroy()
