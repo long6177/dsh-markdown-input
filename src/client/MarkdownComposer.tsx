@@ -24,7 +24,14 @@
  * permission-face.ts, model-face.ts) — a probe miss or a mid-life degrade
  * hides that face alone, the text face and the rest of the row stay. When
  * the command menu face is unavailable the legacy attach button takes its
- * place, so file intake never disappears with the menu.
+ * place, so file intake never disappears with the menu. The plan chip
+ * (issue #34) rebuilds the native `conversation.input.plan` seat the
+ * takeover replaces, beside the permission face like the native row; the
+ * goal strip (issue #34) rebuilds the native GoalDock the takeover hides
+ * with the whole fallback bar, above the queue strip (native dock order).
+ * The runtime placeholders follow the native bar's ladder
+ * (`placeholder.steerQueue` / `placeholder.plan` over the card's own
+ * render/source copy).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, ReactNode } from 'react'
@@ -49,12 +56,15 @@ import {
 } from './conversation-face.ts'
 import { registerFace } from './face.ts'
 import { FaceGate } from './FaceGate.tsx'
+import { GoalStripFace, goalStripFaceDefinition } from './GoalStripFace.tsx'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from './markdown-editor.ts'
 import { NS } from './locales.ts'
 import { modelFaceDefinition } from './model-face.ts'
 import { ModelSelectFace } from './ModelSelectFace.tsx'
 import { permissionFaceDefinition } from './permission-face.ts'
 import { PermissionSelectFace } from './PermissionSelectFace.tsx'
+import { PlanChipFace, planFaceDefinition } from './PlanChipFace.tsx'
+import { planChipVisible, planProjectionOf } from './plan-core.ts'
 import { QueueFace } from './QueueFace.tsx'
 import { queueMutableOf, queueViewRows } from './queue-core.ts'
 import { skillFace } from './skill-face.ts'
@@ -147,10 +157,19 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   const toolRowRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // The `+` menu registers its close verb here; the card closes it whenever
-  // the document changes (the host pipeline's trigger-track loss).
+  // the document changes (the host pipeline's trigger-track loss). The open
+  // state rides the same seams: onOpen announces the open, the wrapped close
+  // verb announces the close — the native canSteerQueue's `!commandMenuOpen`
+  // arm reads it.
   const menuCloseRef = useRef<(() => void) | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const registerMenuClose = useCallback((close: (() => void) | null) => {
-    menuCloseRef.current = close
+    menuCloseRef.current = close === null
+      ? null
+      : () => {
+        setMenuOpen(false)
+        close()
+      }
   }, [])
   // The completion popups (T10) register theirs here; the card closes them
   // when the `+` menu opens — one candidate surface above the card, the
@@ -404,6 +423,16 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   // wins, the machine's own hint answers for other claimed commands) rides
   // into the editor, which decides blank-args from its live document.
   const hasGoal = useProjection('goal', (goal: unknown) => goal != null) === true
+  // The plan mode's folded target (issue #34, native InputBar parity): the
+  // same value the plan chip and the native `placeholder.plan` read. The
+  // `plan` key is declared by the host's plan-mode plugin, whose client
+  // types sit outside this build's dependency graph (the `goal` and
+  // `permissions` merges reach us transitively through the linked
+  // conversation types), so the keyed hook widens structurally here.
+  const readPlanProjection = useProjection as unknown as
+    (key: 'plan') => unknown
+  const planState = planProjectionOf(readPlanProjection('plan'))
+  const planActive = planChipVisible(planState)
   useEffect(() => {
     const claim = input.claim
     const claimed = input.phase === 'claimed' || input.phase === 'submitting'
@@ -450,9 +479,24 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
   }
 
   // Keep the compartments in sync with locale switches, not just toggles.
+  // The placeholder follows the native bar's runtime ladder (issue #34):
+  // steering a queue while running wins over plan mode, plan mode wins over
+  // the card's own render/source copy — the native formula verbatim,
+  // including the open `+` menu's suppression arm and the queue rows'
+  // `placement === 'queued'` wire test. (The native ladder's earlier arms —
+  // workspace picker, block reason, offline parent — ride states the card
+  // does not model.)
+  const canSteerQueue = sessionId !== undefined && !machineBusy && draftEmpty
+    && (session?.running ?? false) && session?.subagent == null && !menuOpen
+    && input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued')
+  const placeholderText = canSteerQueue
+    ? t('composer.placeholder.steerQueue')
+    : planActive
+      ? t('composer.placeholder.plan')
+      : placeholderOf(t, mode)
   useEffect(() => {
-    editorRef.current?.setMode(mode, placeholderOf(t, mode))
-  }, [mode, t])
+    editorRef.current?.setMode(mode, placeholderText)
+  }, [mode, placeholderText])
 
   const canSubmit = !draftEmpty && input.phase === 'plain' && !uploadsPending
   // Native canAcceptDrop parity: subagent === null, not locked (a session id
@@ -471,9 +515,14 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
     ? 'frozen'
     : input.phase === 'claimed' ? 'claimed' : 'plain'
   // The popup interlock verbs: opening either candidate surface closes the
-  // other (the native pipeline's single MenuView, in both directions).
+  // other (the native pipeline's single MenuView, in both directions). The
+  // `+` menu's open also flips the placeholder's steering arm off.
   const closeCommandMenu = useCallback(() => { menuCloseRef.current?.() }, [])
   const closeCompletionPopups = useCallback(() => { completionCloseRef.current?.() }, [])
+  const handleMenuOpen = useCallback(() => {
+    setMenuOpen(true)
+    closeCompletionPopups()
+  }, [closeCompletionPopups])
 
   // File intake through the conversation service's own validation path; the
   // admitted state mutation rides the public addAttachments (a busy-phase
@@ -588,6 +637,20 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
           {notice.text}
         </div>
       )}
+      {/* Goal strip (issue #34): the native GoalDock the takeover hides
+          with the whole fallback bar (the `conversation.input.dock` strip
+          renders inside the chain fallback), rebuilt above the queue strip
+          — the native dock order (goal 10, queue 20). Probed and gated:
+          the projection hook is the one hard dependency, the verb surfaces
+          shed the strip's buttons alone. */}
+      <FaceGate definition={goalStripFaceDefinition(useProjection)}>
+        <GoalStripFace
+          useProjection={useProjection}
+          sessionId={sessionId}
+          running={session?.running ?? false}
+          t={t}
+        />
+      </FaceGate>
       <QueueFace
         rows={queueRows}
         mutable={queueMutable}
@@ -630,7 +693,7 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
             onPickFiles={pickFiles}
             onError={showBanner}
             registerClose={registerMenuClose}
-            onOpen={closeCompletionPopups}
+            onOpen={handleMenuOpen}
           />
         </FaceGate>
         {/* Completion popups (typed triggers, T10): the `/` command+skill
@@ -673,6 +736,18 @@ export function MarkdownComposer({ useInput, inputActions, useProjection, t, ses
             t={t}
             locked={sessionId === undefined}
             onError={showBanner}
+          />
+        </FaceGate>
+        {/* Plan chip (tool row, issue #34): the native PlanChip seat the
+            takeover replaces, beside the access-mode select like the native
+            row. Projection-driven; the exit rides the command face, so both
+            surfaces gate the face — a probe miss hides the chip alone. */}
+        <FaceGate definition={planFaceDefinition(useProjection)}>
+          <PlanChipFace
+            useProjection={readPlanProjection}
+            sessionId={sessionId}
+            locked={sessionId === undefined}
+            t={t}
           />
         </FaceGate>
         {/* Action semantics: the button names the mode it switches TO. */}

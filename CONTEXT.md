@@ -79,3 +79,11 @@ _Avoid_: pending steering（指尚未入场的瞬态输入回显，宿主直渲�
 **停止臂（Stop arms）**:
 接管卡的发送/停止语义（#32，对齐原生 InputBar 的 `primaryStops`/`interruptible`）：普通会话运行中且草稿为空（或 owner 抬起 composer block）时主按钮切换为停止、点击经会话域 `cancel` 取消在飞回合并保留队列；可续子会话保留发送主钮、另设专属方形停止钮。cancel 动词缺席时按钮降为不可点，座位不消失。
 _Avoid_: 中断（宿主文案为「停止生成」）
+
+**计划 chip（Plan chip）**:
+接管卡工具行内重建的原生 PlanChip（#34，原生座位 `conversation.input.plan` 随 InputBar 被接管结构性消失）：读 `plan` 投影的折叠目标值显示（`pending ? !active : active`），点击经命令面执行原生 detached 行 `/plan off` 退出计划模式；投影或命令面缺席时整面隐藏，不降级为死按钮。
+_Avoid_: 计划按钮（原生是 chip 形态的座位，非普通按钮）
+
+**目标栏（Goal strip）**:
+接管卡内重建的原生 GoalDock（#34，原生 `conversation.input.dock` 的 goal 条目随回退栏被接管隐藏，位于排队消息栏之前）：持久态读 `goal` 投影，进程本地 activation 经宿主转发事件与活性读补足，编辑/暂停/继续/清除走宿主 `remote.goals` CAS 动词；动词面缺席时只降按钮不降可见性。
+_Avoid_: dock（是实现名，不是概念名）

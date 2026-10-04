@@ -29,6 +29,7 @@ import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
 import { installCommandSource } from './command-face.ts'
 import { installConversationSource } from './conversation-face.ts'
+import { installGoalSource } from './goal-face.ts'
 import { installPermissionSource } from './permission-face.ts'
 import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
 import { installSkillSource } from './skill-face.ts'
@@ -128,6 +129,11 @@ export function apply(ctx: ClientContext): void {
   // the page life and the tool row silently stays on the paperclip
   // fallback (real-device regression #29).
   installCommandSource(ctx)
+  // The goal strip (issue #34) reads the host `remote.goals` namespace the
+  // same lazy way — the CAS mutation verbs plus the live activation read —
+  // with the forwarded activation edges; without it the strip keeps
+  // rendering and its buttons shed alone.
+  installGoalSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // The vendored picker's copy is the verbatim ui-model-selection dictionary
   // under the plugin's own namespace; the bound translate rides

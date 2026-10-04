@@ -132,6 +132,177 @@
   color: color-mix(in srgb, currentColor 75%, transparent);
 }
 
+/* Plan chip (issue #34): the native PlanChip rebuilt (the takeover replaces
+   its `conversation.input.plan` seat with the whole tool row). Same compact
+   geometry as the sibling mode controls; the plan glyph at rest, the
+   circled close while hovered or keyboard-focused, marking the pending
+   click as turning plan mode off. */
+.planChipWrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.planChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  min-width: 34px;
+  border: none;
+  border-radius: var(--dsw-radius-sm, 6px);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  cursor: pointer;
+  background: var(--dsw-alias-state-business-tertiary, color-mix(in srgb, currentColor 10%, transparent));
+  color: var(--dsw-alias-state-business-primary, color-mix(in srgb, currentColor 80%, #2470ff));
+}
+
+.planChip:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-solid,
+    color-mix(in srgb, currentColor 16%, transparent));
+}
+
+.planChip:focus-visible {
+  outline: 2px solid var(--dsw-alias-state-business-primary,
+    color-mix(in srgb, currentColor 80%, #2470ff));
+  outline-offset: 2px;
+}
+
+.planChip:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.planChipGlyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: currentColor;
+}
+
+.planChipHoverGlyph,
+.planChip:hover:not(:disabled) .planChipRestGlyph,
+.planChip:focus-visible .planChipRestGlyph {
+  display: none;
+}
+
+.planChip:hover:not(:disabled) .planChipHoverGlyph,
+.planChip:focus-visible .planChipHoverGlyph {
+  display: block;
+}
+
+.planChipError {
+  color: var(--dsw-alias-state-error-primary, #d64545);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+/* Goal strip (issue #34): the native GoalBar rebuilt (the takeover hides
+   the whole `conversation.input.dock` strip with the fallback bar). One
+   quiet bar above the queue strip — the native dock order (goal 10, queue
+   20) — with the same row metrics as the queue rows. */
+.goal {
+  display: flex;
+}
+
+.goalBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 2px 6px;
+  border-radius: 8px;
+  font-size: 0.85em;
+}
+
+.goalGlyph {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.goalLabel {
+  flex: none;
+  font-weight: 500;
+}
+
+.goalObjective {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: color-mix(in srgb, currentColor 75%, transparent);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goalError {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-state-error-primary, #d64545);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goalInput {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 6px;
+  padding: 2px 6px;
+  font: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: transparent;
+  outline: none;
+}
+
+.goalInput:focus {
+  border-color: var(--dsw-alias-state-business-primary, color-mix(in srgb, currentColor 80%, #2470ff));
+}
+
+.goalActions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.goalAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 999px;
+  padding: 0;
+  background: transparent;
+  color: color-mix(in srgb, currentColor 65%, transparent);
+  cursor: pointer;
+}
+
+.goalAction:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+}
+
+.goalAction:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
 /* Queue strip (issue #30): the queued-message view the native composer
    keeps in its input dock, rebuilt in-card because the takeover hides the
    dock with the fallback bar. Quiet rows above the attachments rail. */

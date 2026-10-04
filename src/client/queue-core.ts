@@ -29,6 +29,12 @@ export interface QueueRow {
   readonly content: readonly QueueContentBlock[]
   /** Producer source; composer sends carry `kind: 'user'` plus `rpcId`. */
   readonly source?: { readonly kind?: string; readonly rpcId?: unknown }
+  /**
+   * Native wire field the runtime placeholder formula reads
+   * (`placement === 'queued'`, native InputBar's canSteerQueue); absent or
+   * foreign placements never qualify.
+   */
+  readonly placement?: string
 }
 
 /** One local submission echo (the session snapshot's `pendingSubmissions`). */

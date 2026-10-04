@@ -9,6 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { installConversationSource, setConversationSource } from '../src/client/conversation-face.ts'
+import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
+import { resetGoalFace } from '../src/client/goal-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
 import { resetFaces } from '../src/client/face.ts'
 import { en } from '../src/client/locales.ts'
@@ -76,6 +78,7 @@ function chainProps(overrides: {
   session?: Record<string, unknown> | undefined
   claim?: { readonly name: string; readonly token: string; readonly hint?: string }
   goal?: unknown
+  plan?: unknown
   queue?: readonly QueueRow[]
   inputActions?: Partial<Record<'setDraft' | 'submit', ReturnType<typeof vi.fn>>>
 } = {}): MarkdownComposerProps {
@@ -96,14 +99,20 @@ function chainProps(overrides: {
     queue: overrides.queue ?? [],
     claim: overrides.claim,
   }
+  const projectionValues: Record<string, unknown> = {
+    goal: overrides.goal ?? null,
+    plan: overrides.plan,
+  }
   return {
     matched: MARKDOWN_TAKEOVER,
     sessionId: 's1',
     session: overrides.session,
     useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
     inputActions: inputActions as unknown as MarkdownComposerProps['inputActions'],
-    useProjection: ((key: string, selector?: (value: unknown) => unknown) =>
-      selector?.(key === 'goal' ? overrides.goal ?? null : undefined)) as MarkdownComposerProps['useProjection'],
+    useProjection: ((key: string, selector?: (value: unknown) => unknown) => {
+      const value = key in projectionValues ? projectionValues[key] : undefined
+      return selector !== undefined ? selector(value) : value
+    }) as MarkdownComposerProps['useProjection'],
     t: ((key: keyof typeof en, params?: Record<string, string>) =>
       en[key].replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`)
     ) as unknown as MarkdownComposerProps['t'],
@@ -129,6 +138,8 @@ afterEach(() => {
   cleanup()
   setConversationSource(() => undefined)
   resetSkillFace()
+  resetCommandFace()
+  resetGoalFace()
   window.localStorage.clear()
   resetFaces()
   resetTakeoverDegradation()
@@ -902,5 +913,117 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     const banner = container.querySelector('[data-markdown-banner]')
     expect(banner?.textContent).toContain('停止失败')
     expect(banner?.textContent).toContain('session/cancel-failed')
+  })
+})
+
+describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issue #34)', () => {
+  const PLAN_ON = { active: true, pending: false }
+  const GOAL_SET = {
+    goal: { id: 'g1', revision: 1, objective: 'ship the release', phase: 'active', maxGoalRounds: 8 },
+  }
+
+  function planChip(): HTMLButtonElement | null {
+    return document.querySelector('button[data-markdown-plan-chip]')
+  }
+
+  function goalStrip(): HTMLElement | null {
+    return document.querySelector('[data-markdown-goal]')
+  }
+
+  function bindPlanCommands(execute: ReturnType<typeof vi.fn>): void {
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute }, remoteEvents: undefined,
+    }) as never)
+  }
+
+  it('mounts the plan chip in the tool row ahead of the mode toggle', () => {
+    bindPlanCommands(vi.fn())
+    const { getByText, container } = render(<MarkdownComposer {...chainProps({ plan: PLAN_ON })} />)
+    expect(planChip()).not.toBeNull()
+    expect(planChip()!.textContent).toContain(en['plan.chip.label'])
+    // Native row order: the plan chip sits in the leading modes cluster,
+    // ahead of the trailing controls (here: the mode toggle stands in — the
+    // permission pill's data plane is unbound and its face hides alone).
+    const modeButton = getByText(en['composer.mode.source'])
+    const row = planChip()!.closest('[class*="toolRow"]')
+    expect(row).not.toBeNull()
+    expect(container.querySelector('[data-markdown-surface]')).not.toBeNull()
+    const rowChildren = [...row!.children]
+    expect(rowChildren.indexOf(planChip()!.closest('[class*="planChipWrap"]') as HTMLElement))
+      .toBeLessThan(rowChildren.indexOf(modeButton))
+  })
+
+  it('renders no plan chip while plan mode is off or absent', () => {
+    bindPlanCommands(vi.fn())
+    const { unmount } = render(<MarkdownComposer {...chainProps()} />)
+    expect(planChip()).toBeNull()
+    unmount()
+    render(<MarkdownComposer {...chainProps({ plan: { active: false, pending: false } })} />)
+    expect(planChip()).toBeNull()
+  })
+
+  it('exits plan mode through the native detached line on chip click', async () => {
+    const execute = vi.fn(() => Promise.resolve({
+      ok: true, value: { result: { kind: 'success' } },
+    }))
+    bindPlanCommands(execute)
+    const { getByRole } = render(<MarkdownComposer {...chainProps({ plan: PLAN_ON })} />)
+    fireEvent.click(planChip()!)
+    await vi.waitFor(() => {
+      expect(execute).toHaveBeenCalledWith('s1', '/plan off', [])
+    })
+    // The card never degrades over a chip click.
+    expect(getByRole('button', { name: en['plan.chip.on.aria'] })).toBeInTheDocument()
+  })
+
+  it('renders the goal strip above the queue strip while a goal is set', () => {
+    const queue: readonly QueueRow[] = [
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
+    ]
+    const { container } = render(<MarkdownComposer {...chainProps({ goal: GOAL_SET, queue })} />)
+    const goal = goalStrip()
+    expect(goal).not.toBeNull()
+    expect(document.querySelector('[data-markdown-goal-objective]')?.textContent).toBe('ship the release')
+    // Native dock order: the goal bar precedes the queue strip in the card.
+    const queueStrip = container.querySelector('[data-markdown-queue]')
+    expect(queueStrip).not.toBeNull()
+    const position = goal!.compareDocumentPosition(queueStrip as Node)
+    expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('renders no goal strip without a goal', () => {
+    const { container } = render(<MarkdownComposer {...chainProps()} />)
+    expect(goalStrip()).toBeNull()
+    expect(container.querySelector('[data-markdown-queue]')).toBeNull()
+  })
+
+  it('swaps the placeholder to the plan copy while plan mode is on', () => {
+    bindPlanCommands(vi.fn())
+    render(<MarkdownComposer {...chainProps({ plan: PLAN_ON })} />)
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.plan'])
+  })
+
+  it('swaps the placeholder to the steer-queue copy while running with queued rows', () => {
+    const session = { running: true, subagent: null }
+    const queue: readonly QueueRow[] = [
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }], placement: 'queued' },
+    ]
+    render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
+    // Native ladder: steering a queue outranks plan mode.
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
+  })
+
+  it('keeps the plan placeholder when the queued rows carry no queued placement (native wire test)', () => {
+    const session = { running: true, subagent: null }
+    const queue: readonly QueueRow[] = [
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
+    ]
+    render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.plan'])
+  })
+
+  it('keeps the render-mode copy in the default arm', () => {
+    render(<MarkdownComposer {...chainProps()} />)
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.render'])
   })
 })
