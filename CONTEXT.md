@@ -87,3 +87,19 @@ _Avoid_: 计划按钮（原生是 chip 形态的座位，非普通按钮）
 **目标栏（Goal strip）**:
 接管卡内重建的原生 GoalDock（#34，原生 `conversation.input.dock` 的 goal 条目随回退栏被接管隐藏，位于排队消息栏之前）：持久态读 `goal` 投影，进程本地 activation 经宿主转发事件与活性读补足，编辑/暂停/继续/清除走宿主 `remote.goals` CAS 动词；动词面缺席时只降按钮不降可见性。
 _Avoid_: dock（是实现名，不是概念名）
+
+**工作区行（Workspace row）**:
+接管卡卡顶重建的原生 hero 工作区座位（#42，原生 `heroWorkspaceRow` 的 chip 与选择菜单随回退栏被接管隐藏）：标签走原生五级解析链（刚选定 → 占位 → 会话归属工作区 → cwd 桥 → 占位），选定 = 在该工作区复用或创建空白会话并切换；菜单无「添加工作区」行（directory-flow 洞在卡内必然未占）。
+_Avoid_: hero（指原生居中形态，接管卡不复刻）
+
+**工作区触发姿态（Workspace trigger posture）**:
+空白会话且解析不出工作区标签时接管卡的整卡形态（#42，原生 `cardWorkspaceTrigger` 的重建）：虚线内描边、不可输入、整卡为工作区选择的触发器；选定后恢复常态。
+_Avoid_: 禁用态（宿主语义是「前置 prerequisite」而非损坏）
+
+**Agent 预设（Agent preset）**:
+接管卡工作区行内重建的会话预设控件（#42，原生 hero 预设座位随回退栏被接管隐藏）：当前值读 `agentPreset` 会话投影、roster 读 `remote.agentPresets.list`、切换走同命名空间的 `select(sessionId, presetId)`（宿主对已开始会话的拒绝就地成横幅），切换成功后投影回读即新值；宿主 UI 包不在依赖树，形态按数据语义自建，数据面缺席整面隐藏。
+_Avoid_: Agent 模式（宿主概念是按预设组合成 Agent，不是开关）
+
+**上下文量表（Context meter）**:
+挂 `conversation.composer.dock` 重建的原生 ContextMeter（#43，随回退栏被接管隐藏，位于接管卡正下方、原生同位）：圆环 + 百分比，点开构成面板（系统/工具/对话启发式分段）；数据读 `contextPressure` 与 `contextBreakdown` 投影，缺任一或无容量不渲染。
+_Avoid_: 上下文进度条（形态是环，且面板是主体）
