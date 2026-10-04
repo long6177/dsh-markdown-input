@@ -13,3 +13,7 @@ The five canonical role labels are used as-is: `needs-triage`, `needs-info`, `re
 ### Domain docs
 
 Single-context layout: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Release publishing
+
+`npm publish` on the `0.2.0-alpha.x` line always carries two flags — official registry + `--tag latest` — plus the release-commit/checklist ritual and the post-publish lag checks (dist-tags CDN, npmmirror sync). See `docs/agents/release.md`.
