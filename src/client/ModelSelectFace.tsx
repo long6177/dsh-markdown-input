@@ -12,7 +12,11 @@
  * search field. Provider headings paint their background only while pinned
  * by scrolling. Clearing a query restores the full list and search focus.
  * Selecting restores trigger focus without a ring until the trigger loses focus
- * or the menu reopens. Model names match a case-insensitive ordered subsequence
+ * or the menu reopens — except on a chain-opened card (the `+` menu's model
+ * row, or a typed-trigger popup's), where a successful selection instead
+ * settles the chain (issue #36): the trigger token that opened it is consumed
+ * and focus returns to the editor, the host PopupSelectController's own tail.
+ * Model names match a case-insensitive ordered subsequence
  * within each provider group, ranked by
  * prefix, alignment score, then catalog order. Returning to the root pane
  * hands focus back to the cell that opened it. Data and submission ride the
@@ -47,7 +51,7 @@ import type {
 } from './model-face.ts'
 import { MODEL_NS, modelFaceHandle, modelLocale, modelSeatFace } from './model-face.ts'
 import type { SessionId } from './conversation-face.ts'
-import { registerChainPopup } from './chain-open.ts'
+import { registerChainPopup, type ChainPopupSettle } from './chain-open.ts'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
 import {
   IconCheckOutlineRegular, IconChevronDownOutlineRegular, IconChevronRightOutlineRegular, IconCloseFillRegular,
@@ -169,6 +173,9 @@ export function ModelSelect(
       // The portaled card is outside the trigger subtree; check both.
       if (rootRef.current?.contains(event.target as Node) === true) return
       if (menuRef.current?.contains(event.target as Node) === true) return
+      // A dismissal is not a settle: the chain token stays in the draft, and
+      // the unused hook is dropped so a later pill pick cannot fire it.
+      settleRef.current = null
       setOpen(false)
     }
     // Outside-dismiss on POINTERDOWN, not the upstream seat's mousedown: the
@@ -270,15 +277,23 @@ export function ModelSelect(
   // (subagent session, absent resolver) unregisters, hiding that menu row.
   // `show` is defined past the unavailable early return, so the registration
   // effect reads it through a render-refreshed ref.
-  const showRef = useRef<() => void>(() => {})
+  const showRef = useRef<(settle?: ChainPopupSettle) => void>(() => {})
   useEffect(() => {
     if (!available) return undefined
-    return registerChainPopup('model', () => { showRef.current(); return true })
+    return registerChainPopup('model', (settle) => { showRef.current(settle); return true })
   }, [available])
 
   if (!available) return null
 
-  const show = (): void => {
+  // The chain settle hook of THIS opening (issue #36): armed only by a
+  // chain open (a typed `/mo` → model row), invoked only after a successful
+  // selection. Every close path drops it unused, so a later direct pill pick
+  // can never consume a stale trigger token.
+  const settleRef = useRef<ChainPopupSettle | null>(null)
+
+  const show = (settle: ChainPopupSettle | null = null): void => {
+    // A direct pill open passes nothing: there is no draft token to settle.
+    settleRef.current = settle
     setSelectionFocus(false)
     triggerRef.current?.focus()
     setQuery('')
@@ -296,6 +311,8 @@ export function ModelSelect(
   }
 
   const close = (restoreFocus = false): void => {
+    // A dismissal is not a settle: the chain token stays in the draft.
+    settleRef.current = null
     setOpen(false)
     setPane('root')
     if (restoreFocus) queueMicrotask(() => { triggerRef.current?.focus() })
@@ -304,6 +321,26 @@ export function ModelSelect(
   const closeAfterSelection = (): void => {
     setSelectionFocus(true)
     close(true)
+  }
+
+  /**
+   * Close after a selection SUCCEEDED (issue #36). A pill-opened card keeps
+   * its trigger-focus restore. A chain-opened card must not: the successful
+   * settle consumes the trigger token and returns focus to the editor
+   * (native PopupSelectController.settle), so the card closes plainly and
+   * lets the hook own the focus. A consume CAS miss is benign — the hook
+   * still refocuses, and nothing is retried.
+   */
+  const settleSuccess = (): void => {
+    const settle = settleRef.current
+    settleRef.current = null
+    if (rootRef.current === null) return
+    if (settle === null) {
+      closeAfterSelection()
+      return
+    }
+    close()
+    settle()
   }
 
   const drill = (next: Pane): void => {
@@ -408,9 +445,11 @@ export function ModelSelect(
   const settleSelection = (result: Awaited<ReturnType<ModelSelectInjected['select']>>): void => {
     if (result === undefined) return
     if (result.ok) {
-      if (rootRef.current !== null) closeAfterSelection()
+      settleSuccess()
       return
     }
+    // Failure: the card stays open with the error toast, the draft token is
+    // untouched, and the chain hook stays armed for the retry.
     const { error } = result
     toastSeq.current += 1
     setToast({
@@ -431,7 +470,9 @@ export function ModelSelect(
 
   const choose = (selection: ModelSelection): void => {
     if (state.current?.provider === selection.provider && state.current.model === selection.model) {
-      closeAfterSelection()
+      // The value in use is a settled pick too (no write): a chained open
+      // still consumes its trigger token.
+      settleSuccess()
       return
     }
     submit(selection)
@@ -440,7 +481,7 @@ export function ModelSelect(
   const chooseEffort = (effort: string | undefined): void => {
     if (state.current === null) return
     if (effectiveEffort === effort) {
-      closeAfterSelection()
+      settleSuccess()
       return
     }
     const selection: ModelSelection = {

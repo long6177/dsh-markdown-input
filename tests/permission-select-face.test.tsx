@@ -8,7 +8,7 @@
  * confirmation, a failed write reverts the display.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import {
   displayPermissionPreset, PermissionSelectFace,
   type PermissionSelectFaceProps,
@@ -16,6 +16,7 @@ import {
 import {
   permissionFaceDefinition, resetPermissionFace, setPermissionSource,
 } from '../src/client/permission-face.ts'
+import { openChainPopup, resetChainPopups } from '../src/client/chain-open.ts'
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
 import { en } from '../src/client/locales.ts'
@@ -101,6 +102,7 @@ afterEach(() => {
   cleanup()
   resetPermissionFace()
   resetFaces()
+  resetChainPopups()
 })
 
 describe('PermissionSelectFace pill', () => {
@@ -305,6 +307,133 @@ describe('PermissionSelectFace full-access gate', () => {
     expect(confirm).not.toBeUndefined()
     fireEvent.click(confirm)
     await waitFor(() => expect(command).toHaveBeenCalledWith('/permission auto'))
+  })
+})
+
+describe('PermissionSelectFace chain settle (#36)', () => {
+  /**
+   * Chain-open the popup the way a typed trigger does: through the registry
+   * the face registered, handing over the settle hook (`/per` → permission
+   * row). The `+` menu's chain passes none.
+   */
+  async function chainOpenPopup(settle?: () => void): Promise<void> {
+    await act(async () => { expect(openChainPopup('permission', settle)).toBe(true) })
+    await waitFor(() => expect(document.body.querySelector('[role="menu"]')).not.toBeNull())
+  }
+
+  it('an admitted chain write settles the hook once', async () => {
+    const settle = vi.fn()
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: true } }))
+    mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup(settle)
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => expect(command).toHaveBeenCalledWith('/permission read-only'))
+    await waitFor(() => expect(settle).toHaveBeenCalledTimes(1))
+  })
+
+  it('picking the value in use is a settled pick too: the hook fires without a write', async () => {
+    const settle = vi.fn()
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: true } }))
+    mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup(settle)
+    // Row 1 is the current workspace-write preset.
+    fireEvent.click(menuRows()[1] as HTMLElement)
+    await waitFor(() => expect(settle).toHaveBeenCalledTimes(1))
+    expect(command).not.toHaveBeenCalled()
+  })
+
+  it('a failed write never settles, and the dropped hook cannot fire on a later pill pick', async () => {
+    const settle = vi.fn()
+    const command = vi.fn()
+      .mockResolvedValueOnce({ ok: false, error: { code: 'permission/unknown', message: 'no' } })
+      .mockResolvedValueOnce({ ok: true, value: { matched: true } })
+    const { onError } = mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup(settle)
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+    // Failure: the token stays in the draft, and the unused hook is dropped —
+    // a direct pill pick afterwards must not settle the stale chain.
+    expect(settle).not.toHaveBeenCalled()
+    fireEvent.click(pill())
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(pill()).not.toBeDisabled())
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  it('an unmatched write latches the face off without settling', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const settle = vi.fn()
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: false } }))
+    mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup(settle)
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => expect(pill()).toBeNull())
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  it('Escape is a dismissal: the hook is dropped and a later pill pick does not settle', async () => {
+    const settle = vi.fn()
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: true } }))
+    mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup(settle)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(document.body.querySelector('[role="menu"]')).toBeNull())
+    // A direct pill pick afterwards is a plain selection: nothing settles.
+    fireEvent.click(pill())
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(pill()).not.toBeDisabled())
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  it('the full-access risk gate continues the chain: acknowledge + confirm settles', async () => {
+    const settle = vi.fn()
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: true } }))
+    mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup(settle)
+    fireEvent.click(menuRows()[2] as HTMLElement)
+    // The gate is a continuation, not a dismissal: the hook stays armed.
+    expect(settle).not.toHaveBeenCalled()
+    fireEvent.click(document.body.querySelector('input[type="checkbox"]') as HTMLElement)
+    const confirm = [...document.body.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Enable Full access') as HTMLButtonElement
+    fireEvent.click(confirm)
+    await waitFor(() => expect(command).toHaveBeenCalledWith('/permission danger-full-access'))
+    await waitFor(() => expect(settle).toHaveBeenCalledTimes(1))
+  })
+
+  it('cancelling the risk gate drops the hook without settling', async () => {
+    const settle = vi.fn()
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: true } }))
+    mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup(settle)
+    fireEvent.click(menuRows()[2] as HTMLElement)
+    const cancel = [...document.body.querySelectorAll('button')]
+      .find((button) => button.textContent === 'Cancel') as HTMLButtonElement
+    fireEvent.click(cancel)
+    // The cancelled chain must not settle on a later direct pill pick either.
+    fireEvent.click(pill())
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => expect(command).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(pill()).not.toBeDisabled())
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  it('a chain with no token (the `+` menu) admits the write with nothing to settle', async () => {
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: true } }))
+    mountFace({ sessions: new Map([['s1', { command }]]) })
+    await whenPill()
+    await chainOpenPopup()
+    fireEvent.click(menuRows()[0] as HTMLElement)
+    await waitFor(() => expect(command).toHaveBeenCalledWith('/permission read-only'))
   })
 })
 

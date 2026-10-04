@@ -9,10 +9,14 @@
  * full access (and a future auto) passes the risk-confirmation gate, and a
  * switch writes `/permission <preset>` with no optimistic commit — the
  * pushed projection frame is the one confirmation, so a failed write
- * reverts the display. The face mounts inside its FaceGate: a probe miss or
- * a mid-life degrade hides this face alone, never the card.
+ * reverts the display. An admitted write on a chain-opened popup also
+ * settles the chain (issue #36): the trigger token a typed `/per` opened it
+ * from is consumed and focus returns to the editor; dismissals, cancellations
+ * and failures leave the token in the draft. The face mounts inside its
+ * FaceGate: a probe miss or a mid-life degrade hides this face alone, never
+ * the card.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   IconChevronDownOutlineRegular, Menu, PermissionIconFullAccessRegular,
@@ -21,7 +25,7 @@ import {
 import type { MenuEntry } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { useObservable, type SessionId } from './conversation-face.ts'
-import { registerChainPopup } from './chain-open.ts'
+import { registerChainPopup, type ChainPopupSettle } from './chain-open.ts'
 import { en, NS, type ComposerKey } from './locales.ts'
 import {
   permissionFace, permissionFaceHandle,
@@ -133,6 +137,11 @@ export function PermissionSelectFace({
   const [open, setOpen] = useState(false)
   const [confirmation, setConfirmation] = useState<string | null>(null)
   const [acknowledged, setAcknowledged] = useState(false)
+  // The chain settle hook of THIS opening (issue #36): armed only by a chain
+  // open (a typed `/per` → permission row), invoked only after an admitted
+  // write. Dismissals and failures drop it unused, so a later direct pill
+  // pick can never consume a stale trigger token.
+  const settleRef = useRef<ChainPopupSettle | null>(null)
 
   // The process catalog loads when a pill first wants to exist; the face's
   // invalidation subscription re-reads on catalog changes.
@@ -143,10 +152,13 @@ export function PermissionSelectFace({
   }, [permission])
 
   // Session loss, catalog loss, or a confirmed option the catalog no longer
-  // carries retract the popup and the pending confirmation (host parity).
+  // carries retract the popup and the pending confirmation (host parity) —
+  // and with them any unconsumed chain settle hook: the trigger token stays
+  // in the draft.
   useEffect(() => {
     if (!locked && selection !== undefined && catalog !== null
       && (confirmation === null || catalog.options.some((option) => option.value === confirmation))) return
+    settleRef.current = null
     setOpen(false)
     setAcknowledged(false)
     setConfirmation(null)
@@ -155,10 +167,17 @@ export function PermissionSelectFace({
   // Chain-open seam for the `+` command menu (tool row ①): while this popup
   // face is alive and rendering UI the menu's permission row chains into it;
   // a probe miss or a mid-life degrade unregisters, hiding that menu row.
+  // The opener also arms the caller's settle hook (#36) for the popup's
+  // lifetime: a successful write consumes the token a typed trigger opened
+  // the chain from; the `+` menu passes none.
   const canChain = !degraded && permission !== undefined && selection !== undefined && catalog !== null
   useEffect(() => {
     if (!canChain) return undefined
-    return registerChainPopup('permission', () => { setOpen(true); return true })
+    return registerChainPopup('permission', (settle) => {
+      settleRef.current = settle ?? null
+      setOpen(true)
+      return true
+    })
   }, [canChain])
 
   if (degraded || permission === undefined || selection === undefined || catalog === null) return null
@@ -196,6 +215,18 @@ export function PermissionSelectFace({
     }
   })
 
+  /**
+   * Hand the pending chain settle hook its success (issue #36): the
+   * chain-opened popup consumes the draft token that opened it and returns
+   * focus to the editor (native PopupSelectController.settle tail). A direct
+   * pill open has no hook and does nothing.
+   */
+  const settleSuccess = (): void => {
+    const settle = settleRef.current
+    settleRef.current = null
+    settle?.()
+  }
+
   function submit(id: string): void {
     if (sessionId === undefined) return
     setPick(id)
@@ -204,9 +235,16 @@ export function PermissionSelectFace({
         if (result.kind === 'unmatched') {
           // The command surface is gone mid-life: latch the face off and
           // hide the pill on the next frame (FaceGate honors the verdict).
+          // Nothing was written, so the chain token stays in the draft.
+          settleRef.current = null
           face?.degrade('the host offers no /permission command')
         } else if (result.kind === 'failed') {
+          // Host refusal: no consumption, and the popup is already gone —
+          // drop the hook so a later pill pick cannot settle this token.
+          settleRef.current = null
           onError(t('permission.switchFailed', { message: result.message }))
+        } else {
+          settleSuccess()
         }
       })
       .finally(() => { setPick(null) })
@@ -214,8 +252,15 @@ export function PermissionSelectFace({
 
   const choose = (id: string): void => {
     setOpen(false)
-    if (id === selection.currentValue) return
+    if (id === selection.currentValue) {
+      // The value in use is a settled pick too (no write): a chained open
+      // still consumes its trigger token.
+      settleSuccess()
+      return
+    }
     if (id === FULL_ACCESS || id === AUTO_REVIEW) {
+      // The risk gate is a continuation, not a dismissal: the hook stays
+      // armed for the confirmed write.
       setAcknowledged(false)
       setConfirmation(id)
       return
@@ -223,7 +268,17 @@ export function PermissionSelectFace({
     submit(id)
   }
 
+  /**
+   * Cancel the risk gate: a dismissal, so the chain settle hook is dropped
+   * unused and the trigger token stays in the draft.
+   */
   const closeConfirmation = (): void => {
+    settleRef.current = null
+    clearConfirmation()
+  }
+
+  /** Retract the risk gate without touching the pending chain settle (confirm path). */
+  const clearConfirmation = (): void => {
     setAcknowledged(false)
     setConfirmation(null)
   }
@@ -240,7 +295,12 @@ export function PermissionSelectFace({
         items={items}
         selectedId={currentValue}
         onSelect={choose}
-        onClose={() => { setOpen(false) }}
+        onClose={() => {
+          // Escape / outside pointerdown / blur close the popup plainly: the
+          // chain token stays in the draft and the unused hook is dropped.
+          settleRef.current = null
+          setOpen(false)
+        }}
         side="top"
         portal
         anchor={
@@ -251,7 +311,11 @@ export function PermissionSelectFace({
             aria-label={t('permission.mode', { name: currentAccessibleLabel })}
             title={current === undefined ? undefined : optionDescription(current, t)}
             disabled={locked || busy}
-            onClick={() => { setOpen(!open) }}
+            onClick={() => {
+              // A direct pill open is never a chain open: no hook to settle.
+              settleRef.current = null
+              setOpen(!open)
+            }}
           >
             {currentGlyph !== undefined && (
               <span className={css.triggerIcon} aria-hidden>{currentGlyph}</span>
@@ -287,7 +351,9 @@ export function PermissionSelectFace({
           onCancel={closeConfirmation}
           onConfirm={() => {
             const id = confirmation
-            closeConfirmation()
+            // Confirming is the settle, not a dismissal: the pending chain
+            // hook stays armed across the write (only cancel drops it).
+            clearConfirmation()
             if (id !== null) submit(id)
           }}
         />

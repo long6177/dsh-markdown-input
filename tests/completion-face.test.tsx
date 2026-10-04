@@ -11,7 +11,10 @@
  * demands (insert → dictionary hit → chip) plus the #28 real-surface
  * dispatch regression: the claim guard reads the probe's token position
  * (mouse and key paths), a declined chain-open never silences the token,
- * and the model row chains into the real vendored ModelSelect face.
+ * and the model row chains into the real vendored ModelSelect face. The
+ * chain settle (#36) is pinned end to end here too: a successful chained
+ * pick consumes the typed trigger and refocuses the editor, while failures,
+ * dismissals and direct pill picks leave the draft alone.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
@@ -24,12 +27,23 @@ import { createMarkdownEditor, type CompletionProbeListener, type MarkdownEditor
 import type { CompletionProbe } from '../src/client/completion-core.ts'
 import { ModelSelectFace } from '../src/client/ModelSelectFace.tsx'
 import { modelFaceDefinition, resetModelFace, setModelLocale, setModelSource, type ModelDirectoryState } from '../src/client/model-face.ts'
+import {
+  PermissionSelectFace, type PermissionSelectFaceProps,
+} from '../src/client/PermissionSelectFace.tsx'
+import {
+  permissionFaceDefinition, resetPermissionFace, setPermissionSource,
+} from '../src/client/permission-face.ts'
 import { registerChainPopup, resetChainPopups } from '../src/client/chain-open.ts'
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
 import { en, zh } from '../src/client/locales.ts'
 import { zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
 
+// jsdom does not implement scrollIntoView; the chained model card's drilled
+// pane scrolls its highlighted row on open (mirrors model-select-face.test).
+if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+  Element.prototype.scrollIntoView = function scrollIntoView(): void {}
+}
 function fakeT(locale: Record<string, string>): CompletionFaceProps['t'] {
   return ((key: string, params?: Record<string, string>) => {
     const template = locale[key] ?? key
@@ -50,7 +64,11 @@ function stubEditor() {
   const editor = {
     focus: vi.fn(),
     claimSelection: vi.fn(),
-    view: { dispatch },
+    // An empty document double: the chain settle hook (#36) snapshots the
+    // picked token through `view.state.doc` (a real editor always carries
+    // one). The synthetic picks therefore settle as a benign CAS miss; the
+    // real consume is driven end to end over a real editor below.
+    view: { dispatch, state: { doc: { length: 0, sliceString: () => '' } } },
     setMenuKeyHandler: vi.fn(),
     setCompletionKeyHandler: vi.fn((handler: MenuKeyHandler | null) => { completionHandler = handler }),
     setCompletionProbeListener: vi.fn((listener: CompletionProbeListener | null) => { probeListener = listener }),
@@ -169,6 +187,7 @@ afterEach(() => {
   resetSkillFace()
   resetFileReferenceFace()
   resetModelFace()
+  resetPermissionFace()
   resetChainPopups()
   resetFaces()
 })
@@ -734,6 +753,250 @@ describe('CompletionFace model row chains into the real model face (#28)', () =>
       })
       expect(load).toHaveBeenCalled()
       expect(listbox()).toBeNull()
+    } finally {
+      handle.destroy()
+    }
+  })
+})
+
+/** The portaled second-layer card (the model card's root pane is a labeled menu). */
+function chainCard(): HTMLElement | null {
+  return document.body.querySelector('[role="menu"][aria-label]')
+}
+
+/** The tool-row model pill (the direct, token-free open). */
+function modelPill(): HTMLElement {
+  return document.querySelector('button[aria-haspopup="menu"]') as HTMLElement
+}
+
+describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
+  /** The model directory the chain harness serves: two providers, one model each. */
+  function chainState(): ModelDirectoryState {
+    return {
+      current: { provider: 'deepseek-account', model: 'deepseek-chat' },
+      routable: true,
+      groups: [
+        {
+          id: 'deepseek-account',
+          name: 'DeepSeek 账号',
+          models: [{ id: 'deepseek-chat', name: 'DeepSeek-V41-Flash' }],
+        },
+        { id: 'openai', name: 'OpenAI', models: [{ id: 'gpt', name: 'GPT-5' }] },
+      ],
+      failures: [],
+      status: 'ready',
+      pending: null,
+      error: null,
+    }
+  }
+
+  /**
+   * The #28 harness with a controllable selection result: the real vendored
+   * model face mounted beside the popup face over a real editor, so the whole
+   * chain (`/mo` → model row → model card → pick) runs on real surfaces.
+   */
+  function mountModelChain(
+    select?: ReturnType<typeof vi.fn>,
+  ): { handle: MarkdownEditorHandle; select: ReturnType<typeof vi.fn> } {
+    stubSources()
+    const state = chainState()
+    const selectVerb = select ?? vi.fn(() => Promise.resolve({ ok: true, value: undefined }))
+    setModelSource(() => ({
+      directoryFor: vi.fn(() => ({
+        store: { subscribe: () => () => {}, getSnapshot: () => state },
+        load: vi.fn(() => Promise.resolve(state)),
+        select: selectVerb,
+      })),
+    }))
+    setModelLocale(fakeT(modelZh) as never)
+    const handle = mountRealEditor()
+    mountOverRealEditor(
+      handle,
+      <FaceGate definition={modelFaceDefinition()}>
+        <ModelSelectFace sessionId={'s1' as never} locked={false} subagent={null} />
+      </FaceGate>,
+    )
+    return { handle, select: selectVerb }
+  }
+
+  /** Pick the chainable model row through the full pointer sequence of a click. */
+  function chainIntoModelCard(): void {
+    const model = options().find((row) => row.getAttribute('data-completion-option') === 'model')!
+    fireEvent.pointerDown(model)
+    fireEvent.mouseDown(model)
+    fireEvent.mouseUp(model)
+    fireEvent.click(model)
+  }
+
+  /** Drill the open model card into its model list and pick one row there. */
+  async function pickModelInCard(title: string): Promise<void> {
+    await waitFor(() => expect(chainCard()).not.toBeNull())
+    // The drill switches the card's own role ('menu' → 'group'), so the rows
+    // are reached through the pane, not through `chainCard()`'s selector.
+    fireEvent.click(chainCard()!.querySelector('[role="menuitem"]') as HTMLElement)
+    await waitFor(() => expect(document.body.querySelectorAll('[role="menuitemradio"]').length).toBe(2))
+    const row = ([...document.body.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[])
+      .find((candidate) => candidate.textContent?.includes(title)) as HTMLElement
+    fireEvent.click(row)
+  }
+
+  it('removes the typed trigger and refocuses the editor when the chained pick succeeds', async () => {
+    const { handle, select } = mountModelChain()
+    try {
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      chainIntoModelCard()
+      await waitFor(() => expect(chainCard()).not.toBeNull())
+      // The card is open and the token is untouched: only a SUCCESSFUL
+      // selection consumes it.
+      expect(handle.getText()).toBe('/mo')
+      await pickModelInCard('GPT-5')
+      await waitFor(() => expect(select).toHaveBeenCalledOnce())
+      await waitFor(() => expect(handle.getText()).toBe(''))
+      expect(handle.view.hasFocus).toBe(true)
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('keeps the typed trigger when the chained selection is refused', async () => {
+    const select = vi.fn(() => Promise.resolve({
+      ok: false, error: { code: 'session/writer-held', message: 'held' },
+    }))
+    const { handle } = mountModelChain(select)
+    try {
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      chainIntoModelCard()
+      await pickModelInCard('GPT-5')
+      await waitFor(() => expect(select).toHaveBeenCalledOnce())
+      await waitFor(() => expect(document.body.textContent).toContain(modelZh['error.sessionInUse']))
+      expect(handle.getText()).toBe('/mo')
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('keeps the typed trigger when the chain is dismissed with Escape', async () => {
+    const { handle } = mountModelChain()
+    try {
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      chainIntoModelCard()
+      await waitFor(() => expect(chainCard()).not.toBeNull())
+      fireEvent.keyDown(chainCard()!, { key: 'Escape' })
+      await waitFor(() => expect(chainCard()).toBeNull())
+      expect(handle.getText()).toBe('/mo')
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('keeps the typed trigger when the chain is dismissed by an outside press', async () => {
+    const { handle } = mountModelChain()
+    try {
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      chainIntoModelCard()
+      await waitFor(() => expect(chainCard()).not.toBeNull())
+      fireEvent.pointerDown(document.body)
+      await waitFor(() => expect(chainCard()).toBeNull())
+      expect(handle.getText()).toBe('/mo')
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('a direct pill pick leaves the draft alone, even after a dismissed chain', async () => {
+    const { handle, select } = mountModelChain()
+    try {
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      chainIntoModelCard()
+      await waitFor(() => expect(chainCard()).not.toBeNull())
+      // Dismiss the chain: its unused settle hook dies with the card, so the
+      // later direct pick cannot consume the stale trigger token.
+      fireEvent.pointerDown(document.body)
+      await waitFor(() => expect(chainCard()).toBeNull())
+      fireEvent.click(modelPill())
+      await pickModelInCard('GPT-5')
+      await waitFor(() => expect(select).toHaveBeenCalledOnce())
+      await waitFor(() => expect(chainCard()).toBeNull())
+      expect(handle.getText()).toBe('/mo')
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('a CAS miss is benign: a draft rewritten under the card is not re-deleted, focus still returns', async () => {
+    const { handle } = mountModelChain()
+    try {
+      await act(async () => { handle.setText('/mo') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      chainIntoModelCard()
+      await waitFor(() => expect(chainCard()).not.toBeNull())
+      // The draft moved on while the card was open (a seeded draft, a session
+      // switch): the pick-time span no longer carries the snapshot.
+      await act(async () => { handle.setText('hello /mo') })
+      await pickModelInCard('GPT-5')
+      await waitFor(() => expect(handle.view.hasFocus).toBe(true))
+      expect(handle.getText()).toBe('hello /mo')
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('the permission chain has the same semantics: an admitted preset write consumes /per', async () => {
+    stubSources()
+    const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: true } }))
+    setPermissionSource(() => ({
+      presets: {
+        catalog: vi.fn(() => Promise.resolve({
+          ok: true,
+          value: {
+            options: [
+              { value: 'read-only', name: 'read-only' },
+              { value: 'workspace-write', name: 'workspace-write' },
+            ],
+          },
+        })),
+      },
+      remoteEvents: { $on: vi.fn(() => () => {}) },
+      sessions: { binding: () => ({ session: { command } }) },
+    }))
+    const useProjection = (() => ({ currentValue: 'workspace-write' })) as unknown as
+      PermissionSelectFaceProps['useProjection']
+    const handle = mountRealEditor()
+    mountOverRealEditor(
+      handle,
+      <FaceGate definition={permissionFaceDefinition(useProjection)}>
+        <PermissionSelectFace
+          useProjection={useProjection}
+          sessionId={'s1' as never}
+          t={tZh}
+          locked={false}
+          onError={() => {}}
+        />
+      </FaceGate>,
+    )
+    try {
+      // The catalog read must land first: the face registers its chain opener
+      // only while it is alive and rendering UI.
+      await waitFor(() => expect(document.querySelector('button[data-permission-pill]')).not.toBeNull())
+      await act(async () => { handle.setText('/per') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      const row = options().find((candidate) => candidate.getAttribute('data-completion-option') === 'permission')!
+      fireEvent.mouseDown(row)
+      const menu = await waitFor(() => {
+        const found = document.body.querySelector('[role="menu"]')
+        expect(found).not.toBeNull()
+        return found as HTMLElement
+      })
+      expect(handle.getText()).toBe('/per')
+      fireEvent.click(menu.querySelector('[role="menuitem"]') as HTMLElement)
+      await waitFor(() => expect(command).toHaveBeenCalledWith('/permission read-only'))
+      await waitFor(() => expect(handle.getText()).toBe(''))
+      expect(handle.view.hasFocus).toBe(true)
     } finally {
       handle.destroy()
     }

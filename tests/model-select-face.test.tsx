@@ -11,10 +11,11 @@
  * of the card.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
+import { openChainPopup, resetChainPopups } from '../src/client/chain-open.ts'
 import {
   modelFaceDefinition, modelSeatFace, MODEL_NS, resetModelFace, setModelLocale,
   setModelSource, type ModelDirectoryState,
@@ -155,6 +156,7 @@ afterEach(() => {
   cleanup()
   resetModelFace()
   resetFaces()
+  resetChainPopups()
   t.mockClear()
 })
 
@@ -447,6 +449,120 @@ describe('failure surfaces', () => {
     await waitFor(() => expect(document.body.textContent).toContain('Anthropic'))
     // Usable groups still list their models.
     await waitFor(() => expect(document.body.querySelectorAll('[role="menuitemradio"]').length).toBe(3))
+  })
+})
+
+describe('chain settle (#36)', () => {
+  /**
+   * Open the card the way a chain does: through the registry the seat
+   * registered, handing over the settle hook a typed trigger token built
+   * (`/mo` → model row). The `+` menu's `query: ''` chain passes none.
+   */
+  async function chainOpenCard(settle?: () => void): Promise<void> {
+    await act(async () => { expect(openChainPopup('model', settle)).toBe(true) })
+    await waitFor(() => expect(openCard()).not.toBeNull())
+  }
+
+  function radioRow(title: string): HTMLElement {
+    const row = ([...document.body.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[])
+      .find((candidate) => candidate.textContent?.includes(title))
+    if (row === undefined) throw new Error(`no model row titled ${title}`)
+    return row
+  }
+
+  /** Drill from the root pane into the provider-grouped model list and pick there. */
+  async function pickModel(title: string): Promise<void> {
+    fireEvent.click(menuRows(openCard())[0] as HTMLElement)
+    await waitFor(() => expect(document.body.querySelectorAll('[role="menuitemradio"]').length).toBe(3))
+    fireEvent.click(radioRow(title))
+  }
+
+  it('a successful chain pick settles the hook and still closes the card', async () => {
+    const settle = vi.fn()
+    const { directory } = mountFace()
+    await chainOpenCard(settle)
+    await pickModel('GPT-5')
+    await waitFor(() => expect(directory.select).toHaveBeenCalledOnce())
+    await waitFor(() => expect(settle).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(openCard()).toBeNull())
+  })
+
+  it('picking the value in use is a settled pick too: the hook fires without a write', async () => {
+    const settle = vi.fn()
+    const { directory } = mountFace()
+    await chainOpenCard(settle)
+    // The checked row is the current provider/model pair; the same-route pick
+    // writes nothing but still settles the chain.
+    await pickModel('DeepSeek-V41-Flash')
+    await waitFor(() => expect(settle).toHaveBeenCalledTimes(1))
+    expect(directory.select).not.toHaveBeenCalled()
+    await waitFor(() => expect(openCard()).toBeNull())
+  })
+
+  it('a rejected selection keeps the token (no settle) and re-arms the hook for the retry', async () => {
+    const settle = vi.fn()
+    const select = vi.fn()
+      .mockResolvedValueOnce({ ok: false, error: { code: 'session/writer-held', message: 'held' } })
+      .mockResolvedValueOnce({ ok: true, value: undefined })
+    mountFace({ select })
+    await chainOpenCard(settle)
+    await pickModel('GPT-5')
+    await waitFor(() => expect(document.body.textContent).toContain(modelZh['error.sessionInUse']))
+    // Failure: the token stays in the draft and the card stays open to retry.
+    expect(settle).not.toHaveBeenCalled()
+    expect(openCard()).not.toBeNull()
+    fireEvent.click(radioRow('GPT-5'))
+    await waitFor(() => expect(settle).toHaveBeenCalledTimes(1))
+  })
+
+  it('Escape drops the unused hook: a later pill pick never settles a stale token', async () => {
+    const settle = vi.fn()
+    mountFace()
+    await chainOpenCard(settle)
+    fireEvent.keyDown(openCard(), { key: 'Escape' })
+    await waitFor(() => expect(openCard()).toBeNull())
+    // The user opens the card directly (the pill) and picks: no chain, no
+    // consumption — the stale hook died with the dismissed chain.
+    fireEvent.click(trigger())
+    await waitFor(() => expect(openCard()).not.toBeNull())
+    await pickModel('GPT-5')
+    await waitFor(() => expect(openCard()).toBeNull())
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  it('an outside pointerdown drops the hook the same way', async () => {
+    const settle = vi.fn()
+    mountFace()
+    await chainOpenCard(settle)
+    fireEvent.pointerDown(document.body)
+    await waitFor(() => expect(openCard()).toBeNull())
+    fireEvent.click(trigger())
+    await waitFor(() => expect(openCard()).not.toBeNull())
+    await pickModel('GPT-5')
+    await waitFor(() => expect(openCard()).toBeNull())
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  it('a dismissal racing the write revokes the settle (no consume on late success)', async () => {
+    let releaseSelect: ((value: unknown) => void) | undefined
+    const select = vi.fn(() => new Promise((resolve) => { releaseSelect = resolve }))
+    const settle = vi.fn()
+    mountFace({ select })
+    await chainOpenCard(settle)
+    await pickModel('GPT-5')
+    await waitFor(() => expect(select).toHaveBeenCalledOnce())
+    fireEvent.pointerDown(document.body)
+    await waitFor(() => expect(openCard()).toBeNull())
+    await act(async () => { releaseSelect?.({ ok: true, value: undefined }) })
+    expect(settle).not.toHaveBeenCalled()
+  })
+
+  it('a chain with no token (the `+` menu) closes on success with nothing to settle', async () => {
+    const { directory } = mountFace()
+    await chainOpenCard()
+    await pickModel('GPT-5')
+    await waitFor(() => expect(directory.select).toHaveBeenCalledOnce())
+    await waitFor(() => expect(openCard()).toBeNull())
   })
 })
 

@@ -25,6 +25,11 @@
  * bare re-track of that same token stays closed until the text changes. A
  * drill deliberately skips the memory: its open token re-tracks into the
  * descended listing.
+ *
+ * A chained popup row hands the second-layer face the settle hook of the
+ * token that opened it (issue #36): a successful selection there consumes
+ * `/mo` and returns focus to the editor (host PopupSelectController.settle
+ * semantics). Dismissals and failures leave the token in the draft.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, RefObject } from 'react'
@@ -32,7 +37,7 @@ import { createPortal } from 'react-dom'
 import { MenuSurface, ReferenceIconRegular, useAnchoredMaxHeight } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import { useObservable, type SessionId } from './conversation-face.ts'
-import { hasChainPopup, openChainPopup } from './chain-open.ts'
+import { hasChainPopup, openChainPopup, type ChainPopupSettle } from './chain-open.ts'
 import { commandFace, commandFaceSupported } from './command-face.ts'
 import { assembleCommandRows, reportExecute } from './command-rows.ts'
 import {
@@ -119,6 +124,40 @@ interface LandedFiles {
   readonly sessionId: SessionId
   readonly query: string
   readonly results: readonly FileReferenceCandidate[]
+}
+
+/**
+ * Build the settle hook of one chain open (issue #36) for a popup row picked
+ * while `probe` was live: the trigger token segment is snapshotted here and
+ * consumed later, only if a second-layer selection succeeds. The host
+ * `PopupSelectController.settle` tail is the model — consume the open-time
+ * token segment, then return focus to the composer.
+ *
+ * The consume is a text-level CAS, the CM6 analogue of the host's draftRev
+ * guard: the span is deleted only while the document still carries exactly
+ * the snapshotted token there (and the span is non-empty). A false answer is
+ * benign and never retried — the draft simply keeps whatever it now holds —
+ * but focus still returns to the editor: a native settle always focuses the
+ * composer, whatever the CAS decided.
+ * @param handle - the composer editor the token lives in.
+ * @param probe - the live trigger token at pick time.
+ * @returns the settle hook handed to the chained popup face.
+ */
+function chainSettle(handle: MarkdownEditorHandle, probe: CompletionProbe): ChainPopupSettle {
+  const token = handle.view.state.doc.sliceString(probe.start, probe.end)
+  const { start, end } = probe
+  return () => {
+    const doc = handle.view.state.doc
+    if (start < end && end <= doc.length && doc.sliceString(start, end) === token) {
+      // An ordinary transaction: the probe seam and the chip decorations
+      // observe a normal document change, and the deletion is one undo step.
+      handle.view.dispatch({
+        changes: { from: start, to: end },
+        selection: { anchor: start },
+      })
+    }
+    handle.focus()
+  }
 }
 
 /**
@@ -327,13 +366,18 @@ export function CompletionFace({
             })
           }
           return
-        case 'popup':
+        case 'popup': {
           // Settle the memory only when the chained popup actually opened: a
           // mid-life opener death must not silence the live token for good.
-          if (option.row.popup !== undefined && openChainPopup(option.row.popup)) {
+          // The settle hook is snapshotted from the live token (issue #36) and
+          // forgotten with a declined open: the popup never held it.
+          if (option.row.popup === undefined) return
+          const settle = editorHandle === null ? undefined : chainSettle(editorHandle, current)
+          if (openChainPopup(option.row.popup, settle)) {
             dismissedRef.current = current
           }
           return
+        }
       }
       return
     }
