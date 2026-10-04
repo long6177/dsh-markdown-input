@@ -63,10 +63,11 @@ function present(value: unknown): boolean {
 }
 
 /**
- * Probe the primitives values the Markdown seat composes with. A host
- * build whose module table dropped any of them disables the seat
- * replacement wholesale: nothing registers and the host's own renderers
- * stay — the user sees the native bubbles, never a broken seat.
+ * Probe the primitives values the Markdown seat composes with — the Markdown
+ * pipeline plus the copy/clock chrome (#33). A host build whose module table
+ * dropped any of them disables the seat replacement wholesale: nothing
+ * registers and the host's own renderers stay — the user sees the native
+ * bubbles (with the native actions row), never a broken seat.
  * @param surface - the primitives module namespace as the host table resolved it.
  */
 export function userMessageCapability(surface: {
@@ -75,13 +76,21 @@ export function userMessageCapability(surface: {
   FileTypeIcon?: unknown
   fileSizeText?: unknown
   JsonBlock?: unknown
+  Tooltip?: unknown
+  writeClipboard?: unknown
+  IconCopyOutlineRegular?: unknown
+  IconCheckOutlineRegular?: unknown
 }): Capability {
   return probe(
     () => present(surface.MarkdownText)
       && present(surface.JsonBlock)
       && present(surface.FileTypeIcon)
+      && present(surface.Tooltip)
+      && present(surface.IconCopyOutlineRegular)
+      && present(surface.IconCheckOutlineRegular)
       && typeof surface.projectUserText === 'function'
-      && typeof surface.fileSizeText === 'function',
+      && typeof surface.fileSizeText === 'function'
+      && typeof surface.writeClipboard === 'function',
     'primitives Markdown surface incomplete',
   )
 }
@@ -167,13 +176,21 @@ export function apply(ctx: ClientContext): void {
   // The host registers the same keys at its default priority 0, and the
   // registry throws on same-key-same-priority: shadow it at a lower rank
   // (lowest renders), falling back to the host seat when we deregister.
-  for (const key of ['user', 'steering'] as const) {
-    ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
-      name: 'conversation.chat.node',
-      key,
-      priority: -1,
-      locale: 'chat',
-    }, MarkdownUserMessage))
+  // Gated on the primitives probe: a host build missing any composed value
+  // (Markdown pipeline or copy/clock chrome) keeps the host's own renderers
+  // — native bubbles with the native actions row.
+  const messageCapability = userMessageCapability(primitives)
+  if (messageCapability.supported) {
+    for (const key of ['user', 'steering'] as const) {
+      ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+        name: 'conversation.chat.node',
+        key,
+        priority: -1,
+        locale: 'chat',
+      }, MarkdownUserMessage))
+    }
+  } else {
+    console.info(`[markdown-input] user-message Markdown rendering disabled: ${messageCapability.reason}`)
   }
   // Degradation notice (ADR-0005 Q5): quiet until the takeover falls back,
   // then the one-shot non-modal notice — event-driven over degrade.ts, so

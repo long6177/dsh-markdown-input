@@ -1,0 +1,69 @@
+/* Rebuilt message actions row (copy + start clock) for the Markdown
+   user-message seat — mirrors the host MessageIconActions module rule for
+   rule with our own class hashes. The hover reveal keys off the host flow
+   wrappers (`data-chat-flow-kind`), so the native recency contract (a later
+   user/steering row suppresses earlier rows' actions until hover/focus,
+   the latest stays revealed) applies to this seat unchanged. */
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+}
+
+/* The user clock keeps the secondary tier. */
+.timeStart {
+  padding-right: 12px;
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(24px + var(--dsh-content-font-delta, 0px));
+  color: var(--dsw-alias-label-tertiary);
+  white-space: nowrap;
+}
+
+/* Opacity keeps layout stable; devices without hover keep every row visible. */
+@media (hover: hover) {
+  [data-actions-reveal='hover'] .actions,
+  :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(
+    ~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])
+  ) .actions {
+    opacity: 0;
+    transition: opacity 80ms ease;
+  }
+
+  [data-actions-reveal='hover']:hover .actions,
+  [data-actions-reveal='hover']:focus-within .actions,
+  :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(
+    ~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])
+  ):hover .actions,
+  :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(
+    ~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])
+  ):focus-within .actions {
+    opacity: 1;
+  }
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(28px + var(--dsh-content-font-delta, 0px));
+  height: calc(28px + var(--dsh-content-font-delta, 0px));
+  padding: 6px;
+  border: none;
+  border-radius: var(--dsw-radius-sm);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+/* Action glyphs follow the same px delta as the text they serve. */
+.action svg {
+  width: calc(15px + var(--dsh-content-font-delta, 0px));
+  height: calc(15px + var(--dsh-content-font-delta, 0px));
+}
+
+.action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}

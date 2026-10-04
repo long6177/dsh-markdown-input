@@ -1,8 +1,10 @@
-/* Right-aligned user message row rendered over the host chat layout. */
+/* Right-aligned user message row rendered over the host chat layout. The
+   actions row (copy + clock) follows the stack — native userRow gap. */
 .row {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
+  gap: 6px;
 }
 
 .stack {

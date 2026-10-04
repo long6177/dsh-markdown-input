@@ -4,10 +4,11 @@
  * what a user sees: Markdown structure, preserved reference chips,
  * attachments.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { MarkdownUserMessage, type MarkdownSeatKind } from '../src/client/UserMessage.tsx'
+import { installClipboardStub } from './clipboard-stub.ts'
 
 const t = vi.fn((key: string) => key)
 
@@ -145,5 +146,76 @@ describe('MarkdownUserMessage', () => {
     // MarkdownText chrome keys resolve through the chat `t` seat.
     expect(t).toHaveBeenCalledWith('copy')
     expect(t).toHaveBeenCalledWith('markdown.footnotes')
+  })
+})
+
+describe('MarkdownUserMessage copy actions (#33)', () => {
+  /** Stub the clipboard with a recording write; restores on afterEach. */
+  let writeText: ReturnType<typeof vi.fn>
+  let restoreClipboard: () => void
+  beforeEach(() => {
+    writeText = vi.fn(() => Promise.resolve(true))
+    restoreClipboard = installClipboardStub(writeText)
+  })
+  afterEach(() => {
+    restoreClipboard()
+  })
+
+  it('mounts the copy action row under the bubble for the user seat', () => {
+    const { container, getByRole } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: 'hello' }])} />,
+    )
+    const row = container.querySelector('[data-message-actions]')
+    expect(row).not.toBeNull()
+    // The row follows the stack inside the flow row (native userRow layout).
+    expect(row?.previousElementSibling).toBe(container.querySelector('[data-markdown-user-message] > *'))
+    expect(getByRole('button', { name: 'copy' })).toBeInTheDocument()
+  })
+
+  it('copies the pure source text, not the rendered markdown', async () => {
+    const view = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '# 标题\n\n**重点**内容' }])} />,
+    )
+    await act(async () => {
+      fireEvent.click(view.getByRole('button', { name: 'copy' }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // The wire text the model received — markdown source, chips excluded.
+    expect(writeText).toHaveBeenCalledWith('# 标题\n\n**重点**内容')
+  })
+
+  it('copies the raw wire text for chip messages — chips render, the mention stays in the copy', async () => {
+    const view = render(
+      <MarkdownUserMessage
+        {...seatProps('user', [{ type: 'text', text: '@notes/file.md 看看这个' }], { referenceLabels: ['notes/file.md'] })}
+      />,
+    )
+    expect(view.container.querySelector('[data-ref-chip]')).not.toBeNull()
+    await act(async () => {
+      fireEvent.click(view.getByRole('button', { name: 'copy' }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // Native parity: the copy is contentParts().text — the raw user text.
+    expect(writeText).toHaveBeenCalledWith('@notes/file.md 看看这个')
+  })
+
+  it('mounts the same action row for a queued steering message', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('steering', [{ type: 'text', text: '排队追加' }])} />,
+    )
+    expect(container.querySelector('[data-message-actions]')).not.toBeNull()
+    expect(container.querySelector('[data-message-actions] button')).not.toBeNull()
+  })
+
+  it('shows the message clock from the node time', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: 'hello' }], { time: new Date(2025, 11, 31, 23, 59).getTime() })} />,
+    )
+    // Not today → the clock.ymd date template renders ahead of the time.
+    const clock = container.querySelector('[data-message-actions] span')?.textContent ?? ''
+    expect(clock).toContain('23:59')
+    expect(t).toHaveBeenCalledWith('clock.ymd', { y: 2025, m: 12, d: 31 })
   })
 })

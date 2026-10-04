@@ -13,6 +13,7 @@ import {
   type MarkdownLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeViewProps, ChatNodeOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import { MessageActions } from './MessageActions.tsx'
 import css from './UserMessage.module.css'
 
 /** The image payload shape the owner's renderer accepts, derived from it. */
@@ -149,6 +150,9 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
           </div>
         )}
       </div>
+      {/* The native userRow mounts the actions row after the stack — copy
+          writes the raw wire text, the clock rides the node time. */}
+      <MessageActions text={text} time={data.time} t={t} />
     </div>
   )
 })

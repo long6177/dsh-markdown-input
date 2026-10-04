@@ -190,17 +190,26 @@ describe('userMessageCapability gate', () => {
     FileTypeIcon: () => null,
     fileSizeText: () => '',
     JsonBlock: () => null,
+    Tooltip: () => null,
+    writeClipboard: () => Promise.resolve(true),
+    IconCopyOutlineRegular: () => null,
+    IconCheckOutlineRegular: () => null,
   }
 
   it('supports a complete primitives surface', () => {
     expect(userMessageCapability(full).supported).toBe(true)
   })
 
-  it('disables when any composed value is missing', () => {
-    const { FileTypeIcon, ...withoutIcons } = full
-    void FileTypeIcon
-    const verdict = userMessageCapability(withoutIcons)
-    expect(verdict.supported).toBe(false)
-    expect(verdict.reason).toContain('Markdown surface')
+  it('disables when any probed value is missing', () => {
+    for (const key of [
+      'MarkdownText', 'projectUserText', 'FileTypeIcon', 'fileSizeText', 'JsonBlock',
+      'Tooltip', 'writeClipboard', 'IconCopyOutlineRegular', 'IconCheckOutlineRegular',
+    ] as const) {
+      const { [key]: _, ...surface } = full
+      void _
+      const verdict = userMessageCapability(surface)
+      expect(verdict.supported, `dropping ${key} must disable`).toBe(false)
+      expect(verdict.reason).toContain('Markdown surface')
+    }
   })
 })
