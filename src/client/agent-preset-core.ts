@@ -15,6 +15,15 @@
  * copy, so the seat's three rules — which preset it names, which rows it
  * offers, and whether it exists at all — are pinned by unit tests rather than
  * by a mounted tree.
+ *
+ * The display copy itself follows the native fold (alpha.12 feedback): a
+ * SHIPPED preset whose roster row publishes no name resolves its words through
+ * the host `settings.agentPreset` dictionary (`preset/agent-preset-registry/
+ * src/display.ts:40-45,63-73`), while a row that names itself owns its copy —
+ * user-authored metadata is never translated. `presetDisplayText` replicates
+ * that fold; when the host namespace is absent (a build without the
+ * ui-agent-preset plugin, whose bound translate echoes the raw key) the fold
+ * falls back to the row's own data, which is the pre-feedback behavior.
  */
 
 /** One selectable preset, mirroring the host roster row's client-safe subset (`AgentPresetRow`). */
@@ -88,35 +97,153 @@ export interface AgentPresetMenuItem {
   readonly description: string | undefined
 }
 
+/** Dictionary keys carrying one shipped preset's display copy (`agent-preset-registry/src/display.ts:13-17`). */
+export type BuiltInPresetCopyKey =
+  | 'presetStandardName' | 'presetStandardDescription'
+  | 'presetPtcName' | 'presetPtcDescription'
+  | 'presetMinimalName' | 'presetMinimalDescription'
+  | 'presetCordisName' | 'presetCordisDescription'
+
+/** Preset roster fields the display fold needs (`display.ts:21-31`). */
+export type PresetDisplaySource = Pick<AgentPresetOption, 'id' | 'name' | 'description'>
+
+/** Display copy resolved for the active locale (`display.ts:34-41`). */
+export interface PresetDisplayText {
+  /** Localized built-in name, or the preset's own fallback name. */
+  readonly name: string
+  /** Localized built-in description, or the preset's own description. */
+  readonly description?: string
+}
+
+/** The host `settings.agentPreset` translate seat, narrowed to the display keys. */
+export type PresetTranslate = (key: BuiltInPresetCopyKey) => string
+
+/** Which dictionary keys carry which shipped preset's copy (`display.ts:46-51`). */
+const BUILT_IN_PRESET_KEYS: Readonly<Partial<Record<string, { readonly name: BuiltInPresetCopyKey; readonly description: BuiltInPresetCopyKey }>>> = {
+  standard: { name: 'presetStandardName', description: 'presetStandardDescription' },
+  ptc: { name: 'presetPtcName', description: 'presetPtcDescription' },
+  minimal: { name: 'presetMinimalName', description: 'presetMinimalDescription' },
+  cordis: { name: 'presetCordisName', description: 'presetCordisDescription' },
+}
+
+/**
+ * Whether a roster row is one of the shipped presets whose copy the host
+ * dictionaries carry. A shipped preset publishes no `name`; a declaration
+ * that names itself owns its copy and is never translated
+ * (`display.ts:58-60`).
+ * @param preset - roster row.
+ */
+export function isBuiltInPreset(preset: PresetDisplaySource): boolean {
+  return preset.name === undefined && BUILT_IN_PRESET_KEYS[preset.id] !== undefined
+}
+
+/**
+ * One host-dictionary read as the fold consumes it: the bound translate
+ * echoes the raw key when the namespace never resolves it (a host build
+ * without the ui-agent-preset plugin — the locale service's `?? key` tail),
+ * and an echo reads as "no copy" so the row's own data can answer.
+ */
+function resolvedCopy<T extends string>(t: (key: T) => string, key: T): string | undefined {
+  const value = t(key)
+  return value === key ? undefined : value
+}
+
+/**
+ * Resolve preset display copy without making user-authored metadata
+ * translatable (the native fold, `display.ts:63-73`): a shipped preset
+ * resolves through the host dictionary, everything else — including a
+ * shipped id whose dictionary is absent — resolves from the row itself.
+ * @param preset - roster row whose copy is being rendered.
+ * @param t - the host `settings.agentPreset` translate; undefined keeps the roster's own metadata.
+ */
+export function presetDisplayText(preset: PresetDisplaySource, t: PresetTranslate | undefined): PresetDisplayText {
+  const keys = t !== undefined && isBuiltInPreset(preset) ? BUILT_IN_PRESET_KEYS[preset.id] : undefined
+  if (t !== undefined && keys !== undefined) {
+    const name = resolvedCopy(t, keys.name)
+    if (name !== undefined) return { name, description: resolvedCopy(t, keys.description) }
+  }
+  return {
+    name: preset.name ?? preset.id,
+    ...(preset.description === undefined ? {} : { description: preset.description }),
+  }
+}
+
 /**
  * The menu rows: every healthy preset, name over description, in roster order
  * (the native chip's `state.options` order, `AgentPresetSeat.tsx:161-174`).
+ * Shipped rows name themselves through the host dictionary; a row whose
+ * description resolves nowhere shows the seat's own fallback copy.
  * @param options - healthy options in roster order.
+ * @param t - the host `settings.agentPreset` translate; undefined keeps the roster's own metadata.
  * @param noDescription - the seat's own copy for a preset that published none.
  */
 export function agentPresetMenuItems(
   options: readonly AgentPresetOption[],
+  t: PresetTranslate | undefined,
   noDescription: string,
 ): AgentPresetMenuItem[] {
-  return options.map(option => ({
-    id: option.id,
-    label: option.name ?? option.id,
-    description: option.description ?? noDescription,
-  }))
+  return options.map((option) => {
+    const text = presetDisplayText(option, t)
+    return { id: option.id, label: text.name, description: text.description ?? noDescription }
+  })
 }
 
 /**
- * The display name of the named preset, for the chip face: the roster's own
- * name, falling back to the id (which is also the host's fallback).
+ * The display name of the named preset, for the chip face: the native fold
+ * again — localized through the host dictionary when the row is a shipped
+ * one, the roster's own name otherwise, falling back to the id (which is also
+ * the host's fallback). A recorded id the roster no longer carries names
+ * itself as-is: that is what the session actually runs.
  * @param options - healthy options in roster order.
  * @param id - the id the seat names.
+ * @param t - the host `settings.agentPreset` translate; undefined keeps the roster's own metadata.
  */
 export function agentPresetDisplayName(
   options: readonly AgentPresetOption[],
   id: string | undefined,
+  t: PresetTranslate | undefined,
 ): string | undefined {
   if (id === undefined) return undefined
-  return options.find(option => option.id === id)?.name ?? id
+  const row = options.find(option => option.id === id)
+  if (row === undefined) return id
+  return presetDisplayText(row, t).name
+}
+
+/** The three seat strings the host `settings.agentPreset` dictionary also carries. */
+export type AgentPresetSeatHostKey = 'seatHint' | 'noDescription' | 'switchRefused'
+
+/** The seat's resolved copy: host words when the namespace answers, plugin words otherwise. */
+export interface AgentPresetSeatCopy {
+  /** The chip's accessible name / hint. */
+  readonly seatHint: string
+  /** Fallback description row for a preset that published none. */
+  readonly noDescription: string
+  /** The refusal wrapper a failed switch reports; interpolates `{name}` and `{reason}`. */
+  readonly switchRefused: string
+}
+
+/**
+ * The seat copy: host words first, the plugin's own `markdown-input` keys as
+ * fallback. Before the alpha.12 feedback the seat shipped only its own words
+ * (the host namespace was not ours to bind); the maintainer's acceptance of
+ * the binding makes the host dictionary the first read, with the raw-key echo
+ * of an absent namespace (and the absent binding itself) falling back to the
+ * plugin's paraphrase — so a build without the ui-agent-preset plugin still
+ * speaks, in the same words it spoke yesterday.
+ * @param hostT - the bound `settings.agentPreset` translate; undefined = not bound.
+ * @param own - the plugin's own copy.
+ */
+export function resolveAgentPresetCopy(
+  hostT: ((key: AgentPresetSeatHostKey) => string) | undefined,
+  own: AgentPresetSeatCopy,
+): AgentPresetSeatCopy {
+  if (hostT === undefined) return own
+  const resolved = (key: AgentPresetSeatHostKey): string | undefined => resolvedCopy(hostT, key)
+  return {
+    seatHint: resolved('seatHint') ?? own.seatHint,
+    noDescription: resolved('noDescription') ?? own.noDescription,
+    switchRefused: resolved('switchRefused') ?? own.switchRefused,
+  }
 }
 
 /**

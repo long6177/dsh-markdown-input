@@ -267,7 +267,13 @@ describe('conversation.composer chain standard seats (#42 reachability)', () => 
     // chip — the end-to-end proof that the row is not permanently hidden.
     const card = document.querySelector('[data-markdown-composer]')
     expect(card).not.toBeNull()
-    expect(document.querySelector('[data-markdown-workspace-row]')).not.toBeNull()
+    // The chip rides the ONE hero line container (alpha.12 feedback): the
+    // preset seat's gate is off here (no roster source), so the line carries
+    // the workspace chip alone rather than dangling.
+    const heroRow = card?.querySelector('[data-markdown-hero-row]')
+    expect(heroRow).not.toBeNull()
+    expect(card?.firstElementChild).toBe(heroRow)
+    expect(heroRow).toContainElement(document.querySelector('[data-markdown-workspace-row]'))
     expect(document.querySelector('[data-markdown-workspace-row]')?.textContent).toContain('project')
     expect(card).not.toHaveAttribute('data-workspace-trigger')
     // The chip is the live picker control (not the trigger-posture face): the

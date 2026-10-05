@@ -46,7 +46,9 @@ import { en, NS, zh, type ComposerKey } from './locales.ts'
 import { en as modelEn, zh as modelZh, type ModelKey } from './ModelSelectFace.locales.ts'
 import { MarkdownUserMessage } from './UserMessage.tsx'
 import { installWorkspaceVerbSource } from './workspace-verb.ts'
-import { installAgentPresetsSource } from './agent-preset-face.ts'
+import {
+  AGENT_PRESET_NS, installAgentPresetsSource, resetAgentPresetLocale, setAgentPresetLocale,
+} from './agent-preset-face.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -183,6 +185,19 @@ export function apply(ctx: ClientContext): void {
     setContextLocale(ctx.locale.bind(CONTEXT_NS))
     return resetContextLocale
   }, 'markdown-input: context meter and workspace row copy')
+  // The agent-preset seat's display copy (issue #42, alpha.12 feedback) binds
+  // the HOST `settings.agentPreset` namespace the same read-only way: that
+  // dictionary carries the shipped presets' localized names and descriptions
+  // (the native `presetDisplayText` fold's source) plus the seat's own three
+  // strings, and the maintainer accepted the binding by asking for the native
+  // menu shape — the shape IS this dictionary. Nothing is registered here: a
+  // host build without the ui-agent-preset plugin never resolves the keys
+  // (the bound translate echoes them raw), which the card folds back to the
+  // plugin's own `agentPreset.*` words and the roster rows' own metadata.
+  ctx.effect(() => {
+    setAgentPresetLocale(ctx.locale.bind(AGENT_PRESET_NS))
+    return resetAgentPresetLocale
+  }, 'markdown-input: agent-preset host copy')
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
   // (degrade.ts), which latches the takeover off for the page life and

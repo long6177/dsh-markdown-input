@@ -18,6 +18,14 @@
  * session whose conversation already started — surfaces through the card's
  * existing banner (`onError`), never a new toast surface.
  *
+ * Display copy (alpha.12 feedback): the roster rows resolve through the host
+ * `settings.agentPreset` dictionary — `presetDisplayText` in agent-preset-core
+ * is the native fold (`agent-preset-registry/src/display.ts:63-73`), so a
+ * shipped preset renders its localized name and description instead of the
+ * raw id, and the refusal names the picked preset. The host namespace is
+ * bound read-only by apply; a build without it falls back to the row's own
+ * metadata and the plugin's `agentPreset.*` keys.
+ *
  * DEVIATION (recorded in the #42 report): the native chip is additionally
  * gated on the Developer-tools setting and on "main view" retention
  * (`AgentPresetSeat.tsx:84-85, :91-92, :134`). Both gates live in packages
@@ -28,14 +36,15 @@
  * not; the control itself stays correct (its switch is refused by the host
  * exactly as the native one is).
  */
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   IconAgentPresetOutlineRegular, IconChevronDownOutlineRegular, Menu,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
   agentPresetCurrentId, agentPresetDisplayName, agentPresetMenuItems,
   agentPresetOptions, agentPresetProjectionOf, agentPresetRefusal,
-  agentPresetSeatVisible, type AgentPresetOption,
+  agentPresetSeatVisible, presetDisplayText,
+  type AgentPresetOption, type AgentPresetSeatCopy, type PresetTranslate,
 } from './agent-preset-core.ts'
 import type { AgentPresetsRemoteFace } from './agent-preset-face.ts'
 import type { FaceDefinition } from './face.ts'
@@ -71,15 +80,15 @@ export interface AgentPresetFaceProps {
   readonly sessionId: string | undefined
   /** The roster verb surface, resolved by the card. */
   readonly remote: AgentPresetsRemoteFace | undefined
-  /** The seat's own copy (the plugin's `markdown-input` namespace; host keys are not ours). */
-  readonly copy: {
-    /** The seat's accessible name / hint. */
-    readonly seatHint: string
-    /** Fallback description row for a preset that published none. */
-    readonly noDescription: string
-    /** The `{reason}` wrapper a refused switch reports. */
-    readonly switchRefused: string
-  }
+  /**
+   * The host `settings.agentPreset` translate, for the shipped presets'
+   * dictionary names (alpha.12 feedback: the menu speaks the native words).
+   * Undefined keeps the roster rows' own published metadata — the host
+   * build without the ui-agent-preset plugin has no dictionary to read.
+   */
+  readonly translate: PresetTranslate | undefined
+  /** The seat's copy: host words when the namespace answers, plugin keys otherwise. */
+  readonly copy: AgentPresetSeatCopy
   /** Report a refusal or a roster-read failure through the card's banner. */
   readonly onError: (message: string) => void
 }
@@ -100,10 +109,21 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
   const rawProjection = props.useProjection('agentPreset')
   const projection = agentPresetProjectionOf(rawProjection)
   const remote = props.remote
+  const chipRef = useRef<HTMLButtonElement | null>(null)
   const [roster, setRoster] = useState<RosterState>({ status: 'loading' })
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const onError = props.onError
+
+  // The menu's placement anchor — the same seam the workspace chip uses:
+  // `getAnchorRect` (not the Menu's own wrapper measurement) because the chip
+  // is a sibling of the Menu in a flex row and the wrapper span it would
+  // measure carries no geometry of its own. Without it the portaled list
+  // positions from a zero-geometry wrapper (the alpha.12 real-device finding).
+  const getAnchorRect = useCallback(
+    () => chipRef.current?.getBoundingClientRect() ?? null,
+    [],
+  )
 
   // One roster read per mounting: the remote answers with the current
   // declarations, and a card remount (session switch, election change) reads
@@ -145,10 +165,10 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
   const currentId = roster.status === 'ready'
     ? agentPresetCurrentId({ projection: projection ?? null, options, defaults: roster.defaults })
     : undefined
-  const currentName = agentPresetDisplayName(options, currentId)
+  const currentName = agentPresetDisplayName(options, currentId, props.translate)
   const menuItems = useMemo(
-    () => agentPresetMenuItems(options, props.copy.noDescription),
-    [options, props.copy.noDescription],
+    () => agentPresetMenuItems(options, props.translate, props.copy.noDescription),
+    [options, props.translate, props.copy.noDescription],
   )
 
   const onSelect = useCallback((id: string) => {
@@ -156,16 +176,26 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
     const sessionId = props.sessionId
     if (remote === undefined || sessionId === undefined) return
     setBusy(true)
+    // The refusal names the picked preset the way the chip does — localized
+    // for a shipped row, the row's own name otherwise — because the host
+    // template interpolates `{name}` (`switchRefused: 'Could not switch to
+    // {name}: {reason}'`); the plugin's fallback template carries only
+    // `{reason}` and simply never reads the name.
+    const name = agentPresetDisplayName(options, id, props.translate) ?? id
+    const refuse = (reason: string): void => {
+      onError(props.copy.switchRefused.replace(/\{(\w+)\}/gu, (whole, key: string) => key === 'name'
+        ? name
+        : key === 'reason' ? reason : whole))
+    }
     void remote.select(sessionId, id)
       .then((result) => {
-        if (result.ok) return
-        onError(props.copy.switchRefused.replace('{reason}', agentPresetRefusal(result.error)))
+        if (!result.ok) refuse(agentPresetRefusal(result.error))
       })
       .catch((error: unknown) => {
-        onError(props.copy.switchRefused.replace('{reason}', error instanceof Error ? error.message : String(error)))
+        refuse(error instanceof Error ? error.message : String(error))
       })
       .finally(() => { setBusy(false) })
-  }, [remote, props.sessionId, props.copy.switchRefused, onError])
+  }, [remote, props.sessionId, props.translate, options, props.copy.switchRefused, onError])
 
   // The `useProjection` call above must stay unconditional (hooks), so the
   // visibility test is the render gate rather than an early return before it.
@@ -176,6 +206,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
       <Menu
         open={open}
         anchor={null}
+        getAnchorRect={getAnchorRect}
         items={menuItems.map(item => ({
           id: item.id,
           label: (
@@ -192,6 +223,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
         portal
       />
       <button
+        ref={chipRef}
         type="button"
         className={css.agentPresetChip}
         aria-haspopup="menu"

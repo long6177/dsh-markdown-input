@@ -20,6 +20,7 @@ import { resetContextLocale, setContextLocale } from '../src/client/context-mete
 import { resetFaces } from '../src/client/face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { en as markdownInputEn } from '../src/client/locales.ts'
+import { resetAgentPresetsSource, setAgentPresetsSource } from '../src/client/agent-preset-face.ts'
 import type { WorkspaceRowSnapshot } from '../src/client/workspace-row-core.ts'
 import {
   resetWorkspaceVerbSource, setWorkspaceVerbSource, workspaceVerbFace,
@@ -155,6 +156,7 @@ afterEach(() => {
   cleanup()
   resetContextLocale()
   resetWorkspaceVerbSource()
+  resetAgentPresetsSource()
   resetFaces()
   resetGoalFace()
 })
@@ -219,15 +221,18 @@ describe('workspace row presence', () => {
     expect(row()).toBeNull()
   })
 
-  it('mounts the row at the TOP of the card, above the text surface', () => {
+  it('mounts the hero line at the TOP of the card, above the text surface', () => {
     const seats = hostSeats({
       workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
     })
     render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
-    const children = [...card().children].map(child => child.getAttribute('data-markdown-workspace-row') !== null
-      ? 'workspace-row'
-      : (child as HTMLElement).dataset.markdownSurface !== undefined ? 'surface' : 'other')
-    expect(children[0]).toBe('workspace-row')
+    const children = [...card().children].map(child =>
+      child.getAttribute('data-markdown-hero-row') !== null
+        ? 'hero-row'
+        : (child as HTMLElement).dataset.markdownSurface !== undefined ? 'surface' : 'other')
+    expect(children[0]).toBe('hero-row')
+    // The workspace chip rides that line (the one-line shape both seats share).
+    expect(card().querySelector('[data-markdown-hero-row]')).toContainElement(row())
     expect(children.indexOf('surface')).toBeGreaterThan(0)
   })
 
@@ -396,5 +401,61 @@ describe('workspace verb installer', () => {
     // A throwing resolver reads as absent, never as a card crash.
     setWorkspaceVerbSource(() => { throw new Error('sealed') })
     expect(workspaceVerbFace()).toBeUndefined()
+  })
+})
+
+describe('hero line — one row for both seats (issue #42 alpha.12 feedback)', () => {
+  const roster = {
+    list: () => Promise.resolve({
+      ok: true as const,
+      value: { presets: [{ id: 'standard', isDefault: true }] },
+    }),
+    select: () => Promise.resolve({ ok: true as const, value: undefined }),
+  }
+
+  it('puts the workspace chip and the agent-preset seat on the same hero line', async () => {
+    setAgentPresetsSource(() => roster)
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+    })
+    render(
+      <MarkdownComposer
+        {...chainProps({ session: blankSession(), projection: { agentPreset: null } })}
+        {...seats.props}
+      />,
+    )
+    const heroRow = document.querySelector('[data-markdown-hero-row]')
+    expect(heroRow).not.toBeNull()
+    expect(heroRow).toContainElement(row())
+    await waitFor(() => {
+      expect(document.querySelector('[data-markdown-agent-preset]')).not.toBeNull()
+    })
+    expect(heroRow).toContainElement(document.querySelector('[data-markdown-agent-preset]'))
+    // Both seats share ONE parent — the native `heroWorkspaceRow` shape —
+    // instead of stacking as two `.card` children (the real-device finding).
+    const workspaceRow = row() as HTMLElement
+    const presetSeat = document.querySelector('[data-markdown-agent-preset]') as HTMLElement
+    expect(workspaceRow.parentElement).toBe(heroRow)
+    expect(presetSeat.parentElement).toBe(heroRow)
+  })
+
+  it('keeps the workspace chip on the line when the preset face is absent (no dangling)', () => {
+    // No roster source installed: the preset gate stays off and the line
+    // stays with the chip — one absent face never leaves the other floating.
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    const heroRow = document.querySelector('[data-markdown-hero-row]')
+    expect(heroRow).not.toBeNull()
+    expect(heroRow).toContainElement(row())
+    expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
+  })
+
+  it('mounts no hero line at all when the workspace row capability is missing', () => {
+    const seats = hostSeats({ withVerb: false })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    expect(document.querySelector('[data-markdown-hero-row]')).toBeNull()
+    expect(row()).toBeNull()
   })
 })

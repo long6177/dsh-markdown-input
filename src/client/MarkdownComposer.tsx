@@ -55,7 +55,8 @@ import type {
 import type { PropsLocale, PropsRuntime, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
 import { AgentPresetFace, agentPresetFaceDefinition } from './AgentPresetFace.tsx'
-import { agentPresetsRemoteFace } from './agent-preset-face.ts'
+import { agentPresetLocale, agentPresetsRemoteFace } from './agent-preset-face.ts'
+import { resolveAgentPresetCopy } from './agent-preset-core.ts'
 import { CommandMenuFace } from './CommandMenuFace.tsx'
 import { commandFaceDefinition } from './command-face.ts'
 import { CompletionFace, completionFaceDefinition } from './CompletionFace.tsx'
@@ -821,14 +822,17 @@ export function MarkdownComposer({
   }
 
   const otherMode: EditMode = mode === 'render' ? 'source' : 'render'
-  // The agent-preset seat's own copy (the plugin's `markdown-input` namespace):
-  // the host UI package's dictionary is not ours to bind, so no host key is
-  // guessed here — the seat ships its own words.
-  const agentPresetCopy = {
+  // The agent-preset seat's copy (issue #42, alpha.12 feedback): the HOST
+  // `settings.agentPreset` dictionary owns the shipped presets' words AND the
+  // seat's three strings, so the bound seat is read per render here and the
+  // fold prefers it — the plugin's `agentPreset.*` keys stay as the fallback
+  // for a host build without the ui-agent-preset namespace.
+  const agentPresetT = agentPresetLocale()
+  const agentPresetCopy = resolveAgentPresetCopy(agentPresetT, {
     seatHint: t('agentPreset.hint'),
     noDescription: t('agentPreset.noDescription'),
     switchRefused: t('agentPreset.switchRefused'),
-  }
+  })
   const agentPresetsRemote = agentPresetsRemoteFace()
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
@@ -876,37 +880,44 @@ export function MarkdownComposer({
             {notice.text}
           </div>
         )}
-        {/* Workspace row (issue #42, ADR-0006 option B): the native
-            `heroWorkspaceRow` — blank-session only, and the card's very first
-            seat when it exists (the native order puts the row above the dock).
-            The row's two halves are independent faces: the chip+menu (and the
-            trigger posture it owns) hides whole when the list hook, the copy, or
-            the reuse-or-create verb is missing, the preset seat when the roster
-            or the projection is — either can shed without the other. */}
-        {rowSupported && workspaceCopy !== undefined && (
-          <WorkspaceRowFace
-            label={rowLabel}
-            selectedWorkspaceId={pendingWorkspaceId ?? sessionWorkspace?.workspaceId}
-            menuItems={workspaceMenuItems(workspaceItems, workspaceCopy('workspace.defaultName'))}
-            open={pickerOpen}
-            onToggleMenu={() => { setPickerOpen(value => !value) }}
-            onCloseMenu={closePicker}
-            onPick={pickWorkspace}
-            triggerPosture={triggerPosture}
-            copy={{ choose: workspaceCopy('hero.chooseWorkspace') }}
-            testId="hero-workspace"
-          />
-        )}
+        {/* Hero row (issue #42, alpha.12 feedback): ONE flex line at the card
+            top, the native `heroWorkspaceRow` mirrored — the workspace
+            chip+menu and the preset seat are siblings of the same row
+            container (gap 2px, align-items center), not two stacked card
+            children. The row mounts whenever the row's capability verdict
+            holds; a face whose gate is absent (roster service, projection
+            key) leaves the line to the other seat instead of dangling. The
+            row's two halves are still independent faces: the workspace chip
+            (and the trigger posture it owns) hides whole when the list hook,
+            the copy, or the reuse-or-create verb is missing, the preset seat
+            when the roster or the projection is. */}
         {rowSupported && (
-          <FaceGate definition={agentPresetFaceDefinition(useProjection, agentPresetsRemote !== undefined)}>
-            <AgentPresetFace
-              useProjection={useProjection as unknown as (key: 'agentPreset') => unknown}
-              sessionId={sessionId}
-              remote={agentPresetsRemote}
-              copy={agentPresetCopy}
-              onError={showBanner}
-            />
-          </FaceGate>
+          <div className={css.heroRow} data-markdown-hero-row="">
+            {rowSupported && workspaceCopy !== undefined && (
+              <WorkspaceRowFace
+                label={rowLabel}
+                selectedWorkspaceId={pendingWorkspaceId ?? sessionWorkspace?.workspaceId}
+                menuItems={workspaceMenuItems(workspaceItems, workspaceCopy('workspace.defaultName'))}
+                open={pickerOpen}
+                onToggleMenu={() => { setPickerOpen(value => !value) }}
+                onCloseMenu={closePicker}
+                onPick={pickWorkspace}
+                triggerPosture={triggerPosture}
+                copy={{ choose: workspaceCopy('hero.chooseWorkspace') }}
+                testId="hero-workspace"
+              />
+            )}
+            <FaceGate definition={agentPresetFaceDefinition(useProjection, agentPresetsRemote !== undefined)}>
+              <AgentPresetFace
+                useProjection={useProjection as unknown as (key: 'agentPreset') => unknown}
+                sessionId={sessionId}
+                remote={agentPresetsRemote}
+                translate={agentPresetT}
+                copy={agentPresetCopy}
+                onError={showBanner}
+              />
+            </FaceGate>
+          </div>
         )}
         {/* Todo panel (issue #38): the native TodoDock, the FIRST dock seat
             (order 0) the takeover hides with the whole fallback bar, rebuilt

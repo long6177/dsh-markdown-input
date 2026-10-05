@@ -12,15 +12,50 @@
  * declared `inject` dependency — a missing service would hold the whole
  * plugin pending, taking the text face down with it.
  *
- * What this module deliberately does NOT own: the roster's display copy. The
- * native chip resolves a shipped preset's name and description through the
- * `settings.agentPreset` dictionary, which belongs to a package outside this
- * build's dependency graph; this seat shows the roster's own published
- * metadata (and the id, which is the host's own fallback) instead of guessing
- * host copy.
+ * What this module also owns since the alpha.12 feedback: the seat's copy
+ * binding. The host `settings.agentPreset` dictionary carries the shipped
+ * presets' display words AND the seat's three strings; the maintainer accepted
+ * binding that namespace (the maintainer asked for the native menu shape, and
+ * the shape IS the dictionary), so apply binds it read-only and the card
+ * folds it through `resolveAgentPresetCopy` — host words first, the plugin's
+ * `agentPreset.*` keys as the fallback for a build without the namespace.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { AgentPresetOption } from './agent-preset-core.ts'
+
+/** The host namespace the preset seat's display copy lives in (ui-agent-preset's locale NS). */
+export const AGENT_PRESET_NS = 'settings.agentPreset'
+
+/** The bound host translate as the seat consumes it (untyped: the namespace is outside this build's merge table). */
+export type AgentPresetLocaleTranslate = (key: string, params?: Record<string, unknown>) => string
+
+let localeT: AgentPresetLocaleTranslate | undefined
+
+/**
+ * Bind the seat's translate seat (the client apply does this once, beside the
+ * other dictionary bindings).
+ * @param t - the `settings.agentPreset` namespace translate.
+ */
+export function setAgentPresetLocale(t: AgentPresetLocaleTranslate): void {
+  localeT = t
+}
+
+/**
+ * The seat's translate seat, or undefined before apply binds it — the card
+ * then resolves the seat copy from the plugin's own keys and the roster rows
+ * from their own metadata, exactly the pre-binding behavior.
+ */
+export function agentPresetLocale(): AgentPresetLocaleTranslate | undefined {
+  return localeT
+}
+
+/**
+ * Test seam: drop the binding so a fresh test sees an unbound face. Never call
+ * in plugin code — the binding is page-lifetime by design.
+ */
+export function resetAgentPresetLocale(): void {
+  localeT = undefined
+}
 
 /** One Remote failure as the generated client surfaces it. */
 export interface AgentPresetRemoteError {

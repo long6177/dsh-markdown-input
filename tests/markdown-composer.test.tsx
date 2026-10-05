@@ -16,6 +16,9 @@ import { resetFaces } from '../src/client/face.ts'
 import { en, zh } from '../src/client/locales.ts'
 import type { QueueRow } from '../src/client/queue-core.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
+import { resetAgentPresetsSource, setAgentPresetsSource } from '../src/client/agent-preset-face.ts'
+import { resetContextLocale, setContextLocale } from '../src/client/context-meter-face.ts'
+import { resetWorkspaceVerbSource, setWorkspaceVerbSource } from '../src/client/workspace-verb.ts'
 
 interface FakeDraft {
   kind: 'file' | 'image'
@@ -1236,6 +1239,69 @@ describe('MarkdownComposer — hit area (issue #41)', () => {
       option.remove()
       listbox.remove()
       button.remove()
+    }
+  })
+})
+
+describe('MarkdownComposer — hero row, one line for both seats (issue #42 alpha.12 feedback)', () => {
+  // The three `conversation` keys the row reads, the words the host
+  // ui-conversation dictionary carries.
+  const conversationCopy: Record<string, string> = {
+    'hero.chooseWorkspace': 'Choose workspace',
+    'placeholder.workspace': 'Choose a workspace to start',
+    'workspace.defaultName': 'Workspace',
+  }
+  const roster = {
+    list: () => Promise.resolve({
+      ok: true as const,
+      value: { presets: [{ id: 'standard', isDefault: true }] },
+    }),
+    select: () => Promise.resolve({ ok: true as const, value: undefined }),
+  }
+
+  it('mounts the workspace row and the agent-preset seat as children of ONE hero line', async () => {
+    // The hero line's capability verdict needs the host `conversation` copy
+    // and the reuse-or-create verb bound, exactly as apply does.
+    setContextLocale(((key: string) => conversationCopy[key] ?? key) as Parameters<typeof setContextLocale>[0])
+    setWorkspaceVerbSource(() => ({ startSession: () => {} }))
+    setAgentPresetsSource(() => roster)
+    const seats = {
+      useWorkspaces: (selector: (state: { items: unknown[]; phase: 'ready' }) => unknown) =>
+        selector({ items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' }),
+      useSessions: (selector: (state: { byId: Record<string, { cwd?: string }> }) => unknown) =>
+        selector({ byId: { s1: { cwd: '/home/dev/project' } } }),
+    }
+    try {
+      render(
+        <MarkdownComposer
+          {...chainProps({
+            session: { sessionId: 's1', blank: true, running: false, subagent: null, pendingSubmissions: [] },
+          })}
+          {...seats}
+          // A live `agentPreset` projection key: the preset seat's one hard
+          // read (the file's shared chainProps carries no projection table
+          // for it).
+          useProjection={((key: string, selector?: (value: unknown) => unknown) => {
+            const value = key === 'agentPreset' ? null : undefined
+            return selector !== undefined ? selector(value) : value
+          }) as MarkdownComposerProps['useProjection']}
+        />,
+      )
+      // The native `heroWorkspaceRow` shape: both seats are children of the
+      // same flex line container, which is the card's first child — not two
+      // stacked card children (the alpha.12 real-device finding).
+      const heroRow = document.querySelector('[data-markdown-hero-row]')
+      expect(heroRow).not.toBeNull()
+      expect(heroRow).toContainElement(document.querySelector('[data-markdown-workspace-row]'))
+      await waitFor(() => {
+        expect(document.querySelector('[data-markdown-agent-preset]')).not.toBeNull()
+      })
+      expect(heroRow).toContainElement(document.querySelector('[data-markdown-agent-preset]'))
+      expect(document.querySelector('[data-markdown-composer]')?.firstElementChild).toBe(heroRow)
+    } finally {
+      resetContextLocale()
+      resetWorkspaceVerbSource()
+      resetAgentPresetsSource()
     }
   })
 })

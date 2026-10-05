@@ -4,9 +4,10 @@
  * surfaces through the card's banner callback, and the whole face hides when
  * the roster service or the projection is absent.
  *
- * The seat's own words are this plugin's (`markdown-input`); nothing here
- * asserts host copy, because the host dictionary is not in this build's
- * dependency graph.
+ * Display copy (alpha.12 feedback): the seat's words are the HOST
+ * `settings.agentPreset` dictionary's (the fixture below copies it verbatim),
+ * with the plugin's own keys as the fallback a host build without the
+ * namespace still speaks.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
@@ -21,12 +22,34 @@ import {
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
 import { en } from '../src/client/locales.ts'
+import type { BuiltInPresetCopyKey } from '../src/client/agent-preset-core.ts'
 
 const copy = {
   seatHint: en['agentPreset.hint'],
   noDescription: en['agentPreset.noDescription'],
   switchRefused: en['agentPreset.switchRefused'],
 }
+
+/**
+ * The host `settings.agentPreset` dictionary's display copy, verbatim from
+ * `ui-agent-preset/src/client/locales.ts` (en) — the very words the native
+ * chip renders for a shipped preset whose row publishes no `name`.
+ */
+export const HOST_DICT: Record<string, string> = {
+  presetStandardName: 'Standard mode',
+  presetStandardDescription: 'Work with code, files, and information.',
+  presetPtcName: 'PTC mode',
+  presetPtcDescription: 'Batch tool calls, then filter and summarize.',
+  presetMinimalName: 'Minimal mode',
+  presetMinimalDescription: 'Terminal tool only.',
+  presetCordisName: 'Creator mode',
+  presetCordisDescription: 'Customize DSH through conversation.',
+  seatHint: 'Choose the agent preset for your new task',
+  noDescription: 'No description.',
+  switchRefused: 'Could not switch to {name}: {reason}',
+}
+
+export const HOST_T = (key: BuiltInPresetCopyKey): string => HOST_DICT[key] ?? key
 
 const ROSTER: AgentPresetsRemoteFace = {
   list: () => Promise.resolve({
@@ -60,12 +83,14 @@ function renderFace(overrides: {
   remote?: AgentPresetRemote
   sessionId?: string | undefined
   onError?: (message: string) => void
+  translate?: ((key: BuiltInPresetCopyKey) => string) | undefined
 } = {}) {
   return render(
     <AgentPresetFace
       useProjection={projection(overrides.projection ?? { agentPreset: null })}
       sessionId={overrides.sessionId === undefined ? 's1' : overrides.sessionId}
       remote={overrides.remote === undefined ? ROSTER : overrides.remote as AgentPresetsRemoteFace | undefined}
+      translate={overrides.translate}
       copy={copy}
       onError={overrides.onError ?? (() => {})}
     />,
@@ -208,6 +233,7 @@ describe('AgentPresetFace gate', () => {
           useProjection={projection({ agentPreset: null })}
           sessionId="s1"
           remote={undefined}
+          translate={undefined}
           copy={copy}
           onError={() => {}}
         />
@@ -223,6 +249,7 @@ describe('AgentPresetFace gate', () => {
           useProjection={projection({})}
           sessionId="s1"
           remote={undefined}
+          translate={undefined}
           copy={copy}
           onError={() => {}}
         />
@@ -241,5 +268,69 @@ describe('resolveAgentPresetsRemote', () => {
     // A throwing resolver (sealed globals, exotic host builds) reads as absent.
     setAgentPresetsSource(() => { throw new Error('sealed') })
     expect(agentPresetsRemoteFace()).toBeUndefined()
+  })
+})
+
+describe('AgentPresetFace host-dictionary copy (alpha.12 feedback #42)', () => {
+  it('names a shipped preset through the host dictionary on the chip', async () => {
+    renderFace({ translate: HOST_T })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    expect(chip()).toHaveTextContent('Standard mode')
+  })
+
+  it('renders the menu rows with the localized name over the localized description, check on the current row', async () => {
+    renderFace({ translate: HOST_T })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    const rows = menuRows()
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.textContent).toContain('Standard mode')
+    expect(rows[0]?.textContent).toContain('Work with code, files, and information.')
+    // The custom row keeps its own published metadata — never translated.
+    expect(rows[1]?.textContent).toContain('Creator mode')
+    expect(rows[1]?.textContent).toContain('Build plugins by talking.')
+    // The current value carries the trailing check.
+    expect(rows[0]?.querySelector('svg')).not.toBeNull()
+    expect(rows[1]?.querySelector('svg')).toBeNull()
+  })
+
+  it('interpolates {name} into the host refusal template with the picked row display name', async () => {
+    const onError = vi.fn()
+    const refusing: AgentPresetRemote = {
+      list: ROSTER.list,
+      select: () => Promise.resolve({ ok: false, error: { code: 'agent-preset/locked', message: 'wrapped' } }),
+    }
+    render(
+      <AgentPresetFace
+        useProjection={projection({ agentPreset: null })}
+        sessionId="s1"
+        remote={refusing as AgentPresetsRemoteFace | undefined}
+        translate={HOST_T}
+        copy={{ ...copy, switchRefused: HOST_DICT['switchRefused'] ?? copy.switchRefused }}
+        onError={onError}
+      />,
+    )
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    fireEvent.click(menuRows()[1] as HTMLElement)
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledWith('Could not switch to Creator mode: wrapped')
+    })
+  })
+
+  it('anchors the open menu to the chip rect, not the zero-geometry wrapper', async () => {
+    renderFace()
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    const chipEl = chip() as HTMLButtonElement
+    vi.spyOn(chipEl, 'getBoundingClientRect').mockReturnValue({
+      x: 42, y: 7, left: 42, top: 7, right: 100, bottom: 35, width: 58, height: 28, toJSON: () => ({}),
+    } as DOMRect)
+    fireEvent.click(chipEl)
+    const list = document.querySelector('[role="menu"]') as HTMLElement | null
+    expect(list).not.toBeNull()
+    // The portaled list positions from the chip rect (side bottom, align
+    // start): left at the chip's left edge, top 4px under its bottom edge.
+    expect(list?.style.left).toBe('42px')
+    expect(list?.style.top).toBe('39px')
   })
 })

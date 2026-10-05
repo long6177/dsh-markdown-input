@@ -873,6 +873,25 @@
    fallback bar, rebuilt on the card's TOP line (native order: the workspace
    chip leads, the preset seat follows). Geometry mirrors the native
    `heroWorkspaceRow` — a quiet, compact, left-aligned row. */
+/* The single hero line (issue #42, alpha.12 feedback): both seats are
+   children of ONE flex row, the native `heroWorkspaceRow` mirrored
+   (`ConversationRoot.module.css:520-530`: display flex, align-items center,
+   gap 2px). The native row pads itself `0 16px 0 20px` because it sits
+   OUTSIDE the card in the full-width hero stack — relative to the card face
+   that is 4px of left inset (the side clearance is 16px), nudged so the
+   chip's folder glyph "lines up closer to the card's inner controls below".
+   This row lives INSIDE the card face, whose own `8px 10px` padding already
+   provides the inset, so the row carries none and the glyph lands on the
+   text surface's left edge — the same visual relationship measured from the
+   card, not from the window. The native `margin-top: 4px` rides the hero
+   stack's rhythm above the row; in-card the face gap owns that space. */
+.heroRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
 .workspaceRow {
   display: flex;
   align-items: center;
@@ -966,23 +985,32 @@
   white-space: nowrap;
 }
 
-/* Native chip rows (`AgentPresetSeat.module.css` `.item`): name over one
-   muted description line, the whole pair inside the menu row. */
+/* Native chip rows (`AgentPresetSeat.module.css:121-139` `.item`): the name
+   over its muted description line, the whole pair inside the menu row, capped
+   at the native 280px so a long description wraps instead of stretching the
+   list. Name metrics come from the primitives `.item` (13px/20px); the
+   description restates the native pair and turns the wrapping back on against
+   the primitives `.itemLabel` nowrap. */
 .agentPresetItem {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  gap: 2px;
   min-width: 0;
+  max-width: 280px;
   text-align: left;
 }
 
 .agentPresetItemName {
-  font-weight: 500;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-primary, inherit);
 }
 
 .agentPresetItemDesc {
-  font-size: 0.85em;
-  color: color-mix(in srgb, currentColor 55%, transparent);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-caption, color-mix(in srgb, currentColor 55%, transparent));
+  white-space: normal;
 }
 
 /* Workspace trigger posture (issue #42): the native `cardWorkspaceTrigger`
