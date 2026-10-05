@@ -123,6 +123,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  /* Expanded-state baseline for the seat-contract variables below (issue #39):
+     the variable names are the host seat contract
+     (`conversation.input.model`), so they inherit into this row from whatever
+     the card mounts inside — a host ancestor defining the same names would
+     otherwise leak a compact (or expanded) verdict into the pill with no rule
+     able to win it back. The values equal the consumer fallbacks in
+     ModelSelectFace, so outside a composer the trigger still keeps its text. */
+  --dsh-composer-model-text-display: block;
+  --dsh-composer-model-icon-display: none;
   /* Query container for the tool-row controls' narrow-composer collapses
      (the permission pill drops its label below 460px). */
   container-type: inline-size;
@@ -618,14 +627,18 @@
    counterpart), so it stays a permanently icon-only toggle: its text was row
    budget the native row never spends, and that surplus is what folded the
    model pill to a pure icon at widths where the native pill keeps its name
-   (issue #39). The copy lives in aria-label/title only. */
+   (issue #39). The copy lives in aria-label/title only. The box takes the
+   sibling icon triggers' footprint — 4px padding around a 14px glyph = 22px,
+   the same box the attach fallback's `.iconButton` and the `+` trigger use —
+   because every pixel of an invented seat is row budget the native row never
+   spends (issue #39's residual surplus). */
 .modeButton {
   box-sizing: border-box;
   display: grid;
   place-items: center;
   flex: none;
-  width: 28px;
-  height: 28px;
+  width: 22px;
+  height: 22px;
   border: none;
   border-radius: 8px;
   padding: 0;

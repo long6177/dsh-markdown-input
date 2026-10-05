@@ -198,6 +198,20 @@ describe('MarkdownComposer', () => {
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.render'])
   })
 
+  it('seats the mode toggle at the sibling icon-trigger footprint (issue #39)', () => {
+    render(<MarkdownComposer {...chainProps()} />)
+    const mode = seatNamed(modeToggleCopy('source'))
+    // The seat stays a direct flex item of the measured row: its box is the
+    // row budget it spends, and #39 shrank it to the sibling icon triggers'
+    // 22px footprint (the box number is pinned as CSS text in
+    // control-row.test.ts — jsdom has no layout).
+    expect(mode.className).toContain('modeButton')
+    expect(mode.parentElement?.className).toContain('toolRow')
+    // The glyph matches the attach/+ triggers' 14px icon.
+    expect(mode.querySelector('svg')?.getAttribute('width')).toBe('14')
+    expect(mode.querySelector('svg')?.getAttribute('height')).toBe('14')
+  })
+
   it('a fresh mount restores the persisted mode and it acts on the editor (F5 path)', () => {
     window.localStorage.setItem(MODE_STORAGE_KEY, 'source')
     render(<MarkdownComposer {...chainProps()} />)

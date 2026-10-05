@@ -6,8 +6,21 @@
  * survives missing observers or DOM faces — a layout hint must never
  * throw into the card.
  */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { observeControlRow, type ControlRow } from '../src/client/control-row.ts'
+
+/**
+ * The sheet text as shipped: vitest's `css: false` stubs `*.module.css`
+ * imports (a `?raw` query rides the same stub and returns the class-map
+ * object), so the CSS contract below is read straight off disk.
+ */
+function readSheet(path: string): string {
+  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
+}
+const composerCss = readSheet('../src/client/MarkdownComposer.module.css')
+const modelSelectCss = readSheet('../src/client/ModelSelectFace.module.css')
 
 /** A fake row whose children answer fixed widths and whose content width is `available` (padded by 16). */
 function fakeRow(available: number, widths: number[]): ControlRow & { toggles: boolean[] } {
@@ -96,5 +109,55 @@ describe('observeControlRow', () => {
     const row = fakeRow(200, [90, 95])
     const dispose = observeControlRow(row)
     expect(() => dispose()).not.toThrow()
+  })
+})
+
+/** A rule's declaration block, matched by its literal selector text. */
+function ruleOf(sheet: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+  return sheet.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
+}
+
+/**
+ * The CSS half of the same seam, pinned as sheet text (issue #39): the row's
+ * compact attribute and the pill's two-level shrink chain are a cross-file
+ * contract between this plugin's sheets — jsdom has no layout, so these are
+ * regression nails on what the rules say, not behavior tests.
+ */
+describe('tool-row ↔ model-pill CSS contract (issue #39)', () => {
+  it('pins the expanded-state display variables on the base .toolRow rule', () => {
+    const base = ruleOf(composerCss, '.toolRow')
+    // The inheritance nail: the variable names are the host seat contract,
+    // so a host ancestor defining them must not leak into the pill. The
+    // values equal the consumer fallbacks in ModelSelectFace.
+    expect(base).toContain('--dsh-composer-model-text-display: block')
+    expect(base).toContain('--dsh-composer-model-icon-display: none')
+  })
+
+  it('flips both variables in the compact rule and nowhere else', () => {
+    const compact = ruleOf(composerCss, '.toolRow[data-model-compact]')
+    expect(compact).toContain('--dsh-composer-model-text-display: none')
+    expect(compact).toContain('--dsh-composer-model-icon-display: block')
+    // Base pin + compact flip are the sheet's only writers of the pair.
+    expect([...composerCss.matchAll(/--dsh-composer-model-(?:text|icon)-display:/gu)])
+      .toHaveLength(4)
+  })
+
+  it('keeps the invented mode seat at the sibling icon-trigger footprint', () => {
+    const mode = ruleOf(composerCss, '.modeButton')
+    // 4px padding around a 14px glyph — the same 22px box the attach
+    // fallback's `.iconButton` and the `+` trigger occupy.
+    expect(mode).toContain('width: 22px')
+    expect(mode).toContain('height: 22px')
+  })
+
+  it("keeps the pill's two-level shrink chain intact", () => {
+    // Level 1: the effort span absorbs the whole deficit before the model
+    // name loses a pixel.
+    expect(ruleOf(modelSelectCss, '.triggerEffort')).toContain('flex-shrink: 1000')
+    // Level 2 cap: the legacy fallback, then the row-relative cap.
+    const trigger = ruleOf(modelSelectCss, '.trigger')
+    expect(trigger).toContain('max-width: 220px')
+    expect(trigger).toContain('max-width: min(360px, 45cqw)')
   })
 })

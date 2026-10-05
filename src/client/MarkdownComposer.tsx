@@ -1050,11 +1050,13 @@ export function MarkdownComposer({
               is plugin-invented (no native counterpart), so it stays a
               permanently icon-only toggle: text here is row budget the native
               row never spends, and that surplus is what folded the model pill
-              to a pure icon (#39). */}
+              to a pure icon (#39). The box rides the sibling icon triggers'
+              22px footprint (4px padding + 14px glyph) — the smallest seat an
+              invented control gets on this row. */}
           <button type="button" className={css.modeButton} onClick={toggleMode}
             aria-label={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}
             title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
-            <IconCodeOutlineRegular />
+            <IconCodeOutlineRegular size={14} />
           </button>
           <span className={css.spring} />
           {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
