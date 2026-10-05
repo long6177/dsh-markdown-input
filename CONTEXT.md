@@ -97,7 +97,7 @@ _Avoid_: hero（指原生居中形态，接管卡不复刻）
 _Avoid_: 禁用态（宿主语义是「前置 prerequisite」而非损坏）
 
 **Agent 预设（Agent preset）**:
-接管卡工作区行内重建的会话预设控件（#42，原生 hero 预设座位随回退栏被接管隐藏）：当前值读 `agentPreset` 会话投影、roster 读 `remote.agentPresets.list`、切换走同命名空间的 `select(sessionId, presetId)`（宿主对已开始会话的拒绝就地成横幅），切换成功后投影回读即新值；宿主 UI 包不在依赖树，形态按数据语义自建，数据面缺席整面隐藏。
+接管卡卡顶 hero 行内重建的会话预设控件（#42，原生 hero 预设座位随回退栏被接管隐藏，与工作区 chip 同一 flex 行）：当前值读 `agentPreset` 会话投影、roster 读 `remote.agentPresets.list`、切换走同命名空间的 `select(sessionId, presetId)`（宿主对已开始会话的拒绝就地成横幅），切换成功后投影回读即新值；显示名/描述经宿主 `settings.agentPreset` 词典只读解析（内置预设走 `presetDisplayText` 同构复刻，自定义走 roster 自带元数据），插件自带键仅兜底；宿主 UI 包不在依赖树，菜单形态对齐原生两行行（名 + 描述 + 右侧勾选），数据面缺席整面隐藏。
 _Avoid_: Agent 模式（宿主概念是按预设组合成 Agent，不是开关）
 
 **上下文量表（Context meter）**:

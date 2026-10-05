@@ -20,4 +20,4 @@
 
 - 接管卡第一次出现「整卡形态分支」（常态 ↔ 工作区触发姿态），键盘可达性与 placeholder 梯级需随分支联动。
 - 工作区/Agent 预设的类型不在本构建依赖树（`dsh-client-ui-workspace`、agent-preset UI 包），一律结构化读取 + 运行时探测，宿主升级时随重建面重测（同 ADR-0005 的既有后果）。
-- Agent 预设 UI 形态按数据语义自建（宿主 UI 包不可 vendor），文案自带 `markdown-input` 键；宿主原生预设控件形态如有出入，以功能对齐为准、不做像素级对齐承诺。
+- Agent 预设 UI 形态按数据语义自建（宿主 UI 包不可 vendor）；宿主原生预设控件形态如有出入，以功能对齐为准、不做像素级对齐承诺。**（alpha.13 修订）**文案原计划自带 `markdown-input` 键，alpha.12 真机回灌显示内置预设只能落到 roster 原始 id（「standard」+「暂无描述」），维护者要求贴近原生形态并接受对宿主 `settings.agentPreset` 命名空间的只读绑定——现经 `presetDisplayText` 同构复刻解析内置四预设的本地化名/描述，插件自带键仅在宿主词典缺席时兜底；菜单行几何随修复对齐原生 `AgentPresetSeat`（名 + 描述两行 + 右侧勾选）。
