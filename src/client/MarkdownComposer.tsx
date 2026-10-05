@@ -31,6 +31,14 @@
  * with the whole fallback bar, and the todo panel (issue #38) rebuilds the
  * native TodoDock the same way — above the goal strip, the native dock
  * order (todo 0, goal 10, queue 20).
+ *
+ * The card root is the native bar's two-tier shape (issue #43): the bordered
+ * card face, then a dock row directly below it holding the rebuilt
+ * ContextMeter. The host mounts `conversation.composer.dock` only from
+ * inside its InputBar, so during a takeover that slot never renders and the
+ * meter rides the card's own row instead — the native below-the-card
+ * position, mirrored geometry.
+ *
  * The runtime placeholders follow the native bar's ladder
  * (`placeholder.steerQueue` / `placeholder.plan` over the card's own
  * render/source copy).
@@ -53,6 +61,7 @@ import { commandFaceDefinition } from './command-face.ts'
 import { CompletionFace, completionFaceDefinition } from './CompletionFace.tsx'
 import type { CompletionGuard } from './completion-core.ts'
 import { contextLocale } from './context-meter-face.ts'
+import { ContextMeterFace, contextMeterFaceDefinition, type ContextMeterFaceProps } from './ContextMeterFace.tsx'
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
@@ -821,256 +830,297 @@ export function MarkdownComposer({
     switchRefused: t('agentPreset.switchRefused'),
   }
   const agentPresetsRemote = agentPresetsRemoteFace()
+  // The below-card meter's copy (issue #43): the same `conversation` seat the
+  // workspace row reads, read per render here. The FaceGate's probe re-checks
+  // the binding (registerFace latches per id, so a first render before apply's
+  // bind latches only its own verdict — the gate renders nothing, never a
+  // seat without words); the conjunction keeps TypeScript honest without a
+  // cast.
+  const contextMeterT = contextLocale()
 
   return (
-    // `data-composer-card` is the host card contract (the shared Toast
-    // anchor and popup-dismissal marker); `data-markdown-composer` is ours.
-    // The trigger posture (#42) mirrors the native `cardWorkspaceTrigger`
-    // contract: `data-workspace-trigger` for styling/tests, a card-level click
-    // that opens the pick menu, and a pointerdown stop so the Menu's
-    // outside-close listener cannot race the click's reopen (the native bar's
-    // own trick — close-then-open flickers the chip's open echo).
-    <div className={css.card} data-markdown-composer data-composer-card ref={cardRef}
-      {...triggerPosture ? { 'data-workspace-trigger': '' } : {}}
-      onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onMouseDown={onCardMouseDown}
-      onClick={triggerPosture ? openPicker : undefined}
-      onPointerDown={triggerPosture ? (event) => { event.stopPropagation() } : undefined}>
-      {banner !== null && (
-        <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
-          <IconWarningOutlineMedium size={14} />
-          <span className={css.bannerText}>{banner.text}</span>
-          <button type="button" className={css.bannerClose} aria-label={t('composer.notice.dismiss')}
-            onClick={() => { setBanner(null) }}>
-            <IconCloseOutlineMedium size={12} />
-          </button>
-        </div>
-      )}
-      {notice?.level === 'info' && (
-        <div className={css.notice} role="status" data-markdown-notice>
-          {notice.text}
-        </div>
-      )}
-      {/* Workspace row (issue #42, ADR-0006 option B): the native
-          `heroWorkspaceRow` — blank-session only, and the card's very first
-          seat when it exists (the native order puts the row above the dock).
-          The row's two halves are independent faces: the chip+menu (and the
-          trigger posture it owns) hides whole when the list hook, the copy, or
-          the reuse-or-create verb is missing, the preset seat when the roster
-          or the projection is — either can shed without the other. */}
-      {rowSupported && workspaceCopy !== undefined && (
-        <WorkspaceRowFace
-          label={rowLabel}
-          selectedWorkspaceId={pendingWorkspaceId ?? sessionWorkspace?.workspaceId}
-          menuItems={workspaceMenuItems(workspaceItems, workspaceCopy('workspace.defaultName'))}
-          open={pickerOpen}
-          onToggleMenu={() => { setPickerOpen(value => !value) }}
-          onCloseMenu={closePicker}
-          onPick={pickWorkspace}
-          triggerPosture={triggerPosture}
-          copy={{ choose: workspaceCopy('hero.chooseWorkspace') }}
-          testId="hero-workspace"
-        />
-      )}
-      {rowSupported && (
-        <FaceGate definition={agentPresetFaceDefinition(useProjection, agentPresetsRemote !== undefined)}>
-          <AgentPresetFace
-            useProjection={useProjection as unknown as (key: 'agentPreset') => unknown}
-            sessionId={sessionId}
-            remote={agentPresetsRemote}
-            copy={agentPresetCopy}
-            onError={showBanner}
-          />
-        </FaceGate>
-      )}
-      {/* Todo panel (issue #38): the native TodoDock, the FIRST dock seat
-          (order 0) the takeover hides with the whole fallback bar, rebuilt
-          above the goal strip — the native dock order (todo 0, goal 10,
-          queue 20). Probed and gated on the projection hook, the panel's one
-          hard dependency; an absent `todos` key or an empty list renders
-          nothing, never a dead seat. The key is widened structurally: the
-          `todos` declaration lives in the todo tool package, outside this
-          build's dependency graph (the `plan` key precedent). */}
-      <FaceGate definition={todoStripFaceDefinition(useProjection)}>
-        <TodoStripFace
-          useProjection={(useProjection as unknown) as (key: 'todos') => unknown}
-          t={t}
-        />
-      </FaceGate>
-      {/* Goal strip (issue #34): the native GoalDock the takeover hides
-          with the whole fallback bar (the `conversation.input.dock` strip
-          renders inside the chain fallback), rebuilt above the queue strip
-          — the native dock order (goal 10, queue 20). Probed and gated:
-          the projection hook is the one hard dependency, the verb surfaces
-          shed the strip's buttons alone. */}
-      <FaceGate definition={goalStripFaceDefinition(useProjection)}>
-        <GoalStripFace
-          useProjection={useProjection}
-          sessionId={sessionId}
-          running={session?.running ?? false}
-          t={t}
-        />
-      </FaceGate>
-      <QueueFace
-        rows={queueRows}
-        mutable={queueMutable}
-        running={session?.running ?? false}
-        updateQueue={queueUpdate}
-        t={t}
-        onError={showBanner}
-      />
-      {dragging && canIntake && (
-        <div className={css.dropOverlay} data-markdown-dropzone>{t('composer.dropHere')}</div>
-      )}
-      {attachments.length > 0 && (
-        <ul className={css.attachmentBar} data-markdown-attachments>
-          {attachments.map(attachmentChip)}
-        </ul>
-      )}
-      <div className={css.surface} data-markdown-surface ref={surfaceRef} />
-      <div className={css.toolRow} ref={toolRowRef}>
-        {/* Command-menu face (tool row ①): the `+` trigger and its rebuilt
-            MenuView over the host command catalog. Probed and gated like the
-            other faces; its fallback keeps the legacy attach button alive so
-            file intake never disappears with the menu. The hidden file input
-            is shared by both and exists whenever the attachment face does. */}
-        <FaceGate
-          definition={commandFaceDefinition()}
-          fallback={attachmentFace !== undefined && (
-            <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
-              title={t('composer.attach')} disabled={!canIntake}
-              onClick={pickFiles}>
-              <IconPaperclipOutlineMedium size={14} />
+    // The card root is the native bar's own two-tier shape (issue #43): the
+    // bordered card face, then the dock row below it — where the native
+    // InputBar renders its ContextMeter
+    // (`ui-conversation/src/client/skeleton/InputBar.tsx:499-504`). The
+    // `conversation.composer.dock` slot is mounted only from inside that
+    // fallback bar, so an occupant on it can never show during a takeover;
+    // the card renders the meter itself in the mirrored row.
+    <div className={css.root}>
+      {/* `data-composer-card` is the host card contract (the shared Toast
+          anchor and popup-dismissal marker); `data-markdown-composer` is ours.
+          The trigger posture (#42) mirrors the native `cardWorkspaceTrigger`
+          contract: `data-workspace-trigger` for styling/tests, a card-level click
+          that opens the pick menu, and a pointerdown stop so the Menu's
+          outside-close listener cannot race the click's reopen (the native bar's
+          own trick — close-then-open flickers the chip's open echo). The card-
+          level mousedown hit area (#41) stays on the FACE: the dock row below
+          is not editor surface. */}
+      <div className={css.card} data-markdown-composer data-composer-card ref={cardRef}
+        {...triggerPosture ? { 'data-workspace-trigger': '' } : {}}
+        onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onMouseDown={onCardMouseDown}
+        onClick={triggerPosture ? openPicker : undefined}
+        onPointerDown={triggerPosture ? (event) => { event.stopPropagation() } : undefined}>
+        {banner !== null && (
+          <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
+            <IconWarningOutlineMedium size={14} />
+            <span className={css.bannerText}>{banner.text}</span>
+            <button type="button" className={css.bannerClose} aria-label={t('composer.notice.dismiss')}
+              onClick={() => { setBanner(null) }}>
+              <IconCloseOutlineMedium size={12} />
             </button>
-          )}
-        >
-          <CommandMenuFace
-            sessionId={sessionId}
-            t={t}
-            editor={editorHandle}
-            container={cardRef}
-            canPickFiles={canIntake}
-            onPickFiles={pickFiles}
-            onError={showBanner}
-            registerClose={registerMenuClose}
-            onOpen={handleMenuOpen}
-          />
-        </FaceGate>
-        {/* Completion popups (typed triggers, T10): the `/` command+skill
-            popup and the `@` file-search popup over the CM6 surface,
-            token-driven through the editor's probe seam. Probed and gated
-            like the other faces — a probe miss hides the popups and typed
-            text stays plain; per-trigger availability is checked inside
-            (one data plane can die alone). */}
-        <FaceGate definition={completionFaceDefinition()}>
-          <CompletionFace
-            sessionId={sessionId}
-            t={t}
-            editor={editorHandle}
-            container={cardRef}
-            guard={completionGuard}
-            canPickFiles={canIntake}
-            onPickFiles={pickFiles}
-            onError={showBanner}
-            registerClose={registerCompletionClose}
-            onOpen={closeCommandMenu}
-          />
-        </FaceGate>
-        {attachmentFace !== undefined && (
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            disabled={session?.subagent != null}
-            hidden
-            onChange={onPickFiles}
+          </div>
+        )}
+        {notice?.level === 'info' && (
+          <div className={css.notice} role="status" data-markdown-notice>
+            {notice.text}
+          </div>
+        )}
+        {/* Workspace row (issue #42, ADR-0006 option B): the native
+            `heroWorkspaceRow` — blank-session only, and the card's very first
+            seat when it exists (the native order puts the row above the dock).
+            The row's two halves are independent faces: the chip+menu (and the
+            trigger posture it owns) hides whole when the list hook, the copy, or
+            the reuse-or-create verb is missing, the preset seat when the roster
+            or the projection is — either can shed without the other. */}
+        {rowSupported && workspaceCopy !== undefined && (
+          <WorkspaceRowFace
+            label={rowLabel}
+            selectedWorkspaceId={pendingWorkspaceId ?? sessionWorkspace?.workspaceId}
+            menuItems={workspaceMenuItems(workspaceItems, workspaceCopy('workspace.defaultName'))}
+            open={pickerOpen}
+            onToggleMenu={() => { setPickerOpen(value => !value) }}
+            onCloseMenu={closePicker}
+            onPick={pickWorkspace}
+            triggerPosture={triggerPosture}
+            copy={{ choose: workspaceCopy('hero.chooseWorkspace') }}
+            testId="hero-workspace"
           />
         )}
-        {/* Permission preset face (tool row ②): projection-driven pill +
-            preset popup + risk gate, probed and gated independently — a
-            probe miss or a mid-life degrade hides this face alone. */}
-        <FaceGate definition={permissionFaceDefinition(useProjection)}>
-          <PermissionSelectFace
+        {rowSupported && (
+          <FaceGate definition={agentPresetFaceDefinition(useProjection, agentPresetsRemote !== undefined)}>
+            <AgentPresetFace
+              useProjection={useProjection as unknown as (key: 'agentPreset') => unknown}
+              sessionId={sessionId}
+              remote={agentPresetsRemote}
+              copy={agentPresetCopy}
+              onError={showBanner}
+            />
+          </FaceGate>
+        )}
+        {/* Todo panel (issue #38): the native TodoDock, the FIRST dock seat
+            (order 0) the takeover hides with the whole fallback bar, rebuilt
+            above the goal strip — the native dock order (todo 0, goal 10,
+            queue 20). Probed and gated on the projection hook, the panel's one
+            hard dependency; an absent `todos` key or an empty list renders
+            nothing, never a dead seat. The key is widened structurally: the
+            `todos` declaration lives in the todo tool package, outside this
+            build's dependency graph (the `plan` key precedent). */}
+        <FaceGate definition={todoStripFaceDefinition(useProjection)}>
+          <TodoStripFace
+            useProjection={(useProjection as unknown) as (key: 'todos') => unknown}
+            t={t}
+          />
+        </FaceGate>
+        {/* Goal strip (issue #34): the native GoalDock the takeover hides
+            with the whole fallback bar (the `conversation.input.dock` strip
+            renders inside the chain fallback), rebuilt above the queue strip
+            — the native dock order (goal 10, queue 20). Probed and gated:
+            the projection hook is the one hard dependency, the verb surfaces
+            shed the strip's buttons alone. */}
+        <FaceGate definition={goalStripFaceDefinition(useProjection)}>
+          <GoalStripFace
             useProjection={useProjection}
             sessionId={sessionId}
-            t={t}
-            locked={sessionId === undefined}
-            onError={showBanner}
-          />
-        </FaceGate>
-        {/* Plan chip (tool row, issue #34): the native PlanChip seat the
-            takeover replaces, beside the access-mode select like the native
-            row. Projection-driven; the exit rides the command face, so both
-            surfaces gate the face — a probe miss hides the chip alone. */}
-        <FaceGate definition={planFaceDefinition(useProjection)}>
-          <PlanChipFace
-            useProjection={readPlanProjection}
-            sessionId={sessionId}
-            locked={sessionId === undefined}
+            running={session?.running ?? false}
             t={t}
           />
         </FaceGate>
-        {/* Action semantics: the copy names the mode it switches TO. The seat
-            is plugin-invented (no native counterpart), so it stays a
-            permanently icon-only toggle: text here is row budget the native
-            row never spends, and that surplus is what folded the model pill
-            to a pure icon (#39). */}
-        <button type="button" className={css.modeButton} onClick={toggleMode}
-          aria-label={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}
-          title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
-          <IconCodeOutlineRegular />
-        </button>
-        <span className={css.spring} />
-        {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
-            over the host `modelDirectories` data plane, right-aligned before
-            the submit action like the native seat. Probed and gated like the
-            permission face; busy phases never lock the model seat. */}
-        <FaceGate definition={modelFaceDefinition()}>
-          <ModelSelectFace
-            sessionId={sessionId}
-            locked={sessionId === undefined}
-            subagent={session?.subagent ?? null}
-          />
-        </FaceGate>
-        {/* Dedicated stop (tool row ④, native `interruptible`): a running
-            continuable child keeps Send primary and stops through its own
-            button — the native inline square glyph, disabled while the cancel
-            verb is missing. Mutually exclusive with the primary stop arm. */}
-        {dedicatedStop && (
-          <button type="button" className={css.stopButton}
-            aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
-            disabled={stop === undefined} onClick={stopRunning}>
-            <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
-              <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
-            </svg>
-          </button>
+        <QueueFace
+          rows={queueRows}
+          mutable={queueMutable}
+          running={session?.running ?? false}
+          updateQueue={queueUpdate}
+          t={t}
+          onError={showBanner}
+        />
+        {dragging && canIntake && (
+          <div className={css.dropOverlay} data-markdown-dropzone>{t('composer.dropHere')}</div>
         )}
-        {/* Send/stop semantics (native `primaryStops`): on a running ordinary
-            session the primary names stop while the composer is empty or
-            owner-blocked, and clicks cancel (queue preserved); every other
-            state keeps the send action. A missing cancel verb disables the
-            arm, never hides the seat. The seat itself is the native pure-icon
-            circle — the arrow glyph while sending, the square while stopping
-            — so the row spends the native demand width, not a text button's
-            (issue #39). Tooltip and aria carry the same localized copy the
-            text button used to. */}
-        <Tooltip label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
-          side="top" delayMs={500}
-          disabled={primaryStops ? stop === undefined : !canSubmit}>
-          <button type="button" className={css.submitButton}
-            aria-label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
-            disabled={primaryStops ? stop === undefined : !canSubmit}
-            onClick={primaryStops ? stopRunning : submit}>
-            {primaryStops ? (
+        {attachments.length > 0 && (
+          <ul className={css.attachmentBar} data-markdown-attachments>
+            {attachments.map(attachmentChip)}
+          </ul>
+        )}
+        <div className={css.surface} data-markdown-surface ref={surfaceRef} />
+        <div className={css.toolRow} ref={toolRowRef}>
+          {/* Command-menu face (tool row ①): the `+` trigger and its rebuilt
+              MenuView over the host command catalog. Probed and gated like the
+              other faces; its fallback keeps the legacy attach button alive so
+              file intake never disappears with the menu. The hidden file input
+              is shared by both and exists whenever the attachment face does. */}
+          <FaceGate
+            definition={commandFaceDefinition()}
+            fallback={attachmentFace !== undefined && (
+              <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
+                title={t('composer.attach')} disabled={!canIntake}
+                onClick={pickFiles}>
+                <IconPaperclipOutlineMedium size={14} />
+              </button>
+            )}
+          >
+            <CommandMenuFace
+              sessionId={sessionId}
+              t={t}
+              editor={editorHandle}
+              container={cardRef}
+              canPickFiles={canIntake}
+              onPickFiles={pickFiles}
+              onError={showBanner}
+              registerClose={registerMenuClose}
+              onOpen={handleMenuOpen}
+            />
+          </FaceGate>
+          {/* Completion popups (typed triggers, T10): the `/` command+skill
+              popup and the `@` file-search popup over the CM6 surface,
+              token-driven through the editor's probe seam. Probed and gated
+              like the other faces — a probe miss hides the popups and typed
+              text stays plain; per-trigger availability is checked inside
+              (one data plane can die alone). */}
+          <FaceGate definition={completionFaceDefinition()}>
+            <CompletionFace
+              sessionId={sessionId}
+              t={t}
+              editor={editorHandle}
+              container={cardRef}
+              guard={completionGuard}
+              canPickFiles={canIntake}
+              onPickFiles={pickFiles}
+              onError={showBanner}
+              registerClose={registerCompletionClose}
+              onOpen={closeCommandMenu}
+            />
+          </FaceGate>
+          {attachmentFace !== undefined && (
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              disabled={session?.subagent != null}
+              hidden
+              onChange={onPickFiles}
+            />
+          )}
+          {/* Permission preset face (tool row ②): projection-driven pill +
+              preset popup + risk gate, probed and gated independently — a
+              probe miss or a mid-life degrade hides this face alone. */}
+          <FaceGate definition={permissionFaceDefinition(useProjection)}>
+            <PermissionSelectFace
+              useProjection={useProjection}
+              sessionId={sessionId}
+              t={t}
+              locked={sessionId === undefined}
+              onError={showBanner}
+            />
+          </FaceGate>
+          {/* Plan chip (tool row, issue #34): the native PlanChip seat the
+              takeover replaces, beside the access-mode select like the native
+              row. Projection-driven; the exit rides the command face, so both
+              surfaces gate the face — a probe miss hides the chip alone. */}
+          <FaceGate definition={planFaceDefinition(useProjection)}>
+            <PlanChipFace
+              useProjection={readPlanProjection}
+              sessionId={sessionId}
+              locked={sessionId === undefined}
+              t={t}
+            />
+          </FaceGate>
+          {/* Action semantics: the copy names the mode it switches TO. The seat
+              is plugin-invented (no native counterpart), so it stays a
+              permanently icon-only toggle: text here is row budget the native
+              row never spends, and that surplus is what folded the model pill
+              to a pure icon (#39). */}
+          <button type="button" className={css.modeButton} onClick={toggleMode}
+            aria-label={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}
+            title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
+            <IconCodeOutlineRegular />
+          </button>
+          <span className={css.spring} />
+          {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
+              over the host `modelDirectories` data plane, right-aligned before
+              the submit action like the native seat. Probed and gated like the
+              permission face; busy phases never lock the model seat. */}
+          <FaceGate definition={modelFaceDefinition()}>
+            <ModelSelectFace
+              sessionId={sessionId}
+              locked={sessionId === undefined}
+              subagent={session?.subagent ?? null}
+            />
+          </FaceGate>
+          {/* Dedicated stop (tool row ④, native `interruptible`): a running
+              continuable child keeps Send primary and stops through its own
+              button — the native inline square glyph, disabled while the cancel
+              verb is missing. Mutually exclusive with the primary stop arm. */}
+          {dedicatedStop && (
+            <button type="button" className={css.stopButton}
+              aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
+              disabled={stop === undefined} onClick={stopRunning}>
               <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
                 <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
               </svg>
-            ) : (
-              <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
-                <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
-              </svg>
-            )}
-          </button>
-        </Tooltip>
+            </button>
+          )}
+          {/* Send/stop semantics (native `primaryStops`): on a running ordinary
+              session the primary names stop while the composer is empty or
+              owner-blocked, and clicks cancel (queue preserved); every other
+              state keeps the send action. A missing cancel verb disables the
+              arm, never hides the seat. The seat itself is the native pure-icon
+              circle — the arrow glyph while sending, the square while stopping
+              — so the row spends the native demand width, not a text button's
+              (issue #39). Tooltip and aria carry the same localized copy the
+              text button used to. */}
+          <Tooltip label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+            side="top" delayMs={500}
+            disabled={primaryStops ? stop === undefined : !canSubmit}>
+            <button type="button" className={css.submitButton}
+              aria-label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+              disabled={primaryStops ? stop === undefined : !canSubmit}
+              onClick={primaryStops ? stopRunning : submit}>
+              {primaryStops ? (
+                <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                  <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                  <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
+                </svg>
+              )}
+            </button>
+          </Tooltip>
+        </div>
+      </div>
+      {/* The dock row (issue #43): the meter is the row's only occupant —
+          the fallback notice keeps its `conversation.composer.dock` seat
+          (it shows exactly when the native bar is back), and the queue/goal/
+          todo strips stay in-card. Native runtime parity note: the native bar
+          hides this meter while its `conversation.input.activity` occupant is
+          expanded (`InputBar.tsx:60,503` — a toolbar-width claim like the
+          experimental voice input, not a running state). That occupant lives
+          inside the hidden fallback bar and exposes no public seam, so the
+          signal is unreachable here and the meter stays visible: a recorded
+          deviation, harmless in a takeover that has no such toolbar.
+          Probed and gated like every face: a projection seat miss or an
+          unbound copy renders nothing, and the row's CSS collapses when it
+          stays empty. */}
+      <div className={css.dock} data-markdown-dock>
+        <FaceGate definition={contextMeterFaceDefinition(useProjection)}>
+          {contextMeterT !== undefined && (
+            <ContextMeterFace
+              useProjection={useProjection as unknown as ContextMeterFaceProps['useProjection']}
+              t={contextMeterT}
+            />
+          )}
+        </FaceGate>
       </div>
     </div>
   )

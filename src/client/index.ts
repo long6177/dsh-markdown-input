@@ -16,6 +16,9 @@
  * One peripheral-slot occupant registers at the host's
  * `conversation.composer.dock` beside the card — the fallback notice,
  * rendering the one-shot degradation announcement when the card falls back.
+ * The below-card context meter (issue #43) is deliberately NOT an occupant
+ * there: the host mounts that slot only from inside its InputBar, so it
+ * never renders during a takeover — the card renders the meter itself.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // The `chat`-namespace `t` seat also accepts the shared `common` vocabulary
@@ -36,7 +39,6 @@ import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
 import { installSkillSource } from './skill-face.ts'
 import { installFileReferenceSource } from './file-reference-face.ts'
 import { TakeoverCard } from './composer-card.tsx'
-import { ContextMeterOccupant } from './ContextMeterOccupant.tsx'
 import { CONTEXT_NS, resetContextLocale, setContextLocale } from './context-meter-face.ts'
 import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
@@ -238,24 +240,14 @@ export function apply(ctx: ClientContext): void {
   // Degradation notice (ADR-0005 Q5): quiet until the takeover falls back,
   // then the one-shot non-modal notice — event-driven over degrade.ts, so
   // it survives the card's unmount and never re-shows. The declared locale
-  // delivers the `t` seat for the notice copy.
+  // delivers the `t` seat for the notice copy. This is the plugin's ONLY
+  // `conversation.composer.dock` occupant: the slot is mounted by the host
+  // from inside its InputBar, so it renders exactly when the native bar is
+  // back — which is what the notice needs and why the context meter (issue
+  // #43) canNOT ride it; the card renders that face itself.
   ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
     name: 'conversation.composer.dock',
     id: 'markdown-input-fallback',
     locale: NS,
   }, FallbackNotice))
-  // The context meter (issue #43), the second occupant of the same ambient
-  // slot and the one whose presence is NATIVE position: the host InputBar's
-  // own root `.dock` renders the slot contents first and its ContextMeter
-  // after them, so this entry carries `order: 1` to keep that row position
-  // against every other occupant while the dock's centered justification
-  // keeps a lone meter exactly where the native one sits. No locale namespace
-  // is declared: the copy is the host `conversation` namespace's, bound in
-  // apply (the occupant reads it per render), so the framework seat would
-  // only duplicate what the component already resolves.
-  ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register({
-    name: 'conversation.composer.dock',
-    id: 'markdown-input-context-meter',
-    order: 1,
-  }, ContextMeterOccupant))
 }

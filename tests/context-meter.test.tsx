@@ -1,47 +1,34 @@
 /**
- * The dock context meter (issue #43) at the component seam.
+ * The takeover card's context meter (issue #43) at the component seam.
  *
  * Two groups:
  *
- * 1. `ContextMeterFace` with the props a real slot delivers — the two
+ * 1. `ContextMeterFace` with the props the card delivers — the two
  *    projection values and the `conversation` translate seat — covering the
  *    acceptance rules: nothing while either projection or the capacity is
  *    missing, ring + percentage when present, the click-open composition
  *    panel (segments, compact figures, `dl` rows), Escape close, and the
  *    capacity-loss auto-close on a model switch.
  *
- * 2. the REACHABILITY proof #43 demanded before implementing: a real
- *    ui-renderer slot tree (the host's own `createSlotRenderer` over a
- *    session-scope adapter whose binding carries ui-session's `BUILTIN_SOURCE`
- *    shape) renders the registered dock occupant, and the occupant must
- *    receive the `useProjection` seat and the session id from the session
- *    standard kit — the mechanism that makes the native below-the-card
- *    position possible at all.
+ * 2. the card-tree seam the meter actually lives in now: the takeover card
+ *    renders the face ITSELF, in a dock row directly below the bordered card
+ *    face (issue #43's root cause was that the occupant sat on
+ *    `conversation.composer.dock`, a slot the host only mounts from inside
+ *    its InputBar — hidden by the takeover, so the occupant never rendered).
+ *    These tests render the real `MarkdownComposer` tree and assert the
+ *    native-parity placement (outside the card face, sibling below it), the
+ *    degraded rows, and that the #41 card hit area does not reach the row.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { Context } from '@deepseek-ai/cordis'
-import type { SessionReference } from '@deepseek-ai/dsh-api-session-controller/client'
-import type {
-  ScopedStandardSourceBinding, SlotRendererHost, SlotScopeAdapter, StandardSourceBinding, StoredEntry,
-} from '@deepseek-ai/dsh-client-ui-renderer/src/client/scoped-slots.tsx'
-// The renderer's SOURCE, not its built entry: the published `lib/client.js`
-// is a host module-loader bundle (its uSES import would load a second React;
-// see vitest.config.ts), while the source is plain ESM the test transform can
-// wire to this project's React.
-import { createSlotRenderer } from '@deepseek-ai/dsh-client-ui-renderer/src/client/scoped-slots.tsx'
-// The host's own dictionaries, read from upstream source: the meter's copy is
-// NOT this plugin's, so the test proves parity against the very words the host
-// seat renders. `conversationEn` carries `context.*`; `commonEn` carries the
-// shared compact-number templates (`number.thousand` / `number.million`),
-// which live in the shared `common` vocabulary the namespace-bound translate
-// consults after its own dictionary misses.
 import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
 import { en as conversationEn } from '@deepseek-ai/dsh-client-ui-conversation/src/client/locales.ts'
 import { ContextMeterFace, type ContextMeterFaceProps } from '../src/client/ContextMeterFace.tsx'
-import { ContextMeterOccupant } from '../src/client/ContextMeterOccupant.tsx'
+import { MarkdownComposer, MARKDOWN_TAKEOVER, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import type { ContextBreakdownView, ContextPressureView } from '../src/client/context-occupancy.ts'
 import { resetContextLocale, setContextLocale } from '../src/client/context-meter-face.ts'
+import { resetFaces } from '../src/client/face.ts'
+import { en } from '../src/client/locales.ts'
 
 /** The seat the host delivers: the conversation dictionary over the shared common one. */
 const dictionary: Record<string, string> = { ...commonEn, ...conversationEn }
@@ -93,6 +80,7 @@ function trigger(): HTMLElement {
 afterEach(() => {
   cleanup()
   resetContextLocale()
+  resetFaces()
 })
 
 describe('ContextMeterFace visibility', () => {
@@ -232,173 +220,132 @@ describe('ContextMeterFace panel', () => {
 })
 
 /* ------------------------------------------------------------------ *
- * Reachability proof: the real renderer delivers the session standard
- * kit to a `conversation.composer.dock` occupant.
+ * Card-tree seam: the takeover card renders the meter itself, in a
+ * dock row directly below the card face (issue #43).
  * ------------------------------------------------------------------ */
 
-function observable<T>(initial: T) {
-  let value = initial
-  const listeners = new Set<() => void>()
-  return {
-    getSnapshot: () => value,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener)
-      return () => { listeners.delete(listener) }
-    },
-    set: (next: T) => {
-      value = next
-      for (const listener of [...listeners]) listener()
-    },
-  }
-}
-
-/** The session standard kit's `useProjection` seat, as the host binding carries it. */
-type UseProjectionProp = (key: string) => unknown
-
-/** One dock occupant's recorded props, in render order. */
-interface RenderedProps {
-  readonly useProjection: unknown
-  readonly sessionId: unknown
-  /** What the seat answered INSIDE the rendering component (hooks are render-scoped). */
-  readonly pressure: unknown
-  readonly ghost: unknown
-}
+/** The plugin `markdown-input` translate seat, expanded from the plugin dictionary. */
+const cardT = ((key: keyof typeof en, params?: Record<string, string>) =>
+  en[key].replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`)
+) as unknown as MarkdownComposerProps['t']
 
 /**
- * A host tree shaped exactly like the host's own ui-renderer suite: the root
- * entry declares ONE session-scope child slot, the session scope adapter
- * resolves a binding per Session reference, and that binding carries
- * ui-session's `BUILTIN_SOURCE` members — `hooks.session`,
- * `keyedHooks.projection`, `props.sessionId` (ui-session/src/client/index.ts:
- * 259-271). Whatever the renderer adds to an occupant of a session-scope slot
- * through its standard kit is therefore visible exactly as on a real host.
+ * Chain props for one card render, with the meter's two projection keys on
+ * the seat. The rest of the shape mirrors the other card suites: a selector
+ * `useInput`, the machine verbs, and no conversation service (the attachment
+ * and notice faces hide; the meter does not depend on them).
  */
-function makeHost(): {
-  host: SlotRendererHost
-  rendered: RenderedProps[]
-  cells: Map<string, ReturnType<typeof observable<unknown>>>
-  select: (id: string) => void
-} {
-  const scopeCtx = new Context()
-  const absent: StandardSourceBinding = {
-    key: undefined,
-    hooks: { session: undefined },
-    keyedHooks: { projection: undefined },
-    props: { sessionId: undefined },
+function cardProps(table: {
+  pressure?: ContextPressureView
+  breakdown?: ContextBreakdownView
+} = {}): MarkdownComposerProps {
+  const inputState = {
+    draft: '',
+    phase: 'plain',
+    attachmentIds: [] as string[],
+    draftRev: 0,
+    occurrences: [],
+    queue: [],
+    claim: undefined,
   }
-  const absentCell = { getSnapshot: () => undefined, subscribe: () => () => {} }
-  const cells = new Map<string, ReturnType<typeof observable<unknown>>>()
-  const rendered: RenderedProps[] = []
-  const current = observable<StandardSourceBinding>(absent)
-
-  const sessionFor = (id: string): ScopedStandardSourceBinding => ({
-    key: id,
-    ctx: scopeCtx,
-    hooks: { session: { getSnapshot: () => ({ sid: id }), subscribe: () => () => {} } },
-    keyedHooks: { projection: key => cells.get(key) ?? absentCell },
-    props: { sessionId: id },
-  })
-
-  const rootEntry: StoredEntry = {
-    // The renderer hands every root component `renderSlot`; this one only
-    // needs to expose the session-scope child, so its component is a pass
-    // through. The session scope comes from the adapter's CURRENT binding
-    // (installed by `select`, which runs before the render).
-    component: (props: { renderSlot: (key: string, owner: object) => React.ReactNode }) =>
-      props.renderSlot('probe.dock', {}),
-    options: {},
-    children: { 'probe.dock': { kind: 'single', scope: 'session' } },
+  const projectionValues: Record<string, unknown> = {
+    goal: null,
+    plan: undefined,
+    contextPressure: table.pressure,
+    contextBreakdown: table.breakdown,
   }
-
-  const sessionEntry: StoredEntry = {
-    component: (props: Record<string, unknown>) => {
-      const useProjection = props['useProjection'] as UseProjectionProp | undefined
-      // The seat is a HOOK seat: it may only be called from a component body,
-      // which is exactly what this probe does — the same call the meter makes.
-      rendered.push({
-        useProjection,
-        sessionId: props['sessionId'],
-        pressure: typeof useProjection === 'function' ? useProjection('contextPressure') : undefined,
-        ghost: typeof useProjection === 'function' ? useProjection('contextGhost') : undefined,
-      })
-      return <ContextMeterOccupant useProjection={useProjection} />
-    },
-    options: {},
-  }
-
-  const sessionAdapter: SlotScopeAdapter = {
-    current,
-    bindingSource: reference => (reference === undefined
-      ? observable<StandardSourceBinding>(absent)
-      : observable<StandardSourceBinding>(sessionFor(reference.sessionId))),
-    renderArea: (scopeBinding, { empty, children }) => (scopeBinding.key === undefined
-      ? <>{empty?.() ?? null}</>
-      : <>{children}</>),
-  }
-
-  const host: SlotRendererHost = {
-    subscribe: () => () => {},
-    getVersion: () => 0,
-    entriesOf: key => (key === 'root' ? [rootEntry] : [sessionEntry]),
-    entriesOfSlot: key => (key === 'root' ? [rootEntry] : [sessionEntry]),
-    reportEntryError: () => {},
-    reportFactoryError: () => {},
-    specOf: key => {
-      if (key === 'probe.dock') return { kind: 'single', scope: 'session' }
-      return undefined
-    },
-    isLive: () => true,
-    storeOf: () => undefined,
-    factoryStoreOf: () => undefined,
-    retainFactoryOccurrence: () => () => {},
-    subscribeFactory: () => () => {},
-    getFactoryVersion: () => 0,
-    factoryOf: () => undefined,
-    isFactoryLive: () => false,
-    root: observable<StandardSourceBinding>({ key: undefined, hooks: {}, keyedHooks: {}, props: {} }),
-    scopeRevision: observable(0),
-    scope: () => sessionAdapter,
-  }
-
   return {
-    host,
-    rendered,
-    cells,
-    select: (id: string) => { current.set(sessionFor(id)) },
-  }
+    matched: MARKDOWN_TAKEOVER,
+    sessionId: 's1',
+    useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
+    inputActions: {
+      setDraft: vi.fn(),
+      submit: vi.fn(),
+      addAttachments: vi.fn(),
+      removeAttachment: vi.fn(),
+      pruneAttachments: vi.fn(),
+    } as unknown as MarkdownComposerProps['inputActions'],
+    useProjection: ((key: string, selector?: (value: unknown) => unknown) => {
+      const value = projectionValues[key]
+      return selector !== undefined ? selector(value) : value
+    }) as MarkdownComposerProps['useProjection'],
+    t: cardT,
+  } as unknown as MarkdownComposerProps
 }
 
-describe('conversation.composer.dock occupant reachability', () => {
-  it('delivers useProjection and sessionId to a session-scope dock occupant', () => {
-    const harness = makeHost()
-    harness.cells.set('contextPressure', observable<unknown>(FULL_PRESSURE))
+function meterEl(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[data-context-meter]')
+}
+
+/** The CodeMirror text surface, for the focus assertions the hit-area test makes. */
+function content(): HTMLElement {
+  return document.querySelector('.cm-content') as HTMLElement
+}
+
+describe('takeover card dock row (issue #43)', () => {
+  it('renders the meter in a dock row directly below the card face, outside it', () => {
     setContextLocale(t)
-    harness.select('s1')
-    render(createSlotRenderer().renderRoot(harness.host, {}))
-    // The renderer injected the seat: the occupant received the hook and the
-    // session identity from the session standard kit…
-    const seen = harness.rendered.at(-1)
-    expect(typeof seen?.useProjection).toBe('function')
-    expect(seen?.sessionId).toBe('s1')
-    // …and the hook answered the projected value inside the component body,
-    // undefined for a key the host never contributed.
-    expect(seen?.pressure).toEqual(FULL_PRESSURE)
-    expect(seen?.ghost).toBeUndefined()
-    // …and the meter itself mounted in that session's own subtree, which is
-    // what puts it BELOW the card in the native dock position (#43).
-    expect(meter()).not.toBeNull()
-    expect(meter()?.textContent).toContain('19%')
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE })} />)
+    const meter = meterEl()
+    expect(meter).not.toBeNull()
+    expect(meter?.textContent).toContain('19%')
+    // Native parity: the row is a SIBLING after the bordered card face —
+    // the meter is not swallowed into the card and not a slot occupant the
+    // takeover hides.
+    const face = document.querySelector('[data-markdown-composer]')
+    const dock = document.querySelector('[data-markdown-dock]')
+    expect(face).not.toBeNull()
+    expect(dock).not.toBeNull()
+    expect(meter?.closest('[data-markdown-composer]')).toBeNull()
+    expect(meter?.closest('[data-markdown-dock]')).toBe(dock)
+    expect(face?.nextElementSibling).toBe(dock)
+    expect(dock?.parentElement).toBe(face?.parentElement)
   })
 
-  it('renders nothing when the renderer injects no projection seat', () => {
+  it('renders no meter and an empty row while the projections are absent', () => {
     setContextLocale(t)
-    const { container } = render(<ContextMeterOccupant useProjection={undefined} />)
-    expect(container).toBeEmptyDOMElement()
+    render(<MarkdownComposer {...cardProps()} />)
+    expect(meterEl()).toBeNull()
+    // 整面隐藏: the row keeps no dead seat and no reserved strip content.
+    expect(document.querySelector('[data-markdown-dock]')?.childElementCount).toBe(0)
   })
 
-  it('renders nothing while the host copy is unbound', () => {
-    resetContextLocale()
-    const { container } = render(<ContextMeterOccupant useProjection={projection({ pressure: FULL_PRESSURE })} />)
-    expect(container).toBeEmptyDOMElement()
+  it('renders no meter while the capacity is unknown (no contextWindow)', () => {
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: { projectedTokens: 24_000 } })} />)
+    expect(meterEl()).toBeNull()
+  })
+
+  it('hides the face whole while the host conversation copy is unbound', () => {
+    // No setContextLocale: a composition that never bound the namespace has
+    // no copy to show, and the card renders nothing in the row.
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE })} />)
+    expect(meterEl()).toBeNull()
+    expect(document.querySelector('[data-markdown-dock]')?.childElementCount).toBe(0)
+  })
+
+  it('opens the composition panel with the degraded single segment when no breakdown exists', () => {
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE })} />)
+    fireEvent.click(trigger())
+    const open = panel()
+    expect(open).not.toBeNull()
+    const segments = open?.querySelectorAll('[data-context-segment]')
+    expect(segments).toHaveLength(1)
+    expect(segments?.[0]?.getAttribute('data-context-segment')).toBe('total')
+  })
+
+  it('does not turn a dock-row mousedown into an editor focus (the #41 hit area ends at the card face)', () => {
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE })} />)
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      const dock = document.querySelector('[data-markdown-dock]') as HTMLElement
+      fireEvent.mouseDown(dock)
+      expect(focus).not.toHaveBeenCalled()
+      expect(document.activeElement).not.toBe(content())
+    } finally {
+      focus.mockRestore()
+    }
   })
 })

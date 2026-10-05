@@ -2,11 +2,13 @@
  * The takeover card's context-occupancy meter (issue #43): the card's rebuild
  * of the native ContextMeter, the ring + percentage that the native InputBar
  * renders in its root `.dock` directly below the composer card. The takeover
- * card wins the composer chain and replaces that whole fallback subtree, so
- * the scale vanished with it; this face re-seats it as an occupant of the
- * AMBIENT slot below the card — `conversation.composer.dock`, the same slot
- * the host's own stats pills and this plugin's fallback notice occupy — which
- * is the native position rather than a facsimile inside the card.
+ * card wins the composer chain and hides that whole fallback subtree — and
+ * the host mounts `conversation.composer.dock` ONLY from inside the InputBar
+ * (`ui-conversation/src/client/skeleton/InputBar.tsx:499-504`), so an occupant
+ * on that slot never renders during a takeover: the alpha.12 real-device
+ * failure. The card therefore renders this face ITSELF, in its own dock row
+ * below the card face — the native position reproduced, not a slot seat the
+ * fallback's death vacates.
  *
  * Vendored from dsh `ui-conversation/src/client/skeleton/ContextMeter.tsx`
  * (0.2.0-rc.2, the host component is not exported): the ring geometry
@@ -28,6 +30,8 @@ import {
   Tooltip, useAnchoredPosition, useDismissOnOutsidePointer,
   type TooltipSide,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import type { FaceDefinition } from './face.ts'
+import { contextLocale } from './context-meter-face.ts'
 import type {
   ContextBreakdownView, ContextPressureView, ContextTranslate,
 } from './context-occupancy.ts'
@@ -73,13 +77,32 @@ export type ContextBreakdownReader = (
   key: 'contextBreakdown',
 ) => ContextBreakdownView | null | undefined
 
-/** Props of the meter as the `conversation.composer.dock` slot delivers them. */
+/** The face id the dock row's FaceGate registers (`face.ts` dotted convention). */
+export const CONTEXT_METER_FACE_ID = 'dock.contextMeter'
+
+/**
+ * The dock row's face definition: the projection seat must be callable and
+ * the host `conversation` copy must be bound — either miss and the gate
+ * renders nothing, so the row stays empty (and CSS keeps it collapsed)
+ * instead of a dead seat. Registration is idempotent per id, so the inline
+ * per-render definition object is safe.
+ * @param useProjection - the chain-prop projection seat, probed structurally.
+ * @returns the face definition for the meter's FaceGate.
+ */
+export function contextMeterFaceDefinition(useProjection: unknown): FaceDefinition {
+  return {
+    id: CONTEXT_METER_FACE_ID,
+    probe: () => typeof useProjection === 'function' && contextLocale() !== undefined,
+  }
+}
+
+/** Props of the meter as the takeover card's dock row delivers them. */
 export interface ContextMeterFaceProps {
   /**
-   * The session's projection seat, one hook call per key. A session-scoped
-   * slot occupant receives it from the renderer's session standard kit — the
-   * same kit `sessionId` rides, injected into every session-scope occupant on
-   * this host build (ui-session's `BUILTIN_SOURCE` keyed hook).
+   * The session's projection seat, one hook call per key. The card receives
+   * it as a chain-prop standard seat and passes it down — the same kit
+   * `sessionId` rides, injected into every session-scope entry on this host
+   * build (ui-session's `BUILTIN_SOURCE` keyed hook).
    */
   readonly useProjection: ContextPressureReader & ContextBreakdownReader
   /** The `conversation` translate seat the plugin binds in apply. */

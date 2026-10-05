@@ -1,3 +1,17 @@
+/* The takeover card's root column (issue #43): the card face plus the dock
+   row BELOW it. Geometry mirrors the native bar's own root
+   (`ui-conversation/src/client/skeleton/InputBar.module.css` `.root`): a
+   centered column with the shared side clearance and the native 4px bottom
+   pad, so the meter row sits in the same band the native ContextMeter does —
+   inside the seat, off the window's bottom edge — and the card face keeps
+   its width constraint (below) untouched. */
+.root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 var(--dsh-composer-side-clearance) 4px;
+}
+
 .card {
   /* The chain winner replaces the host card outright, so the host card's own
      width constraint does not apply; mirror it to keep the composer column
@@ -21,6 +35,25 @@
   border-radius: var(--dsw-radius-panel, 28px);
   padding: 8px 10px;
   background: var(--dsw-bg, transparent);
+}
+
+/* The dock row below the card face (issue #43): the native bar's row
+   (`InputBar.module.css` `.dock`) mirrored — centered, capped, one 4px top
+   gap off the card. The row's only occupant is the rebuilt ContextMeter; the
+   `:empty` collapse extends the native hero bar's own `:empty` rule so a
+   meter with nothing to show (projections or copy unbound) leaves NO reserved
+   strip — the face-missing-whole convention, not a 4px ghost. */
+.dock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  max-width: 100%;
+  padding-top: 4px;
+}
+
+.dock:empty {
+  display: none;
 }
 
 /* The CodeMirror surface: transparent chrome over the card, autogrow with a

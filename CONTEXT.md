@@ -101,5 +101,5 @@ _Avoid_: 禁用态（宿主语义是「前置 prerequisite」而非损坏）
 _Avoid_: Agent 模式（宿主概念是按预设组合成 Agent，不是开关）
 
 **上下文量表（Context meter）**:
-挂 `conversation.composer.dock` 重建的原生 ContextMeter（#43，随回退栏被接管隐藏，位于接管卡正下方、原生同位）：圆环 + 百分比，点开构成面板（系统/工具/对话启发式分段）；数据读 `contextPressure` 与 `contextBreakdown` 投影，缺任一或无容量不渲染。
+接管卡卡面正下方 dock 行自渲染的原生 ContextMeter（#43，原生是 InputBar 根 `.dock` 内与槽位并列的固定兄弟、随回退栏被接管隐藏，而 `conversation.composer.dock` 只由 InputBar 内部挂载——接管期间该槽位无人渲染，故由卡根直接渲染而非槽位 occupant）：圆环 + 百分比，点开构成面板（系统/工具/对话启发式分段）；数据读 `contextPressure` 与 `contextBreakdown` 投影，缺任一或无容量整行不渲染。
 _Avoid_: 上下文进度条（形态是环，且面板是主体）

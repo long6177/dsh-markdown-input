@@ -1,19 +1,14 @@
 /* Context-occupancy meter for the takeover card (issue #43): the ring +
    percentage below the card, portaled breakdown panel included. The shell
    rules are the host `ui-conversation/src/client/skeleton/ContextMeter.
-   module.css` verbatim, except the root rule, which re-expresses the native
-   bar's PLACEMENT here — an occupant of `conversation.composer.dock`.
-   The dock is the bar's centered flex row (`justify-content: center;
-   gap: 12px`), and the native bar renders its slot contents FIRST and this
-   meter after them; `order: 1` reproduces that row position against every
-   other occupant (the stats pills, this plugin's fallback notice), while a
-   lone meter stays centered by the dock's own justification exactly as the
-   native one is. */
+   module.css` verbatim, except the root rule, which carries no placement of
+   its own: the card's dock row (MarkdownComposer.module.css `.dock`, the
+   host bar's row mirrored) owns the centered below-the-face geometry, and
+   the meter is its only occupant. */
 
 .root {
   display: inline-flex;
   flex: none;
-  order: 1;
 }
 
 .trigger {

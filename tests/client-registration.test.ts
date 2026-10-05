@@ -17,7 +17,7 @@ import { en, NS, zh } from '../src/client/locales.ts'
 import { en as modelEn, zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
 import { MODEL_NS } from '../src/client/model-face.ts'
 import { FallbackNotice } from '../src/client/FallbackNotice.tsx'
-import { ContextMeterOccupant } from '../src/client/ContextMeterOccupant.tsx'
+import { ContextMeterFace } from '../src/client/ContextMeterFace.tsx'
 import { CONTEXT_NS } from '../src/client/context-meter-face.ts'
 import { agentPresetsRemoteFace, resetAgentPresetsSource } from '../src/client/agent-preset-face.ts'
 import { resetWorkspaceVerbSource, workspaceVerbFace } from '../src/client/workspace-verb.ts'
@@ -154,32 +154,25 @@ describe('client apply registration', () => {
     }
   })
 
-  it('occupies the composer dock with the fallback-notice entry and the context meter', () => {
+  it('leaves the composer dock to the fallback notice; the meter rides the card (#43)', () => {
     const { ctx, registrations } = recordedContext()
     apply(ctx)
     const docks = registrations.filter(entry => entry.name === 'conversation.composer.dock')
-    // T7 retired the paste/paint dock occupants; two remain: the one-shot
-    // notice and, since #43, the context meter. The notice is the only dock
-    // occupant that declares a locale namespace (its copy rides the plugin's
-    // own dictionaries); the meter reads the HOST `conversation` namespace
-    // through the seat apply binds, so it declares none.
-    expect(docks).toHaveLength(2)
+    // The context meter is NOT a dock occupant: the host only mounts
+    // `conversation.composer.dock` from inside its InputBar
+    // (ui-conversation InputBar.tsx:499-504), so once the takeover hides the
+    // fallback the slot is never rendered and any occupant on it is dead
+    // (the #43 real-device failure). The meter renders from the card itself,
+    // in the card's own dock row below the face. The one-shot fallback
+    // notice keeps its seat — it shows exactly when the native bar is back.
+    expect(docks).toHaveLength(1)
     expect(docks[0]).toMatchObject({
       id: 'markdown-input-fallback',
       component: FallbackNotice,
       locale: NS,
       key: undefined,
     })
-    // The meter must land AFTER the slot contents, exactly where the native
-    // bar renders its ContextMeter: the dock is a centered flex list, so the
-    // registration's `order` (default 0) is what puts it there.
-    expect(docks[1]).toMatchObject({
-      id: 'markdown-input-context-meter',
-      component: ContextMeterOccupant,
-      locale: undefined,
-      key: undefined,
-      order: 1,
-    })
+    expect(docks.map(dock => dock.component)).not.toContain(ContextMeterFace)
   })
 
   it('binds the host conversation copy for the context meter without registering it', () => {
@@ -229,8 +222,8 @@ describe('client apply registration', () => {
     // Degraded earlier in the page life (boundary crash, editor-face probe
     // failure): re-running apply — a later session scope's re-inject — must
     // not re-attempt the takeover (ADR-0005 Q5). Dictionaries, chat-node
-    // seats, and the dock occupants (the fallback notice and the context
-    // meter) are not part of the latch.
+    // seats, and the dock occupant (the fallback notice) are not part of the
+    // latch; the context meter rides the card, which the latch covers.
     degradeTakeover('editor face probe failed (setDraft missing)')
     const { ctx, registrations } = recordedContext()
     apply(ctx)
@@ -238,7 +231,7 @@ describe('client apply registration', () => {
     expect(names).not.toContain('conversation.composer')
     expect(names).toContain('conversation.chat.node')
     expect(names).toContain('conversation.composer.dock')
-    expect(registrations.filter(entry => entry.name === 'conversation.composer.dock')).toHaveLength(2)
+    expect(registrations.filter(entry => entry.name === 'conversation.composer.dock')).toHaveLength(1)
   })
 })
 
