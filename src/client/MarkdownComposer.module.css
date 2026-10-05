@@ -28,13 +28,26 @@
   /* Corner parity with the native input card (issue #40): the host card rounds
      with the panel token, so the takeover keeps the same silhouette instead of
      reading visibly squarer beside it. The fallback covers host builds without
-     the token. Only the radius matches: the 1px border above and the
-     transparent background below are this card's own chrome and deliberately
-     stay as they are — the native elevation hairline / input fill / soft shadow
-     are out of scope. */
+     the token. Since #44 the fill below matches the native card too; the 1px
+     border above and the native soft shadow stay out of scope as this card's
+     own chrome. */
   border-radius: var(--dsw-radius-panel, 28px);
   padding: 8px 10px;
-  background: var(--dsw-bg, transparent);
+  /* Opaque fill, the native card's own token (issue #44): alpha.12's
+     real-machine window drag showed a see-through band across the placeholder
+     row. The old `var(--dsw-bg, transparent)` always landed on its fallback —
+     the host theme defines no `--dsw-bg` — so the face had no painted base and
+     the window content beneath showed through while the compositor dragged
+     the window. The fill is now the token the native composer card paints
+     itself with (ui-conversation/src/client/skeleton/InputBar.module.css:62):
+     white in light, rgb(44, 44, 46) in dark
+     (ui-theme/src/styles/design-platform.css:269 and :387). The alias middle
+     step resolves to that same color pair in both themes
+     (design-platform.css:172 and :290) for builds that ship the aliases
+     without the specifics; the literal keeps the face opaque when neither
+     exists — a tokenless host now degrades to a wrong color, never to
+     transparency. */
+  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-layer-2, #fff));
 }
 
 /* The dock row below the card face (issue #43): the native bar's row
