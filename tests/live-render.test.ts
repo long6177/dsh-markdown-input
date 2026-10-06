@@ -165,6 +165,66 @@ describe('buildRenderDecorations: task lists', () => {
   })
 })
 
+describe('buildRenderDecorations: horizontal rules (issue #48)', () => {
+  it('folds each of the three marker characters into an hr line when inactive', () => {
+    for (const marker of ['---', '***', '___']) {
+      const doc = marker
+      const records = collect(setup(doc))
+      expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
+        .toEqual([marker])
+      expect(records.filter(r => r.kind === 'line')).toEqual([
+        { from: 0, to: 0, kind: 'line', class: 'cm-md-hr' },
+      ])
+    }
+  })
+
+  it('folds the GFM space variants the parser accepts', () => {
+    for (const marker of ['- - -', '   ---   ']) {
+      const doc = marker
+      const records = collect(setup(doc))
+      const folded = records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to))
+      // The node range is what folds: `- - -` whole, `---` with its trailing
+      // spaces (the leading indent is not part of the node and stays visible).
+      expect(folded).toEqual([marker.replace(/^\s+/, '')])
+      expect(records.filter(r => r.kind === 'line').every(r => r.class === 'cm-md-hr')).toBe(true)
+    }
+  })
+
+  it('keeps the raw marker and paints no hairline class on the active line', () => {
+    const records = collect(setup('---', [1]))
+    expect(records.filter(r => r.kind !== 'line')).toEqual([])
+    expect(records.filter(r => r.kind === 'line' && r.class === 'cm-md-hr')).toEqual([])
+  })
+
+  it('never mistakes a setext heading underline for a rule', () => {
+    const doc = 'Title\n---'
+    const records = collect(setup(doc))
+    expect(records.filter(r => r.kind === 'replace')).toEqual([])
+    expect(records.filter(r => r.kind === 'line' && r.class === 'cm-md-hr')).toEqual([])
+    // The setext pair still takes its heading shape (existing contract).
+    expect(records.filter(r => r.kind === 'line').every(r => r.class === 'cm-md-h2')).toBe(true)
+  })
+
+  it('judges rules inside lists and quotes by the syntax node, not the line text', () => {
+    // The rule node folds wherever the parser puts it; the quote mark's own
+    // fold is the existing contract and folds alongside it, while the list
+    // mark (never folded) stays raw ahead of the rule.
+    const cases: ReadonlyArray<[string, string[]]> = [
+      ['1. ---', ['---']],
+      ['> ---', ['> ', '---']],
+    ]
+    for (const [doc, expected] of cases) {
+      const records = collect(setup(doc))
+      expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
+        .toEqual(expected)
+      // The rule line takes the hairline class; a quote's own `cm-md-quote`
+      // may ride along (the rule folds inside the quote's block styling).
+      expect(records.filter(r => r.kind === 'line').every(r => r.class?.split(' ').includes('cm-md-hr')))
+        .toBe(true)
+    }
+  })
+})
+
 describe('buildRenderDecorations: escapes and plain text', () => {
   it('never folds escaped characters', () => {
     const doc = 'literal \\* star \\`tick'
