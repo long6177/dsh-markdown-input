@@ -16,9 +16,11 @@
  * One peripheral-slot occupant registers at the host's
  * `conversation.composer.dock` beside the card — the fallback notice,
  * rendering the one-shot degradation announcement when the card falls back.
- * The below-card context meter (issue #43) is deliberately NOT an occupant
- * there: the host mounts that slot only from inside its InputBar, so it
- * never renders during a takeover — the card renders the meter itself.
+ * The below-card context meter AND the stats pills (issue #43) are
+ * deliberately NOT occupants there: the host mounts that slot only from
+ * inside its InputBar (the slot's order-0 occupant is the native StatsPills,
+ * `ui-chat/src/client/apply.ts:284-288`), so nothing on it renders during a
+ * takeover — the card renders both faces itself, in its own dock row.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // The `chat`-namespace `t` seat also accepts the shared `common` vocabulary
@@ -49,6 +51,9 @@ import { installWorkspaceVerbSource } from './workspace-verb.ts'
 import {
   AGENT_PRESET_NS, installAgentPresetsSource, resetAgentPresetLocale, setAgentPresetLocale,
 } from './agent-preset-face.ts'
+import {
+  STATS_NS, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
+} from './stats-pills-face.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -198,6 +203,22 @@ export function apply(ctx: ClientContext): void {
     setAgentPresetLocale(ctx.locale.bind(AGENT_PRESET_NS))
     return resetAgentPresetLocale
   }, 'markdown-input: agent-preset host copy')
+  // The stats pills (issue #43, alpha.13) bind the HOST `chat` namespace the
+  // same read-only way: the pill words are ui-chat's own dictionary keys
+  // (`stats.*`, `message.tokensPerSecond`, `message.turnUsage.count`) plus
+  // the shared `number.*` templates. Unlike the meter's `conversation`
+  // binding there is a plugin fallback — the locales.ts lines above are the
+  // host's zh/en strings verbatim — so a build whose `chat` dictionary misses
+  // a key still renders the native words. The pills' detailed/compact
+  // presentation rides the `ui-chat` settings form (`performanceUsage`),
+  // resolved lazily beside the other capability-detected installers: a host
+  // build without the configForms service keeps the native default
+  // (detailed).
+  ctx.effect(() => {
+    setStatsLocale(ctx.locale.bind(STATS_NS))
+    return resetStatsLocale
+  }, 'markdown-input: stats pills host copy')
+  installStatsSettingsSource(ctx)
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
   // (degrade.ts), which latches the takeover off for the page life and

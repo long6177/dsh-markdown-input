@@ -103,3 +103,7 @@ _Avoid_: Agent 模式（宿主概念是按预设组合成 Agent，不是开关�
 **上下文量表（Context meter）**:
 接管卡卡面正下方 dock 行自渲染的原生 ContextMeter（#43，原生是 InputBar 根 `.dock` 内与槽位并列的固定兄弟、随回退栏被接管隐藏，而 `conversation.composer.dock` 只由 InputBar 内部挂载——接管期间该槽位无人渲染，故由卡根直接渲染而非槽位 occupant）：圆环 + 百分比，点开构成面板（系统/工具/对话启发式分段）；数据读 `contextPressure` 与 `contextBreakdown` 投影，缺任一或无容量整行不渲染。
 _Avoid_: 上下文进度条（形态是环，且面板是主体）
+
+**会话统计（Stats pills）**:
+接管卡 dock 行内量表之前自渲染的原生 StatsPills（#43，原生是 `conversation.composer.dock` 槽位的 order-0 occupant（`ui-chat/src/client/apply.ts:284-288`），槽位同样只由隐藏的 InputBar 挂载——接管期间不可见，与量表同一结构性缺口，故与量表同位重建且保持原生先于量表的次序）：计数 pill 读 `sessionStats` 投影显示回合/步数与解码速度（tok/s），用量 pill 读 `tokenUsage` 投影显示四桶合计（未缓存输入 + 缓存读 + 缓存写 + 输出）与缓存命中百分比（部分命中永不进位到 100）；detailed/compact 形态读 `ui-chat` 设置节（`configForms` 服务，缺席回落原生默认 detailed）；无步数且无 token 整件隐藏，两 pill 各自独立降级，词典走宿主 `chat` 命名空间只读 bind、插件 locales 备同值兜底。
+_Avoid_: 性能设置（宿主 `performanceUsage` 是展示形态设置，pill 是读数不是设置入口）

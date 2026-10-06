@@ -147,6 +147,16 @@ const zh = {
   'agentPreset.hint': '选择新任务使用的 Agent 预设',
   'agentPreset.noDescription': '暂无描述。',
   'agentPreset.switchRefused': '无法切换 Agent 预设：{reason}',
+  // Stats pills (issue #43, alpha.13). The pill copy is the host `chat`
+  // namespace's own (`ui-chat/src/client/locale.ts`, bound read-only in
+  // apply); these are the same lines copied verbatim as the fallback keys a
+  // build without those dictionary entries resolves through.
+  'stats.counts': '{turns} 轮 {steps} 步',
+  'stats.cacheHit': '缓存命中 {percent}%',
+  'message.tokensPerSecond': '{tps} tok/s',
+  'message.turnUsage.count': '{count} tok',
+  'number.thousand': '{value}K',
+  'number.million': '{value}M',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -264,6 +274,14 @@ const en: Record<ComposerKey, string> = {
   'agentPreset.hint': 'Choose the agent preset for your new task',
   'agentPreset.noDescription': 'No description.',
   'agentPreset.switchRefused': 'Could not switch the agent preset: {reason}',
+  // Stats pills (issue #43, alpha.13) — the host `chat` namespace's own lines
+  // copied verbatim (see the zh block above for the fold).
+  'stats.counts': '{turns} turns {steps} steps',
+  'stats.cacheHit': 'Cache hit {percent}%',
+  'message.tokensPerSecond': '{tps} tok/s',
+  'message.turnUsage.count': '{count} tok',
+  'number.thousand': '{value}K',
+  'number.million': '{value}M',
 }
 
 export { zh, en }

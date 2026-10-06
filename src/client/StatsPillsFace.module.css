@@ -1,0 +1,53 @@
+/* The takeover card's stats pills (issue #43, alpha.13 retest): the counts
+   and usage readings in the dock row, vendored from the host
+   `ui-chat/src/client/chat/StatsPills.module.css` (12/20 tertiary text tier,
+   two icon pills side by side). The `.anchor` and button/hover rules are not
+   vendored: this round's pills are the native's static span form (the dialog
+   arm is out of scope), so there is no anchor to shrink-wrap and nothing
+   hoverable. */
+
+.root {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
+  line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 1px 8px;
+  border: none;
+  border-radius: 999px;
+  corner-shape: round;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  line-height: inherit;
+  white-space: nowrap;
+}
+
+.pill svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sep {
+  color: var(--dsw-alias-separator-primary);
+  margin: 0 6px;
+}

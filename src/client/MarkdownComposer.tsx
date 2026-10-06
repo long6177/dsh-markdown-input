@@ -33,11 +33,13 @@
  * order (todo 0, goal 10, queue 20).
  *
  * The card root is the native bar's two-tier shape (issue #43): the bordered
- * card face, then a dock row directly below it holding the rebuilt
- * ContextMeter. The host mounts `conversation.composer.dock` only from
- * inside its InputBar, so during a takeover that slot never renders and the
- * meter rides the card's own row instead — the native below-the-card
- * position, mirrored geometry.
+ * card face, then a dock row directly below it holding the rebuilt stats
+ * pills (issue #43's alpha.13 round) and the rebuilt ContextMeter. The host
+ * mounts `conversation.composer.dock` only from inside its InputBar — the
+ * slot whose order-0 occupant is the native StatsPills — so during a takeover
+ * that slot never renders and both faces ride the card's own row instead —
+ * the native below-the-card position and order (pills first), mirrored
+ * geometry.
  *
  * The runtime placeholders follow the native bar's ladder
  * (`placeholder.steerQueue` / `placeholder.plan` over the card's own
@@ -84,6 +86,13 @@ import { planChipVisible, planProjectionOf } from './plan-core.ts'
 import { QueueFace } from './QueueFace.tsx'
 import { queueMutableOf, queueViewRows } from './queue-core.ts'
 import { skillFace } from './skill-face.ts'
+import {
+  resolveStatsCopy, type StatsPillsCopy,
+} from './stats-pills-core.ts'
+import {
+  statsLocale,
+} from './stats-pills-face.ts'
+import { StatsPillsFace, statsPillsFaceDefinition, type StatsPillsFaceProps } from './StatsPillsFace.tsx'
 import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
 import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
 import {
@@ -841,6 +850,17 @@ export function MarkdownComposer({
   // seat without words); the conjunction keeps TypeScript honest without a
   // cast.
   const contextMeterT = contextLocale()
+  // The dock pills' copy (issue #43, alpha.13): the HOST `chat` namespace's
+  // own keys through the bound seat, the plugin's verbatim fallback lines
+  // under a miss or an unbound namespace.
+  const statsCopy: StatsPillsCopy = resolveStatsCopy(statsLocale(), {
+    counts: t('stats.counts'),
+    cacheHit: t('stats.cacheHit'),
+    tokensPerSecond: t('message.tokensPerSecond'),
+    turnUsageCount: t('message.turnUsage.count'),
+    thousand: t('number.thousand'),
+    million: t('number.million'),
+  })
 
   return (
     // The card root is the native bar's own two-tier shape (issue #43): the
@@ -1133,20 +1153,39 @@ export function MarkdownComposer({
           </div>
         </div>
       </div>
-      {/* The dock row (issue #43): the meter is the row's only occupant —
-          the fallback notice keeps its `conversation.composer.dock` seat
-          (it shows exactly when the native bar is back), and the queue/goal/
-          todo strips stay in-card. Native runtime parity note: the native bar
-          hides this meter while its `conversation.input.activity` occupant is
+      {/* The dock row (issue #43): the native bar's row order mirrored —
+          the stats pills FIRST (the `conversation.composer.dock` slot's
+          order-0 occupant, `ui-chat/src/client/apply.ts:284-288`), then the
+          context meter (the bar's fixed sibling after the slot). The slot is
+          mounted only from inside the hidden fallback bar, so both faces ride
+          the card's own row. Native runtime parity note: the native bar hides
+          the meter while its `conversation.input.activity` occupant is
           expanded (`InputBar.tsx:60,503` — a toolbar-width claim like the
           experimental voice input, not a running state). That occupant lives
           inside the hidden fallback bar and exposes no public seam, so the
           signal is unreachable here and the meter stays visible: a recorded
           deviation, harmless in a takeover that has no such toolbar.
-          Probed and gated like every face: a projection seat miss or an
-          unbound copy renders nothing, and the row's CSS collapses when it
-          stays empty. */}
+          Probed and gated like every face: a probe miss or a render exception
+          hides that face alone, and the row's CSS collapses when it stays
+          empty. */}
       <div className={css.dock} data-markdown-dock>
+        {/* Stats pills (issue #43, alpha.13): the native dock's FIRST
+            occupant rebuilt. Gated like the native slot mount itself — the
+            host renders the dock slot only on the composer variant
+            (`InputBar.tsx:500`, `variant === 'composer'`), never on the hero
+            form — so the pills stay off for a session-less card and a blank
+            session (the hero analog), while the meter (ungated natively)
+            stays. Probed and gated: a projection seat miss hides the face;
+            per-pill data gates live inside (missing projections or a
+            session without steps or tokens hide whole or part natively). */}
+        {sessionId !== undefined && !blank && (
+          <FaceGate definition={statsPillsFaceDefinition(useProjection)}>
+            <StatsPillsFace
+              useProjection={useProjection as unknown as StatsPillsFaceProps['useProjection']}
+              copy={statsCopy}
+            />
+          </FaceGate>
+        )}
         <FaceGate definition={contextMeterFaceDefinition(useProjection)}>
           {contextMeterT !== undefined && (
             <ContextMeterFace

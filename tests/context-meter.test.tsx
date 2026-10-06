@@ -29,6 +29,7 @@ import type { ContextBreakdownView, ContextPressureView } from '../src/client/co
 import { resetContextLocale, setContextLocale } from '../src/client/context-meter-face.ts'
 import { resetFaces } from '../src/client/face.ts'
 import { en } from '../src/client/locales.ts'
+import { resetStatsLocale, resetStatsSettingsSource } from '../src/client/stats-pills-face.ts'
 
 /** The seat the host delivers: the conversation dictionary over the shared common one. */
 const dictionary: Record<string, string> = { ...commonEn, ...conversationEn }
@@ -80,6 +81,8 @@ function trigger(): HTMLElement {
 afterEach(() => {
   cleanup()
   resetContextLocale()
+  resetStatsLocale()
+  resetStatsSettingsSource()
   resetFaces()
 })
 
@@ -231,13 +234,18 @@ const cardT = ((key: keyof typeof en, params?: Record<string, string>) =>
 
 /**
  * Chain props for one card render, with the meter's two projection keys on
- * the seat. The rest of the shape mirrors the other card suites: a selector
- * `useInput`, the machine verbs, and no conversation service (the attachment
- * and notice faces hide; the meter does not depend on them).
+ * the seat — and (alpha.13 round) the stats pills' two keys, so the dock row
+ * order tests can drive both faces. The rest of the shape mirrors the other
+ * card suites: a selector `useInput`, the machine verbs, and no conversation
+ * service (the attachment and notice faces hide; the meter does not depend
+ * on them).
  */
 function cardProps(table: {
   pressure?: ContextPressureView
   breakdown?: ContextBreakdownView
+  stats?: Record<string, unknown>
+  usage?: Record<string, unknown>
+  blank?: boolean
 } = {}): MarkdownComposerProps {
   const inputState = {
     draft: '',
@@ -253,10 +261,13 @@ function cardProps(table: {
     plan: undefined,
     contextPressure: table.pressure,
     contextBreakdown: table.breakdown,
+    sessionStats: table.stats,
+    tokenUsage: table.usage,
   }
   return {
     matched: MARKDOWN_TAKEOVER,
     sessionId: 's1',
+    ...(table.blank ? { session: { blank: true } } : {}),
     useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
     inputActions: {
       setDraft: vi.fn(),
@@ -347,5 +358,77 @@ describe('takeover card dock row (issue #43)', () => {
     } finally {
       focus.mockRestore()
     }
+  })
+})
+
+/* ------------------------------------------------------------------ *
+ * Dock row order (issue #43, alpha.13 round): the native dock renders the
+ * stats pills FIRST — they are the `conversation.composer.dock` slot's
+ * order-0 occupant (`ui-chat/src/client/apply.ts:284-288`), mounted only
+ * from inside the fallback bar — and the meter after them (the bar's fixed
+ * sibling). The card mirrors that order in its own row.
+ * ------------------------------------------------------------------ */
+
+/** The screenshot figures (alpha.13): 7 turns / 160 steps at 247 tok/s; 22.5M tok, 99% hit. */
+const STATS = {
+  turns: 7, steps: 160, llmMs: 0, toolMs: 0, ttftMs: 0, ttftSteps: 0,
+  decodeMs: 1_000, decodeTokens: 247,
+}
+const USAGE = {
+  uncachedInputTokens: 225_000, outputTokens: 0,
+  cacheReadTokens: 22_275_000, cacheWriteTokens: 0,
+}
+
+describe('takeover card dock row order (issue #43, alpha.13)', () => {
+  it('renders the stats pills before the meter, one row, in the native order', () => {
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE, stats: STATS, usage: USAGE })} />)
+    const dock = document.querySelector('[data-markdown-dock]')
+    const pills = document.querySelector('[data-composer-stats]')
+    const meter = document.querySelector('[data-context-meter]')
+    expect(pills).not.toBeNull()
+    expect(meter).not.toBeNull()
+    // Native order: the slot occupant (pills, order 0) rides BEFORE the
+    // meter, both inside the same below-the-face row.
+    expect(dock?.firstElementChild).toBe(pills)
+    expect(pills?.nextElementSibling).toBe(meter)
+    expect(pills?.closest('[data-markdown-composer]')).toBeNull()
+    expect(pills?.textContent).toContain('7 turns 160 steps')
+    expect(pills?.textContent).toContain('247 tok/s')
+    expect(pills?.textContent).toContain('22.5M tok')
+    expect(pills?.textContent).toContain('Cache hit 99%')
+  })
+
+  it('renders the pills with the plugin fallback copy while the host chat seat is unbound', () => {
+    // No setStatsLocale: the card still speaks — the plugin's locales.ts
+    // lines are the host strings verbatim (the meter's binding, by contrast,
+    // is a hard dependency).
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE, stats: STATS, usage: USAGE })} />)
+    expect(document.querySelector('[data-composer-stats]')?.textContent).toContain('Cache hit 99%')
+  })
+
+  it('hides the pills for a blank session (the native hero variant gate) and keeps the meter', () => {
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE, stats: STATS, usage: USAGE, blank: true })} />)
+    // Native parity: the dock slot (the pills' seat) renders only on the
+    // composer variant; the meter is the bar's fixed sibling and ungated.
+    expect(document.querySelector('[data-composer-stats]')).toBeNull()
+    expect(document.querySelector('[data-context-meter]')).not.toBeNull()
+  })
+
+  it('hides the pills whole when both stats projections are missing', () => {
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE })} />)
+    expect(document.querySelector('[data-composer-stats]')).toBeNull()
+    expect(document.querySelector('[data-context-meter]')).not.toBeNull()
+  })
+
+  it('keeps the row empty of dead seats when the pills have nothing to show', () => {
+    setContextLocale(t)
+    render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE, stats: { ...STATS, steps: 0, turns: 0 } })} />)
+    // steps 0 + no tokens: the native row returns null; the usage pill would
+    // not render either.
+    expect(document.querySelector('[data-composer-stats]')).toBeNull()
   })
 })
