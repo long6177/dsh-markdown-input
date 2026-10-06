@@ -13,7 +13,9 @@ import { describe, expect, it } from 'vitest'
 
 /** The sheet text as shipped: read straight off disk (vitest stubs *.module.css). */
 function readSheet(path: string): string {
-  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
+  // Normalize CRLF: autocrlf checkouts hand the multi-line selector regexes
+  // `\r\n` line breaks, which never match the `\n` the rules were authored with.
+  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
 }
 
 /** The body of one selector's rule, or '' when absent. */
@@ -46,5 +48,26 @@ describe('card face ↔ native input fill CSS contract (issue #44)', () => {
     const overlay = ruleOf(composerCss, '.dropOverlay')
     expect(overlay).toContain('inset: 0')
     expect(overlay).toContain('border-radius: var(--dsw-radius-panel')
+  })
+})
+
+describe('live-render code language tag CSS contract (issue #47)', () => {
+  it('gives the tag-bearing line a positioning context', () => {
+    expect(ruleOf(composerCss, '.surface :global(.cm-md-codelang-line)')).toContain('position: relative')
+  })
+
+  it('floats the tag over the block top-right corner, pure display', () => {
+    const tag = ruleOf(composerCss, '.surface :global(.cm-md-codelang)')
+    expect(tag).toContain('position: absolute')
+    expect(tag).toContain('top: 0')
+    expect(tag).toContain('right: 8px')
+    // Read-only: no pointer interaction, no selection, not clickable.
+    expect(tag).toContain('pointer-events: none')
+    expect(tag).toContain('user-select: none')
+    expect(tag).not.toMatch(/cursor:\s*pointer/u)
+    // Small muted reading, coordinated with the codeblock wash via
+    // currentColor — the same mixing base the codeblock background uses.
+    expect(tag).toContain('font-size: 0.75em')
+    expect(tag).toMatch(/color:\s*color-mix\(in srgb, currentColor 45%, transparent\)/u)
   })
 })

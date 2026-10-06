@@ -456,7 +456,9 @@ describe('stats settings face (the configForms plane)', () => {
  * ------------------------------------------------------------------ */
 
 function readSheet(path: string): string {
-  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
+  // Normalize CRLF: autocrlf checkouts hand the multi-line selector regexes
+  // `\r\n` line breaks, which never match the `\n` the rules were authored with.
+  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
 }
 
 function ruleOf(sheet: string, selector: string): string {
