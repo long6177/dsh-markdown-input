@@ -18,13 +18,16 @@ const packageJson: {
 } = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
 
 describe.skipIf(!existsSync(bundlePath))('built browser half', () => {
-  const bundle = readFileSync(bundlePath, 'utf8')
+  // Read on demand: vitest runs a describe body during collection even when
+  // the suite is skipped, so an eager read here would crash a lib-less tree
+  // — the fresh-clone pass this file promises (header note) must hold.
+  const bundle = () => readFileSync(bundlePath, 'utf8')
 
   it('wraps the bundle in the dsh closure-factory contract', () => {
-    expect(bundle.startsWith('window.__ModuleLoader__.load({')).toBe(true)
-    expect(bundle).toContain('id: "dsh-markdown-input"')
-    expect(bundle).toContain('factory: (require) => {')
-    const code = bundle.replace(/\/\/# sourceMappingURL=.*$/u, '').trimEnd()
+    expect(bundle().startsWith('window.__ModuleLoader__.load({')).toBe(true)
+    expect(bundle()).toContain('id: "dsh-markdown-input"')
+    expect(bundle()).toContain('factory: (require) => {')
+    const code = bundle().replace(/\/\/# sourceMappingURL=.*$/u, '').trimEnd()
     expect(code).toMatch(/return module\.exports;\s*\}\s*\}\);\s*$/u)
   })
 
@@ -41,7 +44,7 @@ const MODULE_TABLE = new Set([
 ])
 
   it('resolves every external through the module table and inlines the rest', () => {
-    const externals = [...bundle.matchAll(/require\("((?:[^"\\]|\\.)+)"\)/gu)]
+    const externals = [...bundle().matchAll(/require\("((?:[^"\\]|\\.)+)"\)/gu)]
       .map(match => match[1]!)
       .filter(specifier => !specifier.startsWith('./') && !specifier.startsWith('../'))
     expect(externals.length).toBeGreaterThan(0)
@@ -51,8 +54,8 @@ const MODULE_TABLE = new Set([
   })
 
   it('takes over the composer and registers the user-message renderer', () => {
-    expect(bundle).toContain('"conversation.composer"')
-    expect(bundle).toContain('"conversation.chat.node"')
+    expect(bundle()).toContain('"conversation.composer"')
+    expect(bundle()).toContain('"conversation.chat.node"')
   })
 })
 
