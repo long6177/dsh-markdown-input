@@ -14,30 +14,37 @@
  * plus output total in compact tokens, the `·`-joined cache-hit share), the
  * whole row hidden when neither has anything to show (`stats.steps === 0 &&
  * !hasTokens`), each pill gated independently. The compact mode renders the
- * two plain readings alone.
+ * two plain readings alone. The third round (alpha.14 retest) restores the
+ * detailed mode's dialogs: both pills are buttons over one exclusive open
+ * slot (`StatsPills.tsx:320-321`), each portaling the host stat-dialog panel
+ * (`role="dialog"`, anchored above the trigger through the shared
+ * `useStatDialog` seat, stat-dialog-face.ts) — the counts dialog listing the
+ * session's timed figures, the usage dialog the four billing buckets under an
+ * exact grouped total.
  *
- * Recorded deviations from the native component this round: the native
- * detailed pills are buttons opening the session-stats / token-usage dialogs
- * (`stat-dialog.ts`) — the dialogs are out of scope here, so the pills are
- * the native's own static span form (`StatsPills.tsx:162-171`, the arm a
- * window without timed figures takes); and the native's window-scoped
+ * Recorded deviations from the native component: the native's window-scoped
  * `deriveStats` fallback fold has no counterpart (no chat-snapshot seat on
- * the card), so the counts pill rides the `sessionStats` projection alone.
- * The figures, gates, and geometry are the host's own.
+ * the card), so the counts pill rides the `sessionStats` projection alone;
+ * the gauge and database glyphs are vendored SVG paths (no host package
+ * import). The figures, gates, geometry, and copy are the host's own.
  */
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { useObservable } from './conversation-face.ts'
 import type { FaceDefinition } from './face.ts'
 import {
-  cacheHitPercent, compactReadings, fillTemplate, formatTokens, formatTokensPerSecond,
-  hasTokenActivity, billedInputTokens, statsPillsVisible, statsStepsOf, tokensPerSecondOf,
-  type CompactNumberTemplates, type SessionStatsView, type StatsPillsCopy, type TokenUsageView,
+  billedInputTokens, cacheHitPercent, compactReadings, exactCount, fillTemplate, formatDuration,
+  formatTokens, formatTokensPerSecond, hasTokenActivity, statsPillsVisible, statsStepsOf,
+  timeDialogAvailable, tokensPerSecondOf, ttftMeanMs,
+  type SessionStatsView, type StatsPillsCopy, type TokenUsageView,
 } from './stats-pills-core.ts'
 import {
   performanceUsageModeOf, statsSettingsStore,
   type PerformanceUsageMode,
 } from './stats-pills-face.ts'
+import { MEASURE_STYLE, useStatDialog, type StatDialogSlot } from './stat-dialog-face.ts'
 import css from './StatsPillsFace.module.css'
+import dialogCss from './StatDialogFace.module.css'
 
 /**
  * Read one stats projection value. The host `useProjection` standard seat is
@@ -88,7 +95,7 @@ function IconGaugeOutlineRegular(): ReactNode {
       xmlns="http://www.w3.org/2000/svg" aria-hidden="true" strokeWidth={1}>
       <path d="M3.4041 13.096C2.49514 12.187 1.87614 11.0288 1.62537 9.76798C1.37459 8.50716 1.50331 7.20028 1.99525 6.01261C2.48719 4.82494 3.32025 3.80981 4.3891 3.09557C5.45795 2.38134 6.71458 2.00008 8.0001 2C9.28563 2.00008 10.5423 2.38134 11.6111 3.09557C12.68 3.80981 13.513 4.82494 14.005 6.01261C14.4969 7.20028 14.6256 8.50716 14.3748 9.76798C14.1241 11.0288 13.5051 12.187 12.5961 13.096" stroke="currentColor" />
       <path d="M8 8.49994L11.6114 4.88855" stroke="currentColor" />
-      <path d="M8 9.75C8.69036 9.75 9.25 9.19036 9.25 8.5C9.25 7.80964 8.69036 7.25 8 7.25C7.30964 7.25 6.75 7.80964 6.75 8.5C6.75 9.19036 7.30964 9.75 8 9.75Z" fill="currentColor" />
+      <path d="M8 9.75C8.69036 9.75 9.25 9.19036 9.25 8.5C9.25 7.80964 8.69036 7.25 8 7.25C7.30964 7.25 6.75 7.80964 6.75 8.5C6.75 9.19036 7.30964 7.25 8 9.75Z" fill="currentColor" />
     </svg>
   )
 }
@@ -113,6 +120,203 @@ function Sep(): ReactNode {
 }
 
 /**
+ * The counts pill (host `TimePill`, StatsPills.tsx:137-233): the turns/steps
+ * reading with the `·`-joined throughput. A pill over a window with at least
+ * one timed figure is a button portaling the session-stat dialog; without
+ * any, the dialog would render zero rows, so the pill stays the native static
+ * span form (:160-171).
+ */
+function TimePill({ stats, copy, dialog }: {
+  stats: SessionStatsView
+  copy: StatsPillsCopy
+  dialog: StatDialogSlot
+}): ReactNode {
+  const { open, setOpen, rootRef, panelRef, pos } = useStatDialog(dialog)
+  const counts = fillTemplate(copy.counts, { turns: stats.turns, steps: stats.steps })
+  const tps = tokensPerSecondOf(stats) !== null
+    ? fillTemplate(copy.tokensPerSecond, {
+      tps: formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1_000)),
+    })
+    : null
+  const label = (
+    <span className={css.label}>
+      {counts}
+      {tps !== null && (
+        <>
+          <Sep />
+          {tps}
+        </>
+      )}
+    </span>
+  )
+  // A window without one timed figure has no dialog rows to show, so the pill
+  // stays a plain reading instead of a button opening an empty dialog.
+  if (!timeDialogAvailable(stats)) {
+    return (
+      <span className={css.anchor}>
+        <span className={css.pill}>
+          <IconGaugeOutlineRegular />
+          {label}
+        </span>
+      </span>
+    )
+  }
+  return (
+    <span ref={rootRef} className={css.anchor}>
+      <button
+        type="button"
+        className={css.pill}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={tps === null ? counts : `${counts} · ${tps}`}
+        onClick={() => { setOpen(!open) }}
+      >
+        <IconGaugeOutlineRegular />
+        {label}
+      </button>
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          className={dialogCss.panel}
+          role="dialog"
+          aria-label={copy.dialogTitle}
+          style={pos ?? MEASURE_STYLE}
+          data-session-stats-dialog
+        >
+          <div className={dialogCss.title}>
+            <span className={dialogCss.titleLabel}>
+              <IconGaugeOutlineRegular />
+              {copy.dialogTitle}
+            </span>
+          </div>
+          <div className={dialogCss.titleRule} aria-hidden />
+          {/* Missing figures drop their row instead of rendering a placeholder
+              (host StatsPills.tsx:200-227 — conditional rendering, no `0s`). */}
+          <dl className={dialogCss.details} data-session-stats-details>
+            {stats.llmMs > 0 && (
+              <>
+                <dt>{copy.dialogLlmTime}</dt>
+                <dd>{formatDuration(stats.llmMs, copy)}</dd>
+              </>
+            )}
+            {stats.toolMs > 0 && (
+              <>
+                <dt>{copy.dialogToolTime}</dt>
+                <dd>{formatDuration(stats.toolMs, copy)}</dd>
+              </>
+            )}
+            {stats.ttftSteps > 0 && (
+              <>
+                <dt>{copy.dialogTtft}</dt>
+                <dd>{formatDuration(ttftMeanMs(stats) ?? 0, copy)}</dd>
+              </>
+            )}
+            {stats.decodeMs > 0 && tps !== null && (
+              <>
+                <dt>{copy.dialogSpeed}</dt>
+                <dd>{tps}</dd>
+              </>
+            )}
+          </dl>
+        </div>,
+        document.body,
+      )}
+    </span>
+  )
+}
+
+/**
+ * The usage pill (host `UsagePill`, StatsPills.tsx:235-314): the compact
+ * total with the `·`-joined cache-hit share, always a button — its four
+ * billing buckets always fill the dialog; a session that never billed input
+ * just drops the cache-hit row and the pill reads the pure total (:253).
+ */
+function UsagePill({ usage, copy, dialog }: {
+  usage: TokenUsageView
+  copy: StatsPillsCopy
+  dialog: StatDialogSlot
+}): ReactNode {
+  const { open, setOpen, rootRef, panelRef, pos } = useStatDialog(dialog)
+  // Same aggregate as the native: every prompt-side billing bucket plus
+  // output (host StatsPills.tsx:241-242). The pill LABEL stays the compact
+  // scale (:243); the exact grouped count is the dialog headline's twin.
+  const total = billedInputTokens(usage) + usage.outputTokens
+  const totalText = fillTemplate(copy.turnUsageCount, {
+    count: formatTokens(total, { thousand: copy.thousand, million: copy.million }),
+  })
+  const totalExact = exactCount(total, copy)
+  const cacheHit = cacheHitPercent(usage)
+  const cacheHitText = cacheHit !== null ? fillTemplate(copy.cacheHit, { percent: cacheHit }) : null
+  return (
+    <span ref={rootRef} className={css.anchor}>
+      <button
+        type="button"
+        className={css.pill}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={cacheHitText === null ? totalText : `${totalText} · ${cacheHitText}`}
+        onClick={() => { setOpen(!open) }}
+      >
+        <IconDatabaseOutlineRegular />
+        <span className={css.label}>
+          {totalText}
+          {cacheHitText !== null && (
+            <>
+              <Sep />
+              {cacheHitText}
+            </>
+          )}
+        </span>
+      </button>
+      {open && createPortal(
+        <div
+          ref={panelRef}
+          className={dialogCss.panel}
+          role="dialog"
+          aria-label={copy.dialogUsageTitle}
+          style={pos ?? MEASURE_STYLE}
+          data-session-usage-dialog
+        >
+          <div className={dialogCss.title}>
+            <span className={dialogCss.titleLabel}>
+              <IconDatabaseOutlineRegular />
+              {copy.dialogUsageTitle}
+            </span>
+            {/* The headline value is the EXACT grouped total, the compact
+                pill reading's unrounded twin (host StatsPills.tsx:280). */}
+            <span className={dialogCss.titleValue}>{totalExact}</span>
+          </div>
+          <div className={dialogCss.titleRule} aria-hidden />
+          {/* A session that never wrote cache drops the row; input, read and
+              output are always present (host StatsPills.tsx:288-307). */}
+          <dl className={dialogCss.details} data-session-stats-usage>
+            {cacheHit !== null && (
+              <>
+                <dt>{copy.turnUsageCacheHit}</dt>
+                <dd>{`${cacheHit}%`}</dd>
+              </>
+            )}
+            <dt>{copy.turnUsageInput}</dt>
+            <dd>{exactCount(usage.uncachedInputTokens, copy)}</dd>
+            <dt>{copy.turnUsageCacheRead}</dt>
+            <dd>{exactCount(usage.cacheReadTokens, copy)}</dd>
+            {usage.cacheWriteTokens !== 0 && (
+              <>
+                <dt>{copy.turnUsageCacheWrite}</dt>
+                <dd>{exactCount(usage.cacheWriteTokens, copy)}</dd>
+              </>
+            )}
+            <dt>{copy.turnUsageOutput}</dt>
+            <dd>{exactCount(usage.outputTokens, copy)}</dd>
+          </dl>
+        </div>,
+        document.body,
+      )}
+    </span>
+  )
+}
+
+/**
  * The stats pills occupant, or null while it has nothing to show.
  * @param props - the projection seat and the resolved pill copy.
  * @returns the two readings in the native order (counts, then usage); the
@@ -127,7 +331,10 @@ export function StatsPillsFace({ useProjection, copy }: StatsPillsFaceProps): Re
   const mode: PerformanceUsageMode = performanceUsageModeOf(settings)
   const stats = useProjection('sessionStats')
   const usage = useProjection('tokenUsage')
-  const templates: CompactNumberTemplates = { thousand: copy.thousand, million: copy.million }
+  // One exclusive slot for both dialogs: opening either pill closes the other
+  // (host StatsPills.tsx:320-321). The slot is owned here, above the mode
+  // branches, so the hook order stays flat across both presentations.
+  const [openPill, setOpenPill] = useState<'time' | 'usage' | null>(null)
 
   // Compact mode: two plain readings, speed and cache hit, no counts
   // (host StatsPills.tsx:332-345). Either alone justifies the row.
@@ -154,52 +361,32 @@ export function StatsPillsFace({ useProjection, copy }: StatsPillsFaceProps): Re
 
   // Detailed mode: the counts pill and the usage pill, each gated
   // independently (host StatsPills.tsx:347-371); the whole row hides when
-  // neither has anything to show. The pills are the native's static span
-  // form — the dialog arm is out of scope this round.
+  // neither has anything to show. The pills are buttons over the row's one
+  // exclusive dialog slot.
   const steps = statsStepsOf(stats)
   const hasTokens = hasTokenActivity(usage)
   if (!statsPillsVisible(stats, usage)) return null
-  const tps = stats !== undefined && stats !== null ? tokensPerSecondOf(stats) : null
-  const countsText = stats !== undefined && stats !== null
-    ? fillTemplate(copy.counts, { turns: stats.turns, steps: stats.steps })
-    : null
-  const totalText = usage !== undefined && usage !== null
-    ? fillTemplate(copy.turnUsageCount, {
-      count: formatTokens(billedInputTokens(usage) + usage.outputTokens, templates),
-    })
-    : null
-  const cacheHitText = usage !== undefined && usage !== null && hasTokens
-    ? cacheHitPercent(usage)
-    : null
   return (
     <div className={css.root} data-composer-stats>
-      {steps > 0 && countsText !== null && (
-        <span className={css.pill}>
-          <IconGaugeOutlineRegular />
-          <span className={css.label}>
-            {countsText}
-            {tps !== null && (
-              <>
-                <Sep />
-                {fillTemplate(copy.tokensPerSecond, { tps: formatTokensPerSecond(tps) })}
-              </>
-            )}
-          </span>
-        </span>
+      {steps > 0 && stats !== undefined && stats !== null && (
+        <TimePill
+          stats={stats}
+          copy={copy}
+          dialog={{
+            open: openPill === 'time',
+            setOpen: (open: boolean) => { setOpenPill(open ? 'time' : null) },
+          }}
+        />
       )}
-      {hasTokens && totalText !== null && (
-        <span className={css.pill}>
-          <IconDatabaseOutlineRegular />
-          <span className={css.label}>
-            {totalText}
-            {cacheHitText !== null && (
-              <>
-                <Sep />
-                {fillTemplate(copy.cacheHit, { percent: cacheHitText })}
-              </>
-            )}
-          </span>
-        </span>
+      {hasTokens && usage !== undefined && usage !== null && (
+        <UsagePill
+          usage={usage}
+          copy={copy}
+          dialog={{
+            open: openPill === 'usage',
+            setOpen: (open: boolean) => { setOpenPill(open ? 'usage' : null) },
+          }}
+        />
       )}
     </div>
   )

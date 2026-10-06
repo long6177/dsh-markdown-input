@@ -925,14 +925,29 @@ export function MarkdownComposer({
   const contextMeterT = contextLocale()
   // The dock pills' copy (issue #43, alpha.13): the HOST `chat` namespace's
   // own keys through the bound seat, the plugin's verbatim fallback lines
-  // under a miss or an unbound namespace.
+  // under a miss or an unbound namespace. The dialog keys (issue #43's third
+  // round) ride the same fold.
   const statsCopy: StatsPillsCopy = resolveStatsCopy(statsLocale(), {
     counts: t('stats.counts'),
     cacheHit: t('stats.cacheHit'),
+    dialogTitle: t('stats.dialog.title'),
+    dialogUsageTitle: t('stats.dialog.usageTitle'),
+    dialogLlmTime: t('stats.dialog.llmTime'),
+    dialogToolTime: t('stats.dialog.toolTime'),
+    dialogTtft: t('stats.dialog.ttft'),
+    dialogSpeed: t('stats.dialog.speed'),
     tokensPerSecond: t('message.tokensPerSecond'),
     turnUsageCount: t('message.turnUsage.count'),
+    turnUsageCacheHit: t('message.turnUsage.cacheHit'),
+    turnUsageInput: t('message.turnUsage.input'),
+    turnUsageCacheRead: t('message.turnUsage.cacheRead'),
+    turnUsageCacheWrite: t('message.turnUsage.cacheWrite'),
+    turnUsageOutput: t('message.turnUsage.output'),
+    compactSeconds: t('duration.compactSeconds'),
+    compactMinutes: t('duration.compactMinutes'),
     thousand: t('number.thousand'),
     million: t('number.million'),
+    groupSeparator: t('number.groupSeparator'),
   })
 
   return (

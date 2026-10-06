@@ -150,13 +150,30 @@ const zh = {
   // Stats pills (issue #43, alpha.13). The pill copy is the host `chat`
   // namespace's own (`ui-chat/src/client/locale.ts`, bound read-only in
   // apply); these are the same lines copied verbatim as the fallback keys a
-  // build without those dictionary entries resolves through.
+  // build without those dictionary entries resolves through. The dialog keys
+  // (issue #43's third round) ride the same fold: the two dialog headings and
+  // row labels, the duration templates, the exact-count wrapper's bucket
+  // labels, and the grouping separator.
   'stats.counts': '{turns} 轮 {steps} 步',
   'stats.cacheHit': '缓存命中 {percent}%',
+  'stats.dialog.title': '会话统计',
+  'stats.dialog.usageTitle': 'Token 用量',
+  'stats.dialog.llmTime': '模型用时',
+  'stats.dialog.toolTime': '工具调用用时',
+  'stats.dialog.ttft': '首 token 平均（TTFT）',
+  'stats.dialog.speed': '输出速度（TPS）',
   'message.tokensPerSecond': '{tps} tok/s',
   'message.turnUsage.count': '{count} tok',
+  'message.turnUsage.cacheHit': '缓存命中',
+  'message.turnUsage.input': '未缓存输入',
+  'message.turnUsage.cacheRead': '缓存读取',
+  'message.turnUsage.cacheWrite': '缓存写入',
+  'message.turnUsage.output': '输出',
+  'duration.compactSeconds': '{seconds}秒',
+  'duration.compactMinutes': '{minutes}分{seconds}秒',
   'number.thousand': '{value}K',
   'number.million': '{value}M',
+  'number.groupSeparator': ',',
   // Workspace menu add row (issue #42, alpha.13 retest). The copy is the host
   // `workspace` namespace's own (`ui-workspace/src/client/locales.ts`,
   // `menu.addWorkspace` / `folderError.*`, bound read-only in apply); these
@@ -283,13 +300,28 @@ const en: Record<ComposerKey, string> = {
   'agentPreset.noDescription': 'No description.',
   'agentPreset.switchRefused': 'Could not switch the agent preset: {reason}',
   // Stats pills (issue #43, alpha.13) — the host `chat` namespace's own lines
-  // copied verbatim (see the zh block above for the fold).
+  // copied verbatim (see the zh block above for the fold); the dialog keys
+  // (issue #43's third round) ride the same fold.
   'stats.counts': '{turns} turns {steps} steps',
   'stats.cacheHit': 'Cache hit {percent}%',
+  'stats.dialog.title': 'Session statistics',
+  'stats.dialog.usageTitle': 'Token usage',
+  'stats.dialog.llmTime': 'LLM time',
+  'stats.dialog.toolTime': 'Tool time',
+  'stats.dialog.ttft': 'Avg time to first token (TTFT)',
+  'stats.dialog.speed': 'Tokens per second (TPS)',
   'message.tokensPerSecond': '{tps} tok/s',
   'message.turnUsage.count': '{count} tok',
+  'message.turnUsage.cacheHit': 'Cache hit',
+  'message.turnUsage.input': 'Uncached input',
+  'message.turnUsage.cacheRead': 'Cached input',
+  'message.turnUsage.cacheWrite': 'Cache write',
+  'message.turnUsage.output': 'Output',
+  'duration.compactSeconds': '{seconds}s',
+  'duration.compactMinutes': '{minutes}m{seconds}s',
   'number.thousand': '{value}K',
   'number.million': '{value}M',
+  'number.groupSeparator': ',',
   // Workspace menu add row (issue #42, alpha.13 retest) — the host
   // `workspace` namespace's own lines copied verbatim (see the zh block
   // above for the fold).

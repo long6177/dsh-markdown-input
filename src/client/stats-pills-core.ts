@@ -28,6 +28,12 @@
  * the host `chat` namespace's own keys when it answers, the plugin's
  * verbatim-copy fallbacks otherwise, so every interpolator here is the plain
  * `{name}` fill.
+ *
+ * Issue #43's third round (alpha.14 retest) adds the detailed dialogs' pure
+ * side: the duration formatter and the exact grouped token count the two
+ * dialogs render, the TTFT mean, and the gate that demotes the counts pill to
+ * its static span when no row could fill the dialog (host
+ * `StatsPills.tsx:91-99`, `:130-132` + `token-format.ts:23-30`, `:160-171`).
  */
 
 /**
@@ -65,37 +71,83 @@ export interface TokenUsageView {
 }
 
 /**
- * The host `chat` namespace keys the pills read, spelled out: the pill copy
- * (`stats.*`, `message.tokensPerSecond`, `message.turnUsage.count` —
- * `ui-chat/src/client/locale.ts:77-78,171,181` zh / :270-271,364,374 en) and
- * the shared compact-number templates (`number.*`, the locale plugin's common
- * vocabulary a namespace-bound lookup consults after its own miss).
+ * The host `chat` namespace keys the pills and their dialogs read, spelled
+ * out: the pill copy (`stats.*`, `message.tokensPerSecond`,
+ * `message.turnUsage.count` — `ui-chat/src/client/locale.ts:77-78,171,181` zh
+ * / :270-271,364,374 en), the dialog copy (`stats.dialog.*`,
+ * `message.turnUsage.*` — :79-84,175-179 zh / :272-277,368-372 en), the
+ * duration templates (`duration.compactSeconds` / `duration.compactMinutes`,
+ * :74-75 zh / :267-268 en) and the shared compact-number / grouping templates
+ * (`number.*`, the locale plugin's common vocabulary a namespace-bound lookup
+ * consults after its own miss).
  */
 export type StatsHostKey =
   | 'stats.counts'
   | 'stats.cacheHit'
+  | 'stats.dialog.title'
+  | 'stats.dialog.usageTitle'
+  | 'stats.dialog.llmTime'
+  | 'stats.dialog.toolTime'
+  | 'stats.dialog.ttft'
+  | 'stats.dialog.speed'
   | 'message.tokensPerSecond'
   | 'message.turnUsage.count'
+  | 'message.turnUsage.cacheHit'
+  | 'message.turnUsage.input'
+  | 'message.turnUsage.cacheRead'
+  | 'message.turnUsage.cacheWrite'
+  | 'message.turnUsage.output'
+  | 'duration.compactSeconds'
+  | 'duration.compactMinutes'
   | 'number.thousand'
   | 'number.million'
+  | 'number.groupSeparator'
 
 /**
- * The pill copy as the face renders it: each entry the RESOLVED `{name}`
- * template (host answer or plugin fallback — see `resolveStatsCopy`).
+ * The pill and dialog copy as the faces render it: each entry the RESOLVED
+ * `{name}` template (host answer or plugin fallback — see `resolveStatsCopy`).
  */
 export interface StatsPillsCopy {
   /** `stats.counts`: the counts pill's turns/steps reading. */
   readonly counts: string
   /** `stats.cacheHit`: the usage pill's cache-hit reading. */
   readonly cacheHit: string
+  /** `stats.dialog.title`: the session-stat dialog's heading. */
+  readonly dialogTitle: string
+  /** `stats.dialog.usageTitle`: the token-usage dialog's heading. */
+  readonly dialogUsageTitle: string
+  /** `stats.dialog.llmTime`: the model-time row label. */
+  readonly dialogLlmTime: string
+  /** `stats.dialog.toolTime`: the tool-time row label. */
+  readonly dialogToolTime: string
+  /** `stats.dialog.ttft`: the TTFT row label. */
+  readonly dialogTtft: string
+  /** `stats.dialog.speed`: the output-speed row label. */
+  readonly dialogSpeed: string
   /** `message.tokensPerSecond`: the decode-throughput reading. */
   readonly tokensPerSecond: string
-  /** `message.turnUsage.count`: the compact total-tokens reading. */
+  /** `message.turnUsage.count`: the compact total-tokens reading and the exact-count wrapper. */
   readonly turnUsageCount: string
+  /** `message.turnUsage.cacheHit`: the usage dialog's cache-hit row label. */
+  readonly turnUsageCacheHit: string
+  /** `message.turnUsage.input`: the usage dialog's uncached-input row label. */
+  readonly turnUsageInput: string
+  /** `message.turnUsage.cacheRead`: the usage dialog's cache-read row label. */
+  readonly turnUsageCacheRead: string
+  /** `message.turnUsage.cacheWrite`: the usage dialog's cache-write row label. */
+  readonly turnUsageCacheWrite: string
+  /** `message.turnUsage.output`: the usage dialog's output row label. */
+  readonly turnUsageOutput: string
+  /** `duration.compactSeconds`: the sub-minute duration template. */
+  readonly compactSeconds: string
+  /** `duration.compactMinutes`: the minute-plus duration template. */
+  readonly compactMinutes: string
   /** `number.thousand`: the K-scaled compact template. */
   readonly thousand: string
   /** `number.million`: the M-scaled compact template. */
   readonly million: string
+  /** `number.groupSeparator`: the exact-count digit grouping separator. */
+  readonly groupSeparator: string
 }
 
 /**
@@ -145,10 +197,24 @@ export function resolveStatsCopy(
   return {
     counts: read('stats.counts'),
     cacheHit: read('stats.cacheHit'),
+    dialogTitle: read('stats.dialog.title'),
+    dialogUsageTitle: read('stats.dialog.usageTitle'),
+    dialogLlmTime: read('stats.dialog.llmTime'),
+    dialogToolTime: read('stats.dialog.toolTime'),
+    dialogTtft: read('stats.dialog.ttft'),
+    dialogSpeed: read('stats.dialog.speed'),
     tokensPerSecond: read('message.tokensPerSecond'),
     turnUsageCount: read('message.turnUsage.count'),
+    turnUsageCacheHit: read('message.turnUsage.cacheHit'),
+    turnUsageInput: read('message.turnUsage.input'),
+    turnUsageCacheRead: read('message.turnUsage.cacheRead'),
+    turnUsageCacheWrite: read('message.turnUsage.cacheWrite'),
+    turnUsageOutput: read('message.turnUsage.output'),
+    compactSeconds: read('duration.compactSeconds'),
+    compactMinutes: read('duration.compactMinutes'),
     thousand: read('number.thousand'),
     million: read('number.million'),
+    groupSeparator: read('number.groupSeparator'),
   }
 }
 
@@ -157,10 +223,24 @@ function keyToCopy(key: StatsHostKey): keyof StatsPillsCopy {
   switch (key) {
     case 'stats.counts': return 'counts'
     case 'stats.cacheHit': return 'cacheHit'
+    case 'stats.dialog.title': return 'dialogTitle'
+    case 'stats.dialog.usageTitle': return 'dialogUsageTitle'
+    case 'stats.dialog.llmTime': return 'dialogLlmTime'
+    case 'stats.dialog.toolTime': return 'dialogToolTime'
+    case 'stats.dialog.ttft': return 'dialogTtft'
+    case 'stats.dialog.speed': return 'dialogSpeed'
     case 'message.tokensPerSecond': return 'tokensPerSecond'
     case 'message.turnUsage.count': return 'turnUsageCount'
+    case 'message.turnUsage.cacheHit': return 'turnUsageCacheHit'
+    case 'message.turnUsage.input': return 'turnUsageInput'
+    case 'message.turnUsage.cacheRead': return 'turnUsageCacheRead'
+    case 'message.turnUsage.cacheWrite': return 'turnUsageCacheWrite'
+    case 'message.turnUsage.output': return 'turnUsageOutput'
+    case 'duration.compactSeconds': return 'compactSeconds'
+    case 'duration.compactMinutes': return 'compactMinutes'
     case 'number.thousand': return 'thousand'
     case 'number.million': return 'million'
+    case 'number.groupSeparator': return 'groupSeparator'
   }
 }
 
@@ -352,4 +432,78 @@ export function compactReadings(
     ? cacheHitPercent(usage)
     : null
   return { speedTps, cacheHit }
+}
+
+/**
+ * Compact duration: `45.2s` under a minute, `2m42s` from there on (host
+ * `StatsPills.tsx:91-99` verbatim, through the resolved duration templates).
+ * @param ms - duration in milliseconds.
+ * @param copy - the resolved `duration.compactSeconds` / `compactMinutes`.
+ * @returns display string.
+ */
+export function formatDuration(
+  ms: number,
+  copy: Pick<StatsPillsCopy, 'compactSeconds' | 'compactMinutes'>,
+): string {
+  const s = ms / 1_000
+  if (s < 60) return fillTemplate(copy.compactSeconds, { seconds: Math.round(s * 10) / 10 })
+  const whole = Math.round(s)
+  return fillTemplate(copy.compactMinutes, {
+    minutes: Math.floor(whole / 60),
+    seconds: whole % 60,
+  })
+}
+
+/**
+ * Exact integer token count with locale-owned digit grouping (host
+ * `token-format.ts:23-30` verbatim, the separator through the resolved
+ * `number.groupSeparator`).
+ * @param value - non-negative safe integer token count.
+ * @param groupSeparator - the resolved grouping separator.
+ * @returns an unrounded, three-digit-grouped display string.
+ */
+export function formatExactTokens(value: number, groupSeparator: string): string {
+  const digits = String(value)
+  const groups: string[] = []
+  for (let end = digits.length; end > 0; end -= 3) {
+    groups.unshift(digits.slice(Math.max(0, end - 3), end))
+  }
+  return groups.join(groupSeparator)
+}
+
+/**
+ * The usage dialog's exact figure for one bucket: the grouped integer inside
+ * the host `message.turnUsage.count` wrapper (host `StatsPills.tsx:130-132`
+ * verbatim — the same `{count} tok` template the pill label uses).
+ * @param value - non-negative safe integer token count.
+ * @param copy - the resolved count wrapper and grouping separator.
+ * @returns the display string.
+ */
+export function exactCount(
+  value: number,
+  copy: Pick<StatsPillsCopy, 'turnUsageCount' | 'groupSeparator'>,
+): string {
+  return fillTemplate(copy.turnUsageCount, { count: formatExactTokens(value, copy.groupSeparator) })
+}
+
+/**
+ * The session's mean first-token latency (host `StatsPills.tsx:216`'s
+ * `ttftMs / ttftSteps` arm): null without a recorded first token, so the row
+ * stays out instead of dividing by zero.
+ * @param stats - the sessionStats projection value.
+ * @returns mean TTFT in milliseconds, or null when no step recorded one.
+ */
+export function ttftMeanMs(stats: SessionStatsView): number | null {
+  return stats.ttftSteps > 0 ? stats.ttftMs / stats.ttftSteps : null
+}
+
+/**
+ * Whether the counts pill has any timed figure to open a dialog for (host
+ * `StatsPills.tsx:162` inverted): without model time, tool time, a recorded
+ * first token, or decode timing the dialog would render zero rows, so the
+ * pill stays the native static span form.
+ * @param stats - the sessionStats projection value.
+ */
+export function timeDialogAvailable(stats: SessionStatsView): boolean {
+  return stats.llmMs > 0 || stats.toolMs > 0 || stats.ttftSteps > 0 || stats.decodeMs > 0
 }

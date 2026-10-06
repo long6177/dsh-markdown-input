@@ -1,10 +1,10 @@
 /* The takeover card's stats pills (issue #43, alpha.13 retest): the counts
    and usage readings in the dock row, vendored from the host
    `ui-chat/src/client/chat/StatsPills.module.css` (12/20 tertiary text tier,
-   two icon pills side by side). The `.anchor` and button/hover rules are not
-   vendored: this round's pills are the native's static span form (the dialog
-   arm is out of scope), so there is no anchor to shrink-wrap and nothing
-   hoverable. */
+   two icon pills side by side). The third round (alpha.14 retest) vendors the
+   button form too: the detailed pills are dialog triggers, so the `.anchor`
+   shrink-wrap (the panel clamp measures the pill) and the hover/expanded
+   highlight join — the static span form keeps the resting tertiary reading. */
 
 .root {
   display: flex;
@@ -15,6 +15,12 @@
   box-sizing: border-box;
   font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px);
   line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+}
+
+/* Dialog anchor: shrink-wraps its pill so the panel clamp measures the pill. */
+.anchor {
+  display: inline-flex;
+  min-width: 0;
 }
 
 .pill {
@@ -39,6 +45,18 @@
   width: 14px;
   height: 14px;
   flex: none;
+}
+
+/* Only the button form (a pill with dialog rows to open) invites interaction;
+   the static span form keeps the resting tertiary reading. */
+button.pill {
+  cursor: pointer;
+}
+
+button.pill:hover,
+button.pill[aria-expanded='true'] {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
 }
 
 .label {

@@ -105,5 +105,5 @@ _Avoid_: Agent 模式（宿主概念是按预设组合成 Agent，不是开关�
 _Avoid_: 上下文进度条（形态是环，且面板是主体）
 
 **会话统计（Stats pills）**:
-接管卡 dock 行内量表之前自渲染的原生 StatsPills（#43，原生是 `conversation.composer.dock` 槽位的 order-0 occupant（`ui-chat/src/client/apply.ts:284-288`），槽位同样只由隐藏的 InputBar 挂载——接管期间不可见，与量表同一结构性缺口，故与量表同位重建且保持原生先于量表的次序）：计数 pill 读 `sessionStats` 投影显示回合/步数与解码速度（tok/s），用量 pill 读 `tokenUsage` 投影显示四桶合计（未缓存输入 + 缓存读 + 缓存写 + 输出）与缓存命中百分比（部分命中永不进位到 100）；detailed/compact 形态读 `ui-chat` 设置节（`configForms` 服务，缺席回落原生默认 detailed）；无步数且无 token 整件隐藏，两 pill 各自独立降级，词典走宿主 `chat` 命名空间只读 bind、插件 locales 备同值兜底。
+接管卡 dock 行内量表之前自渲染的原生 StatsPills（#43，原生是 `conversation.composer.dock` 槽位的 order-0 occupant（`ui-chat/src/client/apply.ts:284-288`），槽位同样只由隐藏的 InputBar 挂载——接管期间不可见，与量表同一结构性缺口，故与量表同位重建且保持原生先于量表的次序）：计数 pill 读 `sessionStats` 投影显示回合/步数与解码速度（tok/s），用量 pill 读 `tokenUsage` 投影显示四桶合计（未缓存输入 + 缓存读 + 缓存写 + 输出）与缓存命中百分比（部分命中永不进位到 100）；detailed/compact 形态读 `ui-chat` 设置节（`configForms` 服务，缺席回落原生默认 detailed）；detailed 模式两 pill 是按钮，点击经互斥槽位展开锚定其上方的会话统计 / Token 用量对话框（Escape、点外、再点同 pill 关闭；对话框面板复用量表的定位/关闭设施），无任何计时数据时计数 pill 降为静态 span（对话框将无行可显），用量对话框标题右侧恒显精确分组总量；compact 模式保持纯读数无按钮；无步数且无 token 整件隐藏，两 pill 各自独立降级，词典走宿主 `chat` 命名空间只读 bind、插件 locales 备同值兜底。
 _Avoid_: 性能设置（宿主 `performanceUsage` 是展示形态设置，pill 是读数不是设置入口）
