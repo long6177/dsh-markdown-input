@@ -11,9 +11,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
-/** The sheet text as shipped: read straight off disk (vitest stubs *.module.css). */
+/** The sheet text as shipped: read straight off disk (vitest stubs *.module.css).
+    CRLF is normalized away — an autocrlf checkout must pin the same text. */
 function readSheet(path: string): string {
-  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
+  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
 }
 
 /** The body of one selector's rule, or '' when absent. */

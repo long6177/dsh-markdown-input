@@ -456,7 +456,10 @@ describe('stats settings face (the configForms plane)', () => {
  * ------------------------------------------------------------------ */
 
 function readSheet(path: string): string {
-  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
+  // Normalize CRLF: the pins match sheet text with `\n`-joined multi-line
+  // selectors, and an autocrlf checkout hands the file `\r\n` endings — the
+  // contract is what the sheet says, not how the platform ends its lines.
+  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
 }
 
 function ruleOf(sheet: string, selector: string): string {
