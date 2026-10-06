@@ -103,70 +103,24 @@ function shiftEnterCommand(view: EditorView): boolean {
 }
 
 /**
- * The first ListMark node on `line`, or null — the gate that scopes the Tab
- * indent key to list rows. Fences and plain text are list-outside and fall
- * through to the browser's own focus move.
+ * Shift+Enter's list/quote continuation dispatch (#46), in priority order:
+ * an empty list-item or quote line deletes its markup and exits (paths a/b —
+ * the caret returns to the line start, no newline is inserted); list and
+ * quote rows continue through lezer's markup-continuation command (path c —
+ * same indent, next marker, ordered numbers advance by the written source
+ * number); inside a fence that command declines itself (non-markdown
+ * context) so the generic indented newline keeps the status quo (path d);
+ * everywhere else it declines too and the bare newline remains (path e).
+ * Tab carries no editor binding (maintainer decision on the alpha.18
+ * feedback: no indent key, single-level lists only — the browser's own
+ * focus move applies everywhere).
  */
-function firstListMark(state: EditorState, line: { from: number, to: number }): SyntaxNode | null {
-  let mark: SyntaxNode | null = null
-  syntaxTree(state).iterate({
-    from: line.from,
-    to: line.to,
-    enter: (node) => {
-      if (mark !== null) return false
-      if (node.name === 'ListMark') mark = node.node
-      return undefined
-    },
-  })
-  return mark
-}
 
-/**
- * Tab inside a list row (render mode): demote the row one nesting level by
- * indenting it to the previous sibling item's content column — the indent
- * that makes the row its sibling's child, whatever the marker width (two
- * spaces under `- `, three under `1. `, four under `10. `; the old fixed
- * two spaces never nested ordered rows). A row without a previous sibling
- * is already the shallowest of its list — there is no level to drop into,
- * so the key is consumed with no change. Outside a list the command
- * declines and the key keeps the browser's focus move (native semantics).
- * Shift-Tab is deliberately unbound (maintainer decision on the alpha.17
- * feedback): a mistaken indent is one Ctrl+Z away, and the key must not
- * move focus out of the editor mid-edit.
- */
-function listItemTab(view: EditorView): boolean {
-  const { state } = view
-  const line = state.doc.lineAt(state.selection.main.head)
-  const mark = firstListMark(state, line)
-  // Not a list row: decline (native focus move). A list row with a marker
-  // whose ancestors are not a real list stays consumed-but-unchanged too.
-  if (mark === null) return false
-  const item = mark.parent
-  const prev = item?.prevSibling ?? null
-  const prevMark = prev?.getChild('ListMark') ?? null
-  if (prev === null || prevMark === null) return true
-  const prevLine = state.doc.lineAt(prev.from)
-  // The previous sibling's content column: its marker end plus the spaces
-  // that follow it (its own list nests there).
-  let content = prevMark.to
-  while (content < prevLine.to && state.doc.sliceString(content, content + 1) === ' ') content++
-  const target = content - prevLine.from
-  const indent = /^ */.exec(line.text)![0].length
-  if (target > indent) {
-    view.dispatch({
-      changes: { from: line.from, insert: ' '.repeat(target - indent) },
-      userEvent: 'input.indent',
-    })
-  }
-  return true
-}
-
-/** Render-mode-only keymap: the list continuation dispatch and the Tab
- * demote key. Mounted through the render compartment so source mode keeps
- * its plain newline, the browser's Tab default and its Shift-Tab default. */
+/** Render-mode-only keymap: the list continuation dispatch. Mounted through
+ * the render compartment so source mode keeps its plain newline; Tab has no
+ * editor binding in either mode (the browser's focus move applies). */
 const renderListKeymap = keymap.of([
   { key: 'Shift-Enter', run: shiftEnterCommand },
-  { key: 'Tab', run: listItemTab },
 ])
 
 /**

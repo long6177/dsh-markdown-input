@@ -75,3 +75,13 @@
 .bubble > *:last-child {
   margin-bottom: 0;
 }
+
+/* Lists in the bubble (maintainer decision on the alpha.18 feedback): the
+   marker rides the item's first line (inside positioning, no hanging
+   column), so a continuation line — the author's own hardened line break —
+   sits flush at the bubble's text edge while the item text reads a level
+   in. The list padding goes with it: the marker is inline content now. */
+.bubble :global(ol), .bubble :global(ul) {
+  list-style-position: inside;
+  padding-left: 0;
+}

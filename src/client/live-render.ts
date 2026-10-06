@@ -142,24 +142,6 @@ function firstInfoWord(info: string): string {
   return info.trim().split(/\s+/u, 1)[0] ?? ''
 }
 
-/** Depth cap for the per-level hanging-indent classes; deeper rows reuse it. */
-const MAX_LIST_DEPTH = 6
-
-/**
- * Nesting level of the row `item` belongs to: the count of list ancestors
- * between the item and the document root (its own list included), capped at
- * MAX_LIST_DEPTH. A top-level item's only list ancestor is its own list, so
- * top-level rows read depth 1. Drives the hanging-indent padding class
- * (`cm-md-li-dN`).
- */
-function listDepthOf(item: SyntaxNode): number {
-  let depth = 0
-  for (let cur = item.parent; cur !== null; cur = cur.parent) {
-    if (cur.name === 'BulletList' || cur.name === 'OrderedList') depth++
-  }
-  return Math.min(depth, MAX_LIST_DEPTH)
-}
-
 /**
  * 0-based position of `item` among `list`'s own ListItem children, by
  * position — node wrappers are created fresh per query, so identity never
@@ -352,10 +334,10 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
         if (item === null || list === null || (list.name !== 'BulletList' && list.name !== 'OrderedList')) return
         const line = doc.lineAt(node.from)
         const ordered = list.name === 'OrderedList'
-        // The row classes carry the hanging indent (see the CSS face); they
-        // stay on the active line like the heading classes do — only the
-        // fold yields to the cursor.
-        addLineClass(line.from, line.to, `cm-md-listitem cm-md-li-d${listDepthOf(item)} ${ordered ? 'cm-md-li-ordered' : 'cm-md-li-bullet'}`)
+        // One list level only (maintainer decision on the alpha.18 feedback):
+        // nested rows from pasted source render at the same single-level
+        // inset — no per-depth classes.
+        addLineClass(line.from, line.to, `cm-md-listitem ${ordered ? 'cm-md-li-ordered' : 'cm-md-li-bullet'}`)
         if (active.has(line.number)) return
         let label = '•'
         if (ordered) {

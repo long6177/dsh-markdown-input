@@ -9,23 +9,20 @@ import { readSheet, ruleOf } from './sheet.ts'
 
 const composerCss = readSheet('../src/client/MarkdownComposer.module.css')
 
-describe('render-mode list CSS contract (issue #46; geometry reworked on the alpha.17 feedback)', () => {
-  it('insets the whole row per level: first line pulls back into the marker column, wraps align to the content start', () => {
+describe('render-mode list CSS contract (issue #46; single level per the alpha.18 feedback)', () => {
+  it('insets the row one modest step off body text: first line pulls back into the marker column, wraps align to the content start', () => {
     const row = ruleOf(composerCss, '.surface :global(.cm-md-listitem)')
     expect(row).toContain('text-indent: calc(-1 * var(--cm-md-li-hang))')
-    expect(row).toContain('padding-left: calc(var(--cm-md-li-indent) + var(--cm-md-li-hang))')
-    // Level 1 drops the whole row in one step; bullets use the compact
-    // marker column.
+    expect(row).toContain('padding-left: calc(var(--cm-md-li-inset) + var(--cm-md-li-hang))')
+    // One small list inset; bullets use the compact marker column.
     expect(row).toContain('--cm-md-li-hang: 0.9em')
-    expect(row).toContain('--cm-md-li-indent: 1.5em')
+    expect(row).toContain('--cm-md-li-inset: 0.5em')
   })
 
-  it('steps the per-level inset one 1.5em per nesting level, capped at six', () => {
-    for (let depth = 2; depth <= 6; depth++) {
-      const rule = ruleOf(composerCss, `.surface :global(.cm-md-li-d${depth})`)
-      expect(rule).toContain(`--cm-md-li-indent: ${(depth * 1.5).toFixed(1)}em`)
+  it('emits no per-level inset rules — nested rows share the single level', () => {
+    for (let depth = 1; depth <= 7; depth++) {
+      expect(ruleOf(composerCss, `.surface :global(.cm-md-li-d${depth})`)).toBe('')
     }
-    expect(ruleOf(composerCss, '.surface :global(.cm-md-li-d7)')).toBe('')
   })
 
   it('gives ordered rows the narrower two-digit ordinal column', () => {

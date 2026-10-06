@@ -337,9 +337,9 @@ describe('buildRenderDecorations: bullet lists (#46)', () => {
     expect(records.filter(r => r.kind === 'replace' && r.from >= 6 && r.to <= 14)).toEqual([])
     const line = records.filter(r => r.kind === 'line').map(r => r.class)
     expect(line).toEqual([
-      'cm-md-listitem cm-md-li-d1 cm-md-li-bullet',
-      'cm-md-listitem cm-md-li-d1 cm-md-li-bullet',
-      'cm-md-listitem cm-md-li-d1 cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
     ])
   })
 
@@ -388,25 +388,19 @@ describe('buildRenderDecorations: ordered lists (#46)', () => {
   })
 })
 
-describe('buildRenderDecorations: nested lists (#46)', () => {
+describe('buildRenderDecorations: nested lists (#46, single level per the alpha.18 feedback)', () => {
   const doc = '- top\n  - inner\n- top2'
 
-  it('indents nested rows by depth class while the markers fold per level', () => {
+  it('renders nested rows at the single level while the markers still fold per row', () => {
     const records = collect(setup(doc))
+    // One list level only: no depth classes for the nested row.
     expect(records.filter(r => r.kind === 'line').map(r => r.class)).toEqual([
-      'cm-md-listitem cm-md-li-d1 cm-md-li-bullet',
-      'cm-md-listitem cm-md-li-d2 cm-md-li-bullet',
-      'cm-md-listitem cm-md-li-d1 cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
     ])
     expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
       .toEqual(['- ', '  - ', '- '])
-  })
-
-  it('caps the depth class at six levels', () => {
-    const deep = '- l1\n  - l2\n    - l3\n      - l4\n        - l5\n          - l6\n            - l7'
-    const classes = collect(setup(deep)).filter(r => r.kind === 'line').map(r => r.class)
-    expect(classes.some(c => c.includes('cm-md-li-d7'))).toBe(false)
-    expect(classes.filter(c => c.includes('cm-md-li-d6')).length).toBe(2)
   })
 })
 
