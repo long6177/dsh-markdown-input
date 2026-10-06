@@ -788,6 +788,26 @@
   background: color-mix(in srgb, currentColor 6%, transparent);
 }
 
+/* Language tag (render mode only, #47): floats at a folded fenced code
+   block's top-right corner while the fence lines are hidden. The block's
+   first content line carries the positioning context; the tag itself is
+   pure display — no pointer interaction, no selection — and reads muted
+   over the codeblock wash via the same currentColor mixing base. */
+.surface :global(.cm-md-codelang-line) {
+  position: relative;
+}
+
+.surface :global(.cm-md-codelang) {
+  position: absolute;
+  top: 0;
+  right: 8px;
+  font-size: 0.75em;
+  line-height: 1.5;
+  color: color-mix(in srgb, currentColor 45%, transparent);
+  pointer-events: none;
+  user-select: none;
+}
+
 .surface :global(.cm-md-quote) {
   border-left: 2px solid color-mix(in srgb, currentColor 30%, transparent);
   padding-left: 8px;
