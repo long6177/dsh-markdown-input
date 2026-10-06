@@ -14,6 +14,7 @@ import {
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeViewProps, ChatNodeOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { MessageActions } from './MessageActions.tsx'
+import { hardenSoftBreaks } from './user-markdown.ts'
 import css from './UserMessage.module.css'
 
 /** The image payload shape the owner's renderer accepts, derived from it. */
@@ -43,7 +44,9 @@ function runText(piece: ReactNode): string {
 /**
  * Project the message text: chips inline, everything else through the host
  * Markdown pipeline. Chips come from the host projection unchanged; plain
- * runs merge back into Markdown documents per contiguous span.
+ * runs merge back into Markdown documents per contiguous span. Both paths
+ * render through `hardenSoftBreaks` so the lines the author typed stay
+ * visible in the bubble (GFM would fold a continuation line into a space).
  */
 export function composeUserMarkdown(
   text: string,
@@ -56,14 +59,14 @@ export function composeUserMarkdown(
   const pieces = Children.toArray(
     isValidElement(projected) && projected.type === Fragment ? projected.props.children : [projected],
   )
-  if (!pieces.some(isChip)) return <MarkdownText text={text} labels={labels} />
+  if (!pieces.some(isChip)) return <MarkdownText text={hardenSoftBreaks(text)} labels={labels} />
 
   const out: ReactNode[] = []
   let run: string[] = []
   const flush = (): void => {
     if (run.length > 0) {
       const source = run.join('')
-      if (source.trim() !== '') out.push(<MarkdownText key={out.length} text={source} labels={labels} />)
+      if (source.trim() !== '') out.push(<MarkdownText key={out.length} text={hardenSoftBreaks(source)} labels={labels} />)
       run = []
     }
   }

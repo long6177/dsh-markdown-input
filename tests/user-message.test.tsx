@@ -92,6 +92,34 @@ describe('MarkdownUserMessage', () => {
     expect(container.querySelector('p')).not.toBeNull()
   })
 
+  it('keeps the lines the author typed visible — a list continuation line breaks instead of merging (alpha.17 feedback)', () => {
+    // The maintainer's exact message: GFM folds `2. asdfao` and `afsdfa`
+    // into one item paragraph and the bubble showed two lines, not three.
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '1. 你好\n2. asdfao\nafsdfa' }])} />,
+    )
+    const items = container.querySelectorAll('li')
+    expect(items).toHaveLength(2)
+    // The continuation line is a hard break inside item 2 — rendered, not
+    // folded into the paragraph (the host renders the break as a <br> plus
+    // its trailing newline; the list marker is a ::marker, not text).
+    expect(items[1]?.querySelector('br')).not.toBeNull()
+    expect(items[1]?.textContent).toBe('asdfao\nafsdfa')
+  })
+
+  it('leaves fenced code interiors alone — no break injection inside the block', () => {
+    const { container } = render(
+      <MarkdownUserMessage
+        {...seatProps('user', [{ type: 'text', text: 'before\n```text\n1. a\n2. b\n```\nafter' }])}
+      />,
+    )
+    const pre = container.querySelector('pre')
+    expect(pre).not.toBeNull()
+    expect(pre?.querySelector('br')).toBeNull()
+    expect(pre?.textContent).toContain('1. a')
+    expect(pre?.textContent).toContain('2. b')
+  })
+
   it('keeps the wire session-reference form folded into a chip', () => {
     const { container } = render(
       <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '看 @[会话一](dsh-session:abc123) 的讨论' }])} />,

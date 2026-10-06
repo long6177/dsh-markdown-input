@@ -297,15 +297,49 @@ describe('createMarkdownEditor', () => {
   })
 })
 
-describe('list keys (issue #46, render mode)', () => {
-  it('Tab indents the list row by two spaces at the line start', () => {
+describe('list keys (issue #46; Tab reworked on the alpha.17 feedback)', () => {
+  it('Tab demotes a bullet row to the previous sibling\'s content column (two spaces)', () => {
     const { handle } = mount()
-    handle.setText('- item')
+    handle.setText('- a\n- b')
     handle.focus()
     fireEvent.keyDown(content(), { key: 'Tab' })
-    expect(handle.getText()).toBe('  - item')
+    expect(handle.getText()).toBe('- a\n  - b')
     // The caret (parked at the end by setText) rides the insert.
-    expect(handle.view.state.selection.main.head).toBe('  - item'.length)
+    expect(handle.view.state.selection.main.head).toBe('- a\n  - b'.length)
+  })
+
+  it('Tab demotes an ordered row by three spaces — the indent that actually nests under `1. `', () => {
+    // The old fixed two spaces left ordered rows unnested (real-machine
+    // alpha.16: Tab appeared dead on ordered lists).
+    const { handle } = mount()
+    handle.setText('1. a\n2. b')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('1. a\n   2. b')
+  })
+
+  it('Tab demotes under a widened marker too — the target follows `10. `', () => {
+    const { handle } = mount()
+    handle.setText('10. a\n11. b')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('10. a\n    11. b')
+  })
+
+  it('Tab on a nested sibling keeps the one-step step', () => {
+    const { handle } = mount()
+    handle.setText('- a\n  - a1\n  - a2')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('- a\n  - a1\n    - a2')
+  })
+
+  it('Tab on a first-of-list row is consumed with no change — there is no level above it', () => {
+    const { handle } = mount()
+    handle.setText('- only')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('- only')
   })
 
   it('Tab falls through outside a list and inside a fence', () => {
@@ -319,23 +353,21 @@ describe('list keys (issue #46, render mode)', () => {
     expect(handle.getText()).toBe('```\n- code')
   })
 
-  it('Shift+Tab outdents up to two leading spaces and consumes the key at the margin', () => {
+  it('Shift+Tab is unbound — a list row stays untouched (alpha.17 feedback)', () => {
     const { handle } = mount()
     handle.setText('  - deep')
     handle.focus()
     fireEvent.keyDown(content(), { key: 'Tab', shiftKey: true })
-    expect(handle.getText()).toBe('- deep')
-    fireEvent.keyDown(content(), { key: 'Tab', shiftKey: true })
-    expect(handle.getText()).toBe('- deep')
+    expect(handle.getText()).toBe('  - deep')
   })
 
-  it('a declining menu chain hands Tab to the list indent binding', () => {
+  it('a declining menu chain hands Tab to the list demote binding', () => {
     const { handle } = mount()
     handle.setMenuKeyHandler(() => false)
-    handle.setText('- x')
+    handle.setText('- a\n- x')
     handle.focus()
     fireEvent.keyDown(content(), { key: 'Tab' })
-    expect(handle.getText()).toBe('  - x')
+    expect(handle.getText()).toBe('- a\n  - x')
   })
 
   it('Shift+Enter exits an empty list item line without inserting a newline', () => {

@@ -103,77 +103,70 @@ function shiftEnterCommand(view: EditorView): boolean {
 }
 
 /**
- * Whether the line holds a list marker (a tree ListMark) — the gate that
- * scopes Tab/Shift-Tab to list rows. Fences and plain text are list-outside
- * and fall through to the browser's own focus move.
+ * The first ListMark node on `line`, or null — the gate that scopes the Tab
+ * indent key to list rows. Fences and plain text are list-outside and fall
+ * through to the browser's own focus move.
  */
-function isListItemLine(state: EditorState, line: { from: number, to: number }): boolean {
-  let found = false
+function firstListMark(state: EditorState, line: { from: number, to: number }): SyntaxNode | null {
+  let mark: SyntaxNode | null = null
   syntaxTree(state).iterate({
     from: line.from,
     to: line.to,
     enter: (node) => {
-      if (node.name === 'ListMark') {
-        found = true
-        return false
-      }
+      if (mark !== null) return false
+      if (node.name === 'ListMark') mark = node.node
       return undefined
     },
   })
-  return found
+  return mark
 }
 
 /**
- * The caret's line when it holds a list marker, or null — the shared gate
- * for the Tab indent commands: outside a list row both decline and the key
- * keeps the browser's focus move (native semantics).
- */
-function listItemCaretLine(state: EditorState): { from: number, to: number, text: string } | null {
-  const line = state.doc.lineAt(state.selection.main.head)
-  return isListItemLine(state, line) ? line : null
-}
-
-/**
- * Tab inside a list row (render mode): two spaces at the line start — one
- * indent level. Outside a list the command declines and the key keeps the
- * browser's focus move (native semantics).
+ * Tab inside a list row (render mode): demote the row one nesting level by
+ * indenting it to the previous sibling item's content column — the indent
+ * that makes the row its sibling's child, whatever the marker width (two
+ * spaces under `- `, three under `1. `, four under `10. `; the old fixed
+ * two spaces never nested ordered rows). A row without a previous sibling
+ * is already the shallowest of its list — there is no level to drop into,
+ * so the key is consumed with no change. Outside a list the command
+ * declines and the key keeps the browser's focus move (native semantics).
+ * Shift-Tab is deliberately unbound (maintainer decision on the alpha.17
+ * feedback): a mistaken indent is one Ctrl+Z away, and the key must not
+ * move focus out of the editor mid-edit.
  */
 function listItemTab(view: EditorView): boolean {
-  const line = listItemCaretLine(view.state)
-  if (!line) return false
-  view.dispatch({
-    changes: { from: line.from, insert: '  ' },
-    userEvent: 'input.indent',
-  })
-  return true
-}
-
-/**
- * Shift+Tab inside a list row: remove up to two leading spaces (one indent
- * level). A row already at the margin consumes the key without changes so
- * the focus never jumps out mid-list.
- */
-function listItemShiftTab(view: EditorView): boolean {
-  const line = listItemCaretLine(view.state)
-  if (!line) return false
-  const spaces = /^ */.exec(line.text)![0].length
-  const remove = Math.min(2, spaces)
-  if (remove > 0) {
+  const { state } = view
+  const line = state.doc.lineAt(state.selection.main.head)
+  const mark = firstListMark(state, line)
+  // Not a list row: decline (native focus move). A list row with a marker
+  // whose ancestors are not a real list stays consumed-but-unchanged too.
+  if (mark === null) return false
+  const item = mark.parent
+  const prev = item?.prevSibling ?? null
+  const prevMark = prev?.getChild('ListMark') ?? null
+  if (prev === null || prevMark === null) return true
+  const prevLine = state.doc.lineAt(prev.from)
+  // The previous sibling's content column: its marker end plus the spaces
+  // that follow it (its own list nests there).
+  let content = prevMark.to
+  while (content < prevLine.to && state.doc.sliceString(content, content + 1) === ' ') content++
+  const target = content - prevLine.from
+  const indent = /^ */.exec(line.text)![0].length
+  if (target > indent) {
     view.dispatch({
-      changes: { from: line.from, to: line.from + remove },
+      changes: { from: line.from, insert: ' '.repeat(target - indent) },
       userEvent: 'input.indent',
     })
   }
   return true
 }
 
-/** Render-mode-only keymap: the list continuation dispatch and the list
- * indent keys. Mounted through the render compartment so source mode keeps
- * its plain newline and the browser's Tab default. */
+/** Render-mode-only keymap: the list continuation dispatch and the Tab
+ * demote key. Mounted through the render compartment so source mode keeps
+ * its plain newline, the browser's Tab default and its Shift-Tab default. */
 const renderListKeymap = keymap.of([
   { key: 'Shift-Enter', run: shiftEnterCommand },
   { key: 'Tab', run: listItemTab },
-  { key: 'Shift-Tab', run: listItemShiftTab },
 ])
 
 /**
