@@ -393,22 +393,70 @@ describe('completion probe seam', () => {
     expect(seen).toEqual([null, '/:', '/:co', null])
   })
 
-  it('freezes the probe while IME composition runs and re-emits at its end', () => {
+/** One macrotask later: every pending microtask (CM6's flush, the seam's
+ * re-emit, jsdom mutation callbacks) has settled. */
+function tick(): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, 0) })
+}
+
+describe('composition-end probe re-emit (#45)', () => {
+  it('freezes the probe while IME composition runs and re-emits when the composition ends', async () => {
     const { handle } = mount()
     const seen: (string | null)[] = []
     handle.setCompletionProbeListener((probe) => { seen.push(probe === null ? null : `${probe.trigger}:${probe.query}`) })
-    handle.setText('@sr')
-    expect(seen).toEqual([null, '@:sr'])
-    // Simulated composition (the same seam the IME tests use): updates
-    // during composing emit nothing; the composition-end update re-emits.
+    handle.setText('/')
+    expect(seen).toEqual([null, '/:'])
+    // The real-machine model (Windows Chrome, #45): the IME's composition
+    // text enters the DOCUMENT during the composition — CM6 reads each
+    // mutation as an input.type.compose transaction, which the composing
+    // gate freezes — so at compositionend the DOM and the document already
+    // agree and CM6 schedules no flush: no transaction, no updateListener
+    // emission. The committed text lands exactly so here.
     handle.view.inputState.composing = 1
-    Object.defineProperty(handle.view, 'composing', { value: true, configurable: true })
-    handle.view.dispatch({ changes: { from: 3, insert: 'c' } })
-    expect(seen).toEqual([null, '@:sr'])
-    Object.defineProperty(handle.view, 'composing', { value: false, configurable: true })
-    handle.view.dispatch({ selection: { anchor: 4 } })
-    expect(seen).toEqual([null, '@:sr', '@:src'])
+    handle.view.dispatch({ changes: { from: 1, insert: 'mo' }, selection: { anchor: 3 } })
+    expect(handle.getText()).toBe('/mo')
+    expect(seen).toEqual([null, '/:'])
+    // The end of the composition is the DOM event alone — no transaction is
+    // dispatched around it. CM6's own compositionend observer flips the
+    // flag back, and the seam re-emits the committed token one microtask
+    // later.
+    fireEvent.compositionEnd(content())
+    await tick()
+    expect(seen).toEqual([null, '/:', '/:mo'])
   })
+
+  it('repeated compositionend events re-emit nothing (identity-deduped)', async () => {
+    const { handle } = mount()
+    const seen: (string | null)[] = []
+    handle.setCompletionProbeListener((probe) => { seen.push(probe === null ? null : `${probe.trigger}:${probe.query}`) })
+    handle.setText('@se')
+    handle.view.inputState.composing = 1
+    handle.view.dispatch({ changes: { from: 3, insert: 'arch' }, selection: { anchor: 7 } })
+    // Some IMEs fire compositionend twice in a row; both before the
+    // microtask drains, and again long after — each must stay silent.
+    fireEvent.compositionEnd(content())
+    fireEvent.compositionEnd(content())
+    await tick()
+    expect(seen).toEqual([null, '@:se', '@:search'])
+    fireEvent.compositionEnd(content())
+    await tick()
+    expect(seen).toEqual([null, '@:se', '@:search'])
+  })
+
+  it('a compositionend reaching a destroyed editor stays silent', async () => {
+    const { handle } = mount()
+    const listener = vi.fn()
+    handle.setCompletionProbeListener(listener)
+    const el = content()
+    handle.destroy()
+    // The detached contentDOM keeps its listeners; the event must not
+    // produce an emission through the seam.
+    fireEvent.compositionEnd(el)
+    await tick()
+    // The bind-time delivery was the only emission.
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+})
 
   it('emits nothing while no listener is bound, then delivers the current probe on bind', () => {
     const { handle } = mount()

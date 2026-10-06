@@ -102,10 +102,12 @@ export interface MarkdownEditorHandle {
    */
   setCompletionKeyHandler(handler: MenuKeyHandler | null): void
   /**
-   * Install (or clear) the completion probe listener (T10). The editor
-   * re-detects the live trigger token on every document/selection change —
-   * frozen while IME composition runs, re-emitted at its end — and delivers
-   * identity-deduped probes (or null). Binding delivers the current probe.
+   * Install (or clear) the completion popups' probe listener (T10). The
+   * editor re-detects the live trigger token on every document/selection
+   * change — frozen while IME composition runs, re-emitted from the
+   * compositionend seam when the composition ends with no transaction (#45)
+   * — and delivers identity-deduped probes (or null). Binding delivers the
+   * current probe.
    */
   setCompletionProbeListener(listener: CompletionProbeListener | null): void
   /**
@@ -260,6 +262,38 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     listener(next)
   }
 
+  // The composition-end probe re-emit (#45): on Windows Chrome the IME's
+  // committed text is already in the document DURING the composition (each
+  // mutation is read as an `input.type.compose` transaction the composing
+  // gate below freezes), so compositionend has nothing pending to flush —
+  // CM6 schedules no transaction and its 50ms composition-clear update
+  // (`view.update([])`) carries neither docChanged nor selectionSet, and
+  // the probe stays at the composition-start snapshot (the committed `/mo`
+  // never retargets the popup). The compositionend DOM event is the one
+  // reliable end signal. It lands one microtask later: CM6's own
+  // compositionend observer (view/dist/index.cjs:5304-5321) runs ahead of
+  // every domEventHandlers handler (observers before handlers,
+  // :4593-4603 + :4749-4751), so `view.composing` is already false, and a
+  // Safari-style pending-change flush is itself a microtask queued ahead
+  // of this one — by our tick the re-read sees the committed text, before
+  // the next paint (rAF/setTimeout would add frame/timer delay for no
+  // ordering gain). The identity dedupe in emitProbe makes repeat events
+  // and flush-preceded emissions no-ops; the freeze semantics are intact —
+  // nothing emits while `view.composing` still holds.
+  let compositionEndPending = false
+  let editorDestroyed = false
+  const compositionEndProbe: Extension = EditorView.domEventHandlers({
+    compositionend(_event, view) {
+      if (editorDestroyed || compositionEndPending) return
+      compositionEndPending = true
+      queueMicrotask(() => {
+        compositionEndPending = false
+        if (editorDestroyed || view.composing) return
+        emitProbe(view.state)
+      })
+    },
+  })
+
   const baseExtensions: Extension[] = [
     history(),
     // markdownLanguage is the GFM-extended base (task lists included);
@@ -284,12 +318,16 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     EditorView.updateListener.of((update) => {
       if (update.docChanged) options.onDocChange(update.state.doc.toString())
       // The probe freezes while IME composition runs (a pinyin caret churns
-      // the token per keystroke) and re-emits at the composition-end update,
-      // which arrives with composing already false.
+      // the token per keystroke). The end-of-composition re-emit is NOT this
+      // listener's job: on Windows Chrome the composition ends with no
+      // transaction at all (the committed text landed during the
+      // composition, and the end carries nothing to flush), so this listener
+      // alone never sees it — the compositionend seam below re-emits.
       if (update.view.composing) return
       if (update.docChanged || update.selectionSet) emitProbe(update.state)
     }),
     pasteHandler(options.onFiles),
+    compositionEndProbe,
     refChipDecorations,
   ]
 
@@ -361,6 +399,12 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
         scrollIntoView: true,
       })
     },
-    destroy: () => view.destroy(),
+    destroy: () => {
+      // Silences the compositionend seam's deferred re-emit: a destroyed
+      // editor must not deliver probes (the listener is already cleared by
+      // the component's own teardown, but the seam stays self-contained).
+      editorDestroyed = true
+      view.destroy()
+    },
   }
 }
