@@ -847,6 +847,41 @@
     linear-gradient(-45deg, transparent 55%, currentColor 55%, currentColor 68%, transparent 68%);
 }
 
+/* List family (issue #46): hanging indent for list rows. The folded marker
+   opens the line inside a hang-wide column (the .cm-md-listmark widget
+   below), so a pulled-back first line (`text-indent`) starts the marker at
+   the depth indent and every soft-wrapped line (`padding-left`) aligns to
+   the content start after the marker — the render-mode-only hanging indent.
+   `--cm-md-li-indent` scales one 1.5em step per nesting level through the
+   `cm-md-li-dN` classes (emitted capped at six); `--cm-md-li-hang` is the
+   marker column the widget and the indents share. */
+.surface :global(.cm-md-listitem) {
+  --cm-md-li-hang: 1.2em;
+  --cm-md-li-indent: 0em;
+  text-indent: calc(-1 * var(--cm-md-li-hang));
+  padding-left: calc(var(--cm-md-li-indent) + var(--cm-md-li-hang));
+}
+
+/* Ordered rows take the wider column so two-digit ordinals still fit
+   (`cm-md-li-ordered` is emitted per row beside the depth class). */
+.surface :global(.cm-md-li-ordered) {
+  --cm-md-li-hang: 1.75em;
+}
+
+.surface :global(.cm-md-li-d2) { --cm-md-li-indent: 1.5em; }
+.surface :global(.cm-md-li-d3) { --cm-md-li-indent: 3.0em; }
+.surface :global(.cm-md-li-d4) { --cm-md-li-indent: 4.5em; }
+.surface :global(.cm-md-li-d5) { --cm-md-li-indent: 6.0em; }
+.surface :global(.cm-md-li-d6) { --cm-md-li-indent: 7.5em; }
+
+/* The bullet dot / computed ordinal itself: left-aligned inside the shared
+   column, so the gap to the content is the column's slack and every row's
+   marker sits flush at its depth indent. */
+.surface :global(.cm-md-listmark) {
+  display: inline-block;
+  min-width: var(--cm-md-li-hang);
+}
+
 /* Folded horizontal rule (issue #48): the `---`/`***`/`___` line folds away
    and this class paints one restrained hairline across it, derived from
    currentColor so it sits quiet in both themes with no theme entry point

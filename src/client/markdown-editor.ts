@@ -1,17 +1,20 @@
 /**
  * The CodeMirror 6 surface of the taken-over composer: one factory that
- * mounts the editor, owns the key semantics (Enter sends, Shift+Enter and
- * code-fence Enter newline, IME composition never sends), owns the paste
- * migration (T6: the paste decision core converts rich text to clean
- * Markdown, plain/gesture/file pastes keep host intake semantics), and
- * reconfigures render/source mode and the placeholder through compartments
- * so undo history and scroll survive a mode switch. Component tests drive
- * this handle directly.
+ * mounts the editor, owns the key semantics (Enter always sends — no fence
+ * exception since #46; Shift+Enter continues lists and quotes in render
+ * mode and is a plain newline otherwise; IME composition never sends),
+ * owns the paste migration (T6: the paste decision core converts rich text
+ * to clean Markdown, plain/gesture/file pastes keep host intake semantics),
+ * and reconfigures render/source mode and the placeholder through
+ * compartments so undo history and scroll survive a mode switch. Component
+ * tests drive this handle directly.
  */
 import {
   history, historyKeymap, defaultKeymap, insertNewlineAndIndent,
 } from '@codemirror/commands'
-import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { insertNewlineContinueMarkup, markdown, markdownLanguage } from '@codemirror/lang-markdown'
+import { syntaxTree } from '@codemirror/language'
+import type { SyntaxNode } from '@lezer/common'
 import { Compartment, EditorState, Prec, type Extension } from '@codemirror/state'
 import {
   EditorView, keymap, placeholder,
@@ -38,24 +41,146 @@ export type MenuKeyHandler = (intent: MenuKeyIntent) => boolean
 /** The completion probe seam's listener: identity-deduped token or none. */
 export type CompletionProbeListener = (probe: CompletionProbe | null) => void
 
-/** A fence marker line toggles the inside-fence state during the Enter scan. */
-const FENCE_LINE_RE = /^\s{0,3}(?:```+|~~~+)/u
+/**
+ * Shift+Enter continuation, path a: a line holding only a list marker and
+ * whitespace. `1)`-style markers included.
+ */
+const EMPTY_ITEM_LINE_RE = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]*$/u
+
+/** Shift+Enter continuation, path b: a line holding only `>` and whitespace. */
+const EMPTY_QUOTE_LINE_RE = /^[ \t]*>[ \t]*$/u
 
 /**
- * Whether the caret sits inside an unterminated fenced code block. A line
- * scan, not a syntax-tree query: while the user is typing a fence the
- * closing marker does not exist yet, so the tree ends at the opening line
- * and would report the caret outside.
+ * The empty-marker exit kind at `pos`, or null. The line-shape regexes only
+ * nominate; the syntax tree confirms the context — a ListItem or a
+ * Blockquote must own the line — and vetoes fenced code, where markup
+ * shapes are code text, not a list or quote to exit. (The tree covers
+ * unterminated fences: a fence without a closer still spans to the end of
+ * the document.) The resolution anchors at the markup's own character, not
+ * the caret: a caret parked before the marker's end (the line start
+ * included) resolves to no marker-bearing ancestor of its own, while the
+ * marker character always sits inside the ListItem/Blockquote the line
+ * belongs to.
  */
-export function insideOpenFence(doc: string, caretLine: number): boolean {
-  const lines = doc.split('\n')
-  let inside = false
-  for (let i = 0; i <= caretLine && i < lines.length; i++) {
-    const isFence = FENCE_LINE_RE.test(lines[i]!)
-    if (i === caretLine) return isFence || inside
-    if (isFence) inside = !inside
+function emptyMarkupExit(state: EditorState, pos: number): 'item' | 'quote' | null {
+  const line = state.doc.lineAt(pos)
+  const item = EMPTY_ITEM_LINE_RE.test(line.text)
+  const quote = EMPTY_QUOTE_LINE_RE.test(line.text)
+  if (!item && !quote) return null
+  const mark = line.from + /^[ \t]*/.exec(line.text)![0].length
+  for (let cur: SyntaxNode | null = syntaxTree(state).resolveInner(mark, 1); cur !== null; cur = cur.parent) {
+    if (cur.name === 'FencedCode') return null
+    if (item && cur.name === 'ListItem') return 'item'
+    if (quote && cur.name === 'Blockquote') return 'quote'
   }
-  return inside
+  return null
+}
+
+/**
+ * Shift+Enter's list/quote continuation dispatch (#46), in priority order:
+ * an empty list-item or quote line deletes its markup and exits (paths a/b —
+ * the caret returns to the line start, no newline is inserted); list and
+ * quote rows continue through lezer's markup-continuation command (path c —
+ * same indent, next marker, ordered numbers advance by the written source
+ * number); inside a fence that command declines itself (non-markdown
+ * context) so the generic indented newline keeps the status quo (path d);
+ * everywhere else it declines too and the bare newline remains (path e).
+ */
+function shiftEnterCommand(view: EditorView): boolean {
+  const { state } = view
+  const range = state.selection.main
+  if (range.empty && emptyMarkupExit(state, range.head) !== null) {
+    const line = state.doc.lineAt(range.head)
+    view.dispatch({
+      changes: { from: line.from, to: line.to },
+      selection: { anchor: line.from },
+      userEvent: 'input',
+    })
+    return true
+  }
+  if (insertNewlineContinueMarkup(view)) return true
+  return insertNewlineAndIndent(view)
+}
+
+/**
+ * Whether the line holds a list marker (a tree ListMark) — the gate that
+ * scopes Tab/Shift-Tab to list rows. Fences and plain text are list-outside
+ * and fall through to the browser's own focus move.
+ */
+function isListItemLine(state: EditorState, line: { from: number, to: number }): boolean {
+  let found = false
+  syntaxTree(state).iterate({
+    from: line.from,
+    to: line.to,
+    enter: (node) => {
+      if (node.name === 'ListMark') {
+        found = true
+        return false
+      }
+      return undefined
+    },
+  })
+  return found
+}
+
+/**
+ * Tab inside a list row (render mode): two spaces at the line start — one
+ * indent level. Outside a list the command declines and the key keeps the
+ * browser's focus move (native semantics).
+ */
+function listItemTab(view: EditorView): boolean {
+  const { state } = view
+  const line = state.doc.lineAt(state.selection.main.head)
+  if (!isListItemLine(state, line)) return false
+  view.dispatch({
+    changes: { from: line.from, insert: '  ' },
+    userEvent: 'input.indent',
+  })
+  return true
+}
+
+/**
+ * Shift+Tab inside a list row: remove up to two leading spaces (one indent
+ * level). A row already at the margin consumes the key without changes so
+ * the focus never jumps out mid-list.
+ */
+function listItemShiftTab(view: EditorView): boolean {
+  const { state } = view
+  const line = state.doc.lineAt(state.selection.main.head)
+  if (!isListItemLine(state, line)) return false
+  const spaces = /^ */.exec(line.text)![0].length
+  const remove = Math.min(2, spaces)
+  if (remove > 0) {
+    view.dispatch({
+      changes: { from: line.from, to: line.from + remove },
+      userEvent: 'input.indent',
+    })
+  }
+  return true
+}
+
+/** Render-mode-only keymap: the list continuation dispatch and the list
+ * indent keys. Mounted through the render compartment so source mode keeps
+ * its plain newline and the browser's Tab default. */
+const renderListKeymap = keymap.of([
+  { key: 'Shift-Enter', run: shiftEnterCommand },
+  { key: 'Tab', run: listItemTab },
+  { key: 'Shift-Tab', run: listItemShiftTab },
+])
+
+/**
+ * Editor command: Enter always submits (#46 removed the fence-newline
+ * exception — the ADR-0001 key semantics are strict send again). IME
+ * composition consumes the key entirely: no send, no stray newline.
+ */
+function enterCommand(submit: () => void): (view: EditorView) => boolean {
+  return (view) => {
+    // IME composition: the Enter that confirms candidates is fully consumed
+    // here — no send, and no stray newline under the composition.
+    if (view.composing) return true
+    submit()
+    return true
+  }
 }
 
 export interface MarkdownEditorOptions {
@@ -63,7 +188,7 @@ export interface MarkdownEditorOptions {
   parent: HTMLElement
   placeholder: string
   mode: EditMode
-  /** Enter outside a fence with non-composing input: send the message. */
+  /** Enter with non-composing input: send the message (fences included, #46). */
   onSubmit(): void
   /** The document text changed (draft surfaced to the component). */
   onDocChange(text: string): void
@@ -131,22 +256,6 @@ export interface MarkdownEditorHandle {
    */
   claimSelection(token: string): void
   destroy(): void
-}
-
-/** Editor command: Enter sends outside fences, newlines inside them. */
-function enterCommand(submit: () => void): (view: EditorView) => boolean {
-  return (view) => {
-    // IME composition: the Enter that confirms candidates is fully consumed
-    // here — no send, and no stray newline under the composition.
-    if (view.composing) return true
-    const { state } = view
-    const caretLine = state.doc.lineAt(state.selection.main.head).number
-    if (insideOpenFence(state.doc.toString(), caretLine)) {
-      return insertNewlineAndIndent(view)
-    }
-    submit()
-    return true
-  }
 }
 
 /**
@@ -227,6 +336,8 @@ function editableExtensions(editable: boolean): Extension {
  */
 export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEditorHandle {
   const { parent } = options
+  // The render-mode compartment: the live-render decorations AND the
+  // render-only list keymap (#46) flip together; source mode empties it.
   const renderCompartment = new Compartment()
   const placeholderCompartment = new Compartment()
   const editableCompartment = new Compartment()
@@ -301,19 +412,29 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     markdown({ base: markdownLanguage }),
     EditorView.lineWrapping,
     Prec.highest(keymap.of([
-      // The open menus' combobox keys sit ahead of the send/newline bindings;
-      // a declining run (both popups closed) hands each key back to the next
-      // binding. Tab routes the completion popups' drill-or-pick verb; the
-      // `+` menu answers it as an ordinary pick.
+      // The open menus' combobox keys stay the highest-priority bindings; a
+      // declining run (both popups closed) hands each key back to the
+      // bindings below. Tab routes the completion popups' drill-or-pick
+      // verb; the `+` menu answers it as an ordinary pick.
       { key: 'ArrowUp', run: runMenu('up') },
       { key: 'ArrowDown', run: runMenu('down') },
       { key: 'Enter', run: runMenu('pick') },
       { key: 'Tab', run: runMenu('tab') },
       { key: 'Shift-Tab', run: runMenu('close') },
       { key: 'Escape', run: runMenu('close') },
+    ])),
+    // The render-mode list keys (#46) sit ahead of the send/newline base so
+    // the continuation dispatch replaces the plain Shift+Enter newline and
+    // Tab/Shift-Tab indent list rows — but behind the menu combobox chain
+    // above, which always answers first. Source mode reconfigures the
+    // compartment to [] and keeps the base alone.
+    renderCompartment.of(options.mode === 'render' ? [liveRender, renderListKeymap] : []),
+    keymap.of([
+      // Enter always submits (#46: no fence exception); Shift+Enter is the
+      // generic indented newline — the base the render compartment rebinds.
       { key: 'Enter', run: enterCommand(options.onSubmit) },
       { key: 'Shift-Enter', run: insertNewlineAndIndent },
-    ])),
+    ]),
     keymap.of([...defaultKeymap, ...historyKeymap]),
     EditorView.updateListener.of((update) => {
       if (update.docChanged) options.onDocChange(update.state.doc.toString())
@@ -337,7 +458,6 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       doc: '',
       extensions: [
         baseExtensions,
-        renderCompartment.of(options.mode === 'render' ? liveRender : []),
         placeholderCompartment.of(placeholder(options.placeholder)),
         editableCompartment.of(editableExtensions(true)),
       ],
@@ -351,7 +471,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       // dropped by this @codemirror/state line.
       view.dispatch({
         effects: [
-          renderCompartment.reconfigure(mode === 'render' ? liveRender : []),
+          renderCompartment.reconfigure(mode === 'render' ? [liveRender, renderListKeymap] : []),
           placeholderCompartment.reconfigure(placeholder(placeholderText)),
         ],
       })

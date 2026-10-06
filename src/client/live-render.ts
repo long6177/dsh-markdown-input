@@ -9,7 +9,9 @@
  * into a `cm-md-hr` hairline (issue #48); fenced code hides its opening and
  * closing fence lines whole (fence, info string and line break included) and
  * floats a read-only language tag over the block's top-right corner while
- * the cursor is away (issue #47). Source mode simply omits this extension.
+ * the cursor is away (issue #47); list markers fold to a bullet dot or a
+ * position-computed ordinal with per-level hanging indents (issue #46).
+ * Source mode simply omits this extension.
  */
 import { isolateHistory } from '@codemirror/commands'
 import { syntaxTree } from '@codemirror/language'
@@ -18,7 +20,7 @@ import {
   Decoration, EditorView, ViewPlugin, WidgetType,
   type DecorationSet, type ViewUpdate,
 } from '@codemirror/view'
-import type { SyntaxNodeRef } from '@lezer/common'
+import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
 
 const headingLineClass: Record<string, string> = {
   ATXHeading1: 'cm-md-h1',
@@ -108,9 +110,67 @@ export class CodeLangWidget extends WidgetType {
   }
 }
 
+/**
+ * Bullet dot or computed ordinal replacing a folded list marker (issue #46).
+ * The three unordered markers (`-` `*` `+`) share one dot shape; ordered
+ * markers show the position-computed number with the item's own `.`/`)`
+ * suffix. Same replace-widget shape as the task checkbox: read-only, not
+ * an input.
+ */
+class ListMarkerWidget extends WidgetType {
+  constructor(private readonly label: string) { super() }
+
+  override eq(other: ListMarkerWidget): boolean {
+    return other.label === this.label
+  }
+
+  override toDOM(): HTMLElement {
+    const span = document.createElement('span')
+    span.className = 'cm-md-listmark'
+    span.textContent = this.label
+    span.setAttribute('aria-hidden', 'true')
+    return span
+  }
+
+  override ignoreEvent(): boolean {
+    return true
+  }
+}
+
 /** First whitespace-separated word of a fence info string ('' when absent). */
 function firstInfoWord(info: string): string {
   return info.trim().split(/\s+/u, 1)[0] ?? ''
+}
+
+/** Depth cap for the per-level hanging-indent classes; deeper rows reuse it. */
+const MAX_LIST_DEPTH = 6
+
+/**
+ * Nesting level of the row `item` belongs to: the count of list ancestors
+ * between the item and the document root (its own list included), capped at
+ * MAX_LIST_DEPTH. A top-level item's only list ancestor is its own list, so
+ * top-level rows read depth 1. Drives the hanging-indent padding class
+ * (`cm-md-li-dN`).
+ */
+function listDepthOf(item: SyntaxNode): number {
+  let depth = 0
+  for (let cur = item.parent; cur !== null; cur = cur.parent) {
+    if (cur.name === 'BulletList' || cur.name === 'OrderedList') depth++
+  }
+  return Math.min(depth, MAX_LIST_DEPTH)
+}
+
+/**
+ * 0-based position of `item` among `list`'s own ListItem children, by
+ * position — node wrappers are created fresh per query, so identity never
+ * holds between `mark.parent` and the sibling walk.
+ */
+function listItemIndex(list: SyntaxNode, item: SyntaxNode): number {
+  let index = 0
+  for (let child = list.firstChild; child !== null && child.from < item.from; child = child.nextSibling) {
+    if (child.name === 'ListItem') index++
+  }
+  return index
 }
 
 /**
@@ -162,6 +222,10 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
   const doc = state.doc
   const ranges: Range<Decoration>[] = []
   const lineClasses = new Map<number, Set<string>>()
+  // Per-line end of a folded quote mark: the list branch clamps its own
+  // fold prefix to it, so a `- ` widget on a quoted line never overlaps the
+  // quote fold already covering `> `.
+  const quoteFoldEnds = new Map<number, number>()
 
   const addLineClass = (from: number, to: number, className: string): void => {
     const last = doc.lineAt(to).number
@@ -269,9 +333,39 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
         return
       }
       if (name === 'QuoteMark') {
+        const end = endOfSpaces(doc, node.to)
+        quoteFoldEnds.set(doc.lineAt(node.from).number, end)
         if (!touchesActiveLine(doc, active, node.from, node.from)) {
-          fold(node.from, endOfSpaces(doc, node.to))
+          fold(node.from, end)
         }
+        return
+      }
+      if (name === 'ListMark') {
+        const mark = node.node
+        const item = mark?.parent ?? null
+        const list = item?.parent ?? null
+        if (item === null || list === null || (list.name !== 'BulletList' && list.name !== 'OrderedList')) return
+        const line = doc.lineAt(node.from)
+        const ordered = list.name === 'OrderedList'
+        // The row classes carry the hanging indent (see the CSS face); they
+        // stay on the active line like the heading classes do — only the
+        // fold yields to the cursor.
+        addLineClass(line.from, line.to, `cm-md-listitem cm-md-li-d${listDepthOf(item)} ${ordered ? 'cm-md-li-ordered' : 'cm-md-li-bullet'}`)
+        if (active.has(line.number)) return
+        let label = '•'
+        if (ordered) {
+          const suffix = doc.sliceString(node.from, node.to).endsWith(')') ? ')' : '.'
+          label = `${listItemIndex(list, item) + 1}${suffix}`
+        }
+        // The widget opens the line: the item's own indent spaces fold
+        // together with the marker so the hanging-indent padding sees one
+        // constant column. A quote mark folded earlier on this line bounds
+        // how far the prefix reaches (never overlapping that fold).
+        let from = node.from
+        while (from > line.from && doc.sliceString(from - 1, from) === ' ') from--
+        const quoted = quoteFoldEnds.get(line.number)
+        if (quoted !== undefined && from < quoted) from = quoted
+        ranges.push(Decoration.replace({ widget: new ListMarkerWidget(label) }).range(from, endOfSpaces(doc, node.to)))
         return
       }
       if (name === 'HorizontalRule') {
