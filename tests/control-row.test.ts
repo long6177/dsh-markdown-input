@@ -160,4 +160,32 @@ describe('tool-row ↔ model-pill CSS contract (issue #39)', () => {
     expect(trigger).toContain('max-width: 220px')
     expect(trigger).toContain('max-width: min(360px, 45cqw)')
   })
+
+  it('lays the row out as the native two-group line with no spring filler', () => {
+    const row = ruleOf(composerCss, '.toolRow')
+    // The native `.row` contract (host InputBar.module.css:251-261): wrap
+    // resolves a transient overflow by moving the trailing group onto its own
+    // line, and space-between parks the slack BETWEEN the groups — slack is
+    // then strictly positive at width, never absorbed by a filler.
+    expect(row).toContain('flex-wrap: wrap')
+    expect(row).toContain('justify-content: space-between')
+    // The `.spring { flex: 1 }` filler is gone: it absorbed all the slack so
+    // needed ≡ available and the verdict rode sub-pixel rounding (the
+    // alpha.13 wide-window false compact).
+    expect(composerCss).not.toContain('.spring')
+  })
+
+  it('keeps both row groups non-shrinkable so overflow stays measurable', () => {
+    // The measurement premise: a group rectangle always equals its natural
+    // demand width. A flex-compressed child would hand the measurement its
+    // laid-back width, the sum would mask the deficit, and a tight row would
+    // stay expanded (the alpha.13 narrow-window false expanded — the pill
+    // then ellipsized instead of flipping to icon).
+    expect(ruleOf(composerCss, '.leading')).toContain('flex: none')
+    expect(ruleOf(composerCss, '.trailing')).toContain('flex: none')
+    // The native trailing re-anchor (InputBar.module.css:293-302): the auto
+    // margin pins the group right on a single line and re-anchors it right
+    // on a wrapped line.
+    expect(ruleOf(composerCss, '.trailing')).toContain('margin-left: auto')
+  })
 })

@@ -134,7 +134,20 @@
 
 .toolRow {
   display: flex;
+  /* The native row's overflow contract (host InputBar.module.css:251-261):
+     `flex-wrap: wrap` so a transient overflow before the measure lands
+     resolves by wrapping the trailing group to its own line instead of
+     spilling past the card face, `justify-content: space-between` so the
+     line's slack lives BETWEEN the two groups. Both keep the measurement
+     honest: a spring `flex: 1` filler used to absorb all slack (so
+     needed ≡ available and the verdict rode sub-pixel rounding — the
+     alpha.13 wide-window false compact) and flex compression used to
+     shrink the pill out of the measured sum (the narrow-window false
+     expanded); slack between non-shrinking groups is strictly positive at
+     width and the deficit shows up unmasked at overflow. */
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   /* Expanded-state baseline for the seat-contract variables below (issue #39):
      the variable names are the host seat contract
@@ -158,8 +171,35 @@
   --dsh-composer-model-icon-display: block;
 }
 
-.spring {
-  flex: 1;
+/* The row's two halves, the native groups mirrored: the leading cluster
+   (command/`+` trigger, shared file input, permission pill, plan chip, mode
+   toggle) and the trailing cluster (model seat, stop, submit). Each group is
+   ONE non-shrinking flex item — `flex: none`, stronger than the host's own
+   groups (InputBar.module.css:285-302, where the leading `.tools`/`.modes`
+   only carry min-width: 0 and lean on the row's wrap) because this row's
+   face roots are themselves shrinkable (`min-width: 0` pills): an inner
+   compression would give the group a laid-out width below its natural
+   demand and mask the overflow from observeControlRow again. With the
+   groups rigid, a group rectangle always equals its natural demand width —
+   the layout premise the vendored measurement assumes. The blocks are
+   repeated rather than comma-grouped so the rule text is what every
+   consumer (and the contract test) reads. */
+.leading {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 8px;
+}
+
+.trailing {
+  display: flex;
+  align-items: center;
+  flex: none;
+  /* The native trailing group's re-anchor (InputBar.module.css:293-302): the
+     auto margin pins the group to the right edge on a single line and
+     re-anchors it right on a wrapped line. */
+  margin-left: auto;
+  gap: 8px;
 }
 
 .iconButton {

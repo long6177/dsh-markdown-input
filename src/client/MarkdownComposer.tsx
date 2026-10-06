@@ -965,151 +965,172 @@ export function MarkdownComposer({
         )}
         <div className={css.surface} data-markdown-surface ref={surfaceRef} />
         <div className={css.toolRow} ref={toolRowRef}>
-          {/* Command-menu face (tool row ①): the `+` trigger and its rebuilt
-              MenuView over the host command catalog. Probed and gated like the
-              other faces; its fallback keeps the legacy attach button alive so
-              file intake never disappears with the menu. The hidden file input
-              is shared by both and exists whenever the attachment face does. */}
-          <FaceGate
-            definition={commandFaceDefinition()}
-            fallback={attachmentFace !== undefined && (
-              <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
-                title={t('composer.attach')} disabled={!canIntake}
-                onClick={pickFiles}>
-                <IconPaperclipOutlineMedium size={14} />
-              </button>
+          {/* The native row's two-group shape (issue #39, alpha.13 inversion):
+              the seats ride in a leading and a trailing cluster, each ONE
+              non-shrinking flex item (`flex: none`) — the layout premise the
+              vendored measurement assumes. The previous flat row broke it
+              from both ends: on overflow flex compressed the shrinkable face
+              roots (`min-width: 0` pills), so the laid-out widths summed back
+              to the available width and compact never fired on a tight row
+              (the model name ellipsized instead); at width the `.spring`
+              filler absorbed all the slack, so needed ≡ available and the
+              verdict rode sub-pixel rounding (compact fired on wide rows).
+              The group rules live in MarkdownComposer.module.css beside
+              `.toolRow`. */}
+          <div className={css.leading}>
+            {/* Command-menu face (tool row ①): the `+` trigger and its rebuilt
+                MenuView over the host command catalog. Probed and gated like the
+                other faces; its fallback keeps the legacy attach button alive so
+                file intake never disappears with the menu. The hidden file input
+                is shared by both and exists whenever the attachment face does —
+                it lives inside the group so the measured row sees only the two
+                group children. */}
+            <FaceGate
+              definition={commandFaceDefinition()}
+              fallback={attachmentFace !== undefined && (
+                <button type="button" className={css.iconButton} aria-label={t('composer.attach')}
+                  title={t('composer.attach')} disabled={!canIntake}
+                  onClick={pickFiles}>
+                  <IconPaperclipOutlineMedium size={14} />
+                </button>
+              )}
+            >
+              <CommandMenuFace
+                sessionId={sessionId}
+                t={t}
+                editor={editorHandle}
+                container={cardRef}
+                canPickFiles={canIntake}
+                onPickFiles={pickFiles}
+                onError={showBanner}
+                registerClose={registerMenuClose}
+                onOpen={handleMenuOpen}
+              />
+            </FaceGate>
+            {/* Completion popups (typed triggers, T10): the `/` command+skill
+                popup and the `@` file-search popup over the CM6 surface,
+                token-driven through the editor's probe seam. Probed and gated
+                like the other faces — a probe miss hides the popups and typed
+                text stays plain; per-trigger availability is checked inside
+                (one data plane can die alone). */}
+            <FaceGate definition={completionFaceDefinition()}>
+              <CompletionFace
+                sessionId={sessionId}
+                t={t}
+                editor={editorHandle}
+                container={cardRef}
+                guard={completionGuard}
+                canPickFiles={canIntake}
+                onPickFiles={pickFiles}
+                onError={showBanner}
+                registerClose={registerCompletionClose}
+                onOpen={closeCommandMenu}
+              />
+            </FaceGate>
+            {attachmentFace !== undefined && (
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                disabled={session?.subagent != null}
+                hidden
+                onChange={onPickFiles}
+              />
             )}
-          >
-            <CommandMenuFace
-              sessionId={sessionId}
-              t={t}
-              editor={editorHandle}
-              container={cardRef}
-              canPickFiles={canIntake}
-              onPickFiles={pickFiles}
-              onError={showBanner}
-              registerClose={registerMenuClose}
-              onOpen={handleMenuOpen}
-            />
-          </FaceGate>
-          {/* Completion popups (typed triggers, T10): the `/` command+skill
-              popup and the `@` file-search popup over the CM6 surface,
-              token-driven through the editor's probe seam. Probed and gated
-              like the other faces — a probe miss hides the popups and typed
-              text stays plain; per-trigger availability is checked inside
-              (one data plane can die alone). */}
-          <FaceGate definition={completionFaceDefinition()}>
-            <CompletionFace
-              sessionId={sessionId}
-              t={t}
-              editor={editorHandle}
-              container={cardRef}
-              guard={completionGuard}
-              canPickFiles={canIntake}
-              onPickFiles={pickFiles}
-              onError={showBanner}
-              registerClose={registerCompletionClose}
-              onOpen={closeCommandMenu}
-            />
-          </FaceGate>
-          {attachmentFace !== undefined && (
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              disabled={session?.subagent != null}
-              hidden
-              onChange={onPickFiles}
-            />
-          )}
-          {/* Permission preset face (tool row ②): projection-driven pill +
-              preset popup + risk gate, probed and gated independently — a
-              probe miss or a mid-life degrade hides this face alone. */}
-          <FaceGate definition={permissionFaceDefinition(useProjection)}>
-            <PermissionSelectFace
-              useProjection={useProjection}
-              sessionId={sessionId}
-              t={t}
-              locked={sessionId === undefined}
-              onError={showBanner}
-            />
-          </FaceGate>
-          {/* Plan chip (tool row, issue #34): the native PlanChip seat the
-              takeover replaces, beside the access-mode select like the native
-              row. Projection-driven; the exit rides the command face, so both
-              surfaces gate the face — a probe miss hides the chip alone. */}
-          <FaceGate definition={planFaceDefinition(useProjection)}>
-            <PlanChipFace
-              useProjection={readPlanProjection}
-              sessionId={sessionId}
-              locked={sessionId === undefined}
-              t={t}
-            />
-          </FaceGate>
-          {/* Action semantics: the copy names the mode it switches TO. The seat
-              is plugin-invented (no native counterpart), so it stays a
-              permanently icon-only toggle: text here is row budget the native
-              row never spends, and that surplus is what folded the model pill
-              to a pure icon (#39). The box rides the sibling icon triggers'
-              22px footprint (4px padding + 14px glyph) — the smallest seat an
-              invented control gets on this row. */}
-          <button type="button" className={css.modeButton} onClick={toggleMode}
-            aria-label={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}
-            title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
-            <IconCodeOutlineRegular size={14} />
-          </button>
-          <span className={css.spring} />
-          {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
-              over the host `modelDirectories` data plane, right-aligned before
-              the submit action like the native seat. Probed and gated like the
-              permission face; busy phases never lock the model seat. */}
-          <FaceGate definition={modelFaceDefinition()}>
-            <ModelSelectFace
-              sessionId={sessionId}
-              locked={sessionId === undefined}
-              subagent={session?.subagent ?? null}
-            />
-          </FaceGate>
-          {/* Dedicated stop (tool row ④, native `interruptible`): a running
-              continuable child keeps Send primary and stops through its own
-              button — the native inline square glyph, disabled while the cancel
-              verb is missing. Mutually exclusive with the primary stop arm. */}
-          {dedicatedStop && (
-            <button type="button" className={css.stopButton}
-              aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
-              disabled={stop === undefined} onClick={stopRunning}>
-              <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
-                <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
-              </svg>
+            {/* Permission preset face (tool row ②): projection-driven pill +
+                preset popup + risk gate, probed and gated independently — a
+                probe miss or a mid-life degrade hides this face alone. */}
+            <FaceGate definition={permissionFaceDefinition(useProjection)}>
+              <PermissionSelectFace
+                useProjection={useProjection}
+                sessionId={sessionId}
+                t={t}
+                locked={sessionId === undefined}
+                onError={showBanner}
+              />
+            </FaceGate>
+            {/* Plan chip (tool row, issue #34): the native PlanChip seat the
+                takeover replaces, beside the access-mode select like the native
+                row. Projection-driven; the exit rides the command face, so both
+                surfaces gate the face — a probe miss hides the chip alone. */}
+            <FaceGate definition={planFaceDefinition(useProjection)}>
+              <PlanChipFace
+                useProjection={readPlanProjection}
+                sessionId={sessionId}
+                locked={sessionId === undefined}
+                t={t}
+              />
+            </FaceGate>
+            {/* Action semantics: the copy names the mode it switches TO. The seat
+                is plugin-invented (no native counterpart), so it stays a
+                permanently icon-only toggle: text here is row budget the native
+                row never spends, and that surplus is what folded the model pill
+                to a pure icon (#39). The box rides the sibling icon triggers'
+                22px footprint (4px padding + 14px glyph) — the smallest seat an
+                invented control gets on this row. */}
+            <button type="button" className={css.modeButton} onClick={toggleMode}
+              aria-label={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}
+              title={t('composer.mode.toggle', { mode: labelOf(t, otherMode) })}>
+              <IconCodeOutlineRegular size={14} />
             </button>
-          )}
-          {/* Send/stop semantics (native `primaryStops`): on a running ordinary
-              session the primary names stop while the composer is empty or
-              owner-blocked, and clicks cancel (queue preserved); every other
-              state keeps the send action. A missing cancel verb disables the
-              arm, never hides the seat. The seat itself is the native pure-icon
-              circle — the arrow glyph while sending, the square while stopping
-              — so the row spends the native demand width, not a text button's
-              (issue #39). Tooltip and aria carry the same localized copy the
-              text button used to. */}
-          <Tooltip label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
-            side="top" delayMs={500}
-            disabled={primaryStops ? stop === undefined : !canSubmit}>
-            <button type="button" className={css.submitButton}
-              aria-label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
-              disabled={primaryStops ? stop === undefined : !canSubmit}
-              onClick={primaryStops ? stopRunning : submit}>
-              {primaryStops ? (
+          </div>
+          <div className={css.trailing}>
+            {/* Model/reasoning face (tool row ③): the vendored host ModelSelect
+                over the host `modelDirectories` data plane, right-aligned before
+                the submit action like the native seat. Probed and gated like the
+                permission face; busy phases never lock the model seat. */}
+            <FaceGate definition={modelFaceDefinition()}>
+              <ModelSelectFace
+                sessionId={sessionId}
+                locked={sessionId === undefined}
+                subagent={session?.subagent ?? null}
+              />
+            </FaceGate>
+            {/* Dedicated stop (tool row ④, native `interruptible`): a running
+                continuable child keeps Send primary and stops through its own
+                button — the native inline square glyph, disabled while the cancel
+                verb is missing. Mutually exclusive with the primary stop arm. */}
+            {dedicatedStop && (
+              <button type="button" className={css.stopButton}
+                aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
+                disabled={stop === undefined} onClick={stopRunning}>
                 <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
                   <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
                 </svg>
-              ) : (
-                <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
-                  <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
-                </svg>
-              )}
-            </button>
-          </Tooltip>
+              </button>
+            )}
+            {/* Send/stop semantics (native `primaryStops`): on a running ordinary
+                session the primary names stop while the composer is empty or
+                owner-blocked, and clicks cancel (queue preserved); every other
+                state keeps the send action. A missing cancel verb disables the
+                arm, never hides the seat. The seat itself is the native pure-icon
+                circle — the arrow glyph while sending, the square while stopping
+                — so the row spends the native demand width, not a text button's
+                (issue #39). Tooltip and aria carry the same localized copy the
+                text button used to. The host Tooltip clones its anchor (no
+                wrapper element), so the seat stays a direct child of this
+                group, and its bubble is fixed-position — out of flow, so a
+                hover can never widen what the row measures (the transient
+                latch candidate the alpha.13 note flagged). */}
+            <Tooltip label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+              side="top" delayMs={500}
+              disabled={primaryStops ? stop === undefined : !canSubmit}>
+              <button type="button" className={css.submitButton}
+                aria-label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+                disabled={primaryStops ? stop === undefined : !canSubmit}
+                onClick={primaryStops ? stopRunning : submit}>
+                {primaryStops ? (
+                  <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                    <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                    <path d="M8.3125 0.980183C8.66767 1.0531 8.97902 1.20418 9.2627 1.43233C9.48724 1.61297 9.73029 1.85793 9.97949 2.10714L14.707 6.83468L13.293 8.24874L9 3.95577V15.0417H7V3.95577L2.70703 8.24874L1.29297 6.83468L6.02051 2.10714C6.26971 1.85793 6.51277 1.61297 6.7373 1.43233C6.97662 1.23986 7.28445 1.04402 7.6875 0.980183C7.8973 0.947006 8.1031 0.95516 8.3125 0.980183Z" fill="currentColor" />
+                  </svg>
+                )}
+              </button>
+            </Tooltip>
+          </div>
         </div>
       </div>
       {/* The dock row (issue #43): the meter is the row's only occupant —

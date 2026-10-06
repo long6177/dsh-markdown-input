@@ -18,6 +18,8 @@ import type { QueueRow } from '../src/client/queue-core.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 import { resetAgentPresetsSource, setAgentPresetsSource } from '../src/client/agent-preset-face.ts'
 import { resetContextLocale, setContextLocale } from '../src/client/context-meter-face.ts'
+import { resetModelFace, setModelLocale, setModelSource } from '../src/client/model-face.ts'
+import { en as modelEn } from '../src/client/ModelSelectFace.locales.ts'
 import { resetWorkspaceVerbSource, setWorkspaceVerbSource } from '../src/client/workspace-verb.ts'
 
 interface FakeDraft {
@@ -158,6 +160,7 @@ afterEach(() => {
   setConversationSource(() => undefined)
   resetSkillFace()
   resetCommandFace()
+  resetModelFace()
   resetGoalFace()
   window.localStorage.clear()
   resetFaces()
@@ -201,15 +204,85 @@ describe('MarkdownComposer', () => {
   it('seats the mode toggle at the sibling icon-trigger footprint (issue #39)', () => {
     render(<MarkdownComposer {...chainProps()} />)
     const mode = seatNamed(modeToggleCopy('source'))
-    // The seat stays a direct flex item of the measured row: its box is the
-    // row budget it spends, and #39 shrank it to the sibling icon triggers'
-    // 22px footprint (the box number is pinned as CSS text in
-    // control-row.test.ts — jsdom has no layout).
+    // The seat stays a direct flex item of the row's leading group (the
+    // native two-group shape, issue #39): its box is the row budget it
+    // spends, and #39 shrank it to the sibling icon triggers' 22px footprint
+    // (the box number is pinned as CSS text in control-row.test.ts — jsdom
+    // has no layout).
     expect(mode.className).toContain('modeButton')
-    expect(mode.parentElement?.className).toContain('toolRow')
+    expect(mode.parentElement?.className).toContain('leading')
+    expect(mode.closest('[class*="toolRow"]')).not.toBeNull()
     // The glyph matches the attach/+ triggers' 14px icon.
     expect(mode.querySelector('svg')?.getAttribute('width')).toBe('14')
     expect(mode.querySelector('svg')?.getAttribute('height')).toBe('14')
+  })
+
+  it('splits the tool row into the native leading/trailing groups (issue #39)', () => {
+    // A fully-peopled row: the gates that need a data plane are bound so the
+    // group membership is asserted on real seats (the `+` trigger, the model
+    // pill, the submit action) rather than on fallback shapes. The groups
+    // are the alpha.13 inversion's structural fix: each is ONE non-shrinking
+    // flex item, so the vendored measurement always reads natural demand
+    // widths — flex compression (tight-row false expanded) and the spring
+    // filler (wide-row false compact) have nothing left to act on.
+    setConversationSource(() => fakeConversation())
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    const modelState = {
+      current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
+      routable: true,
+      groups: [{
+        id: 'deepseek-account',
+        name: 'DeepSeek 账号',
+        models: [{ id: 'deepseek-chat', name: 'DeepSeek-V41-Flash' }],
+      }],
+      failures: [],
+      status: 'ready',
+      pending: null,
+      error: null,
+    }
+    setModelSource(() => ({
+      directoryFor: vi.fn(() => ({
+        store: {
+          subscribe: () => () => {},
+          getSnapshot: () => modelState,
+        },
+        load: vi.fn(() => Promise.resolve(modelState)),
+        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
+      })),
+    }) as never)
+    setModelLocale(((key: string, params?: Record<string, string>) =>
+      (modelEn as Record<string, string>)[key]
+        ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+    render(<MarkdownComposer {...chainProps()} />)
+    const row = document.querySelector('[class*="toolRow"]')
+    expect(row).not.toBeNull()
+    // Exactly two in-flow row children: every other candidate lives inside a
+    // group (the shared file input is display:none) or renders nothing at
+    // rest (the popup faces), and the submit tooltip's bubble is
+    // fixed-position inside the trailing group — out of flow, so a hover can
+    // never widen what the row measures (the transient-latch candidate the
+    // alpha.13 note flagged).
+    const groups = [...row!.children]
+    expect(groups).toHaveLength(2)
+    const [lead, trail] = groups as [HTMLElement, HTMLElement]
+    expect(lead.className).toContain('leading')
+    expect(trail.className).toContain('trailing')
+    // The leading cluster owns the `+` trigger, the shared file input, and
+    // the mode toggle (the plan chip test pins its seat order).
+    expect(lead.querySelector('[data-command-menu-trigger]')).not.toBeNull()
+    expect(lead.querySelector('input[type="file"]')).not.toBeNull()
+    expect(lead.contains(seatNamed(modeToggleCopy('source')))).toBe(true)
+    // The trailing cluster owns the model pill and the submit action, in the
+    // native order (model seat before send).
+    const modelTrigger = trail.querySelector('button[aria-haspopup="menu"]')
+    const submit = seatNamed(en['composer.action.submit'])
+    expect(modelTrigger).not.toBeNull()
+    expect(trail.contains(submit)).toBe(true)
+    const modelSeat = modelTrigger!.closest('[class*="root"]') as HTMLElement
+    expect(modelSeat.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .toBeTruthy()
   })
 
   it('a fresh mount restores the persisted mode and it acts on the editor (F5 path)', () => {
@@ -982,8 +1055,10 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     const send = seatNamed(en['composer.action.submit'])
     expect(send.className).toContain('submitButton')
     // The host Tooltip clones its anchor, so the seat stays a direct child of
-    // the row: the icon-only box is exactly the flex item the row measures.
-    expect(send.parentElement?.className).toContain('toolRow')
+    // the trailing group (the native two-group row, issue #39): the icon-only
+    // box is exactly the flex item the group measures.
+    expect(send.parentElement?.className).toContain('trailing')
+    expect(send.closest('[class*="toolRow"]')).not.toBeNull()
     expect(send.textContent).toBe('')
     expect(send.querySelectorAll('svg')).toHaveLength(1)
     expect(send.querySelectorAll('svg path')).toHaveLength(1)
@@ -1051,14 +1126,17 @@ describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issu
     // Native row order: the plan chip sits in the leading modes cluster,
     // ahead of the trailing controls (here: the icon-only mode toggle stands
     // in — the permission pill's data plane is unbound and its face hides
-    // alone).
+    // alone). Both seats ride the row's leading group (issue #39's two-group
+    // row), so the order is asserted within the group.
     const modeButton = seatNamed(modeToggleCopy('source'))
     const row = planChip()!.closest('[class*="toolRow"]')
     expect(row).not.toBeNull()
     expect(container.querySelector('[data-markdown-surface]')).not.toBeNull()
-    const rowChildren = [...row!.children]
-    expect(rowChildren.indexOf(planChip()!.closest('[class*="planChipWrap"]') as HTMLElement))
-      .toBeLessThan(rowChildren.indexOf(modeButton))
+    const lead = planChip()!.closest('[class*="leading"]')
+    expect(lead).not.toBeNull()
+    const leadChildren = [...lead!.children]
+    expect(leadChildren.indexOf(planChip()!.closest('[class*="planChipWrap"]') as HTMLElement))
+      .toBeLessThan(leadChildren.indexOf(modeButton))
   })
 
   it('renders no plan chip while plan mode is off or absent', () => {
