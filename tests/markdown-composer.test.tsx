@@ -21,6 +21,9 @@ import { resetContextLocale, setContextLocale } from '../src/client/context-mete
 import { resetModelFace, setModelLocale, setModelSource } from '../src/client/model-face.ts'
 import { en as modelEn } from '../src/client/ModelSelectFace.locales.ts'
 import { resetWorkspaceVerbSource, setWorkspaceVerbSource } from '../src/client/workspace-verb.ts'
+import {
+  resetWorkspaceAddLocale, resetWorkspaceAddSource, setWorkspaceAddSource,
+} from '../src/client/workspace-add.ts'
 
 interface FakeDraft {
   kind: 'file' | 'image'
@@ -1394,6 +1397,74 @@ describe('MarkdownComposer — hero row, one line for both seats (issue #42 alph
       resetContextLocale()
       resetWorkspaceVerbSource()
       resetAgentPresetsSource()
+    }
+  })
+})
+
+describe('MarkdownComposer — workspace add flow, folder-error banner (issue #42 alpha.13)', () => {
+  // The three `conversation` keys the row reads, plus the host `workspace`
+  // words the add flow speaks (bound seat; ui-workspace types are not in
+  // this build's dependency graph, so the tests speak the documented strings).
+  const conversationCopy: Record<string, string> = {
+    'hero.chooseWorkspace': 'Choose workspace',
+    'placeholder.workspace': 'Choose a workspace to start',
+    'workspace.defaultName': 'Workspace',
+  }
+
+  it('keeps the card tree intact with the add row mounted and retries from the banner', async () => {
+    setContextLocale(((key: string) => conversationCopy[key] ?? key) as Parameters<typeof setContextLocale>[0])
+    const startSession = vi.fn()
+    setWorkspaceVerbSource(() => ({ startSession }))
+    const pickDirectory = vi.fn(() => Promise.resolve('/new/path'))
+    const createWorkspace = vi.fn(() => Promise.reject(new Error('workspace/invalid-path')))
+    setWorkspaceAddSource(() => ({ pickDirectory, createWorkspace }))
+    const seats = {
+      useWorkspaces: (selector: (state: { items: unknown[]; phase: 'ready' }) => unknown) =>
+        selector({ items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' }),
+      useSessions: (selector: (state: { byId: Record<string, { cwd?: string }> }) => unknown) =>
+        selector({ byId: {} }),
+    }
+    try {
+      render(
+        <MarkdownComposer
+          {...chainProps({
+            session: { sessionId: 's1', blank: true, running: false, subagent: null, pendingSubmissions: [] },
+          })}
+          {...seats}
+        />,
+      )
+      const chip = document.querySelector('[data-markdown-workspace-row] button') as HTMLButtonElement
+      fireEvent.click(chip)
+      const rows = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+      expect(rows).toHaveLength(2)
+      // The footer row is pinned below the workspace row (the native
+      // `footer={addEntries}` shape, alpha.13 retest).
+      expect(rows[1]?.textContent).toContain('Add workspace…')
+      fireEvent.click(rows[1] as HTMLElement)
+      // The failed adoption lands on the card banner — the card's one error
+      // surface — as the card's first child, with the retry action beside the
+      // text and before the dismiss button.
+      await waitFor(() => { expect(document.querySelector('[data-markdown-banner]')).not.toBeNull() })
+      const card = document.querySelector('[data-markdown-composer]') as HTMLElement
+      const banner = document.querySelector('[data-markdown-banner]') as HTMLElement
+      expect(card.firstElementChild).toBe(banner)
+      expect(banner.textContent).toContain('Couldn’t open folder')
+      const action = document.querySelector('[data-markdown-banner-action]') as HTMLButtonElement
+      const close = banner.querySelector('button[aria-label]') as HTMLButtonElement
+      expect(action.textContent).toBe('Choose again')
+      expect([...banner.querySelectorAll('button')].indexOf(action)).toBeLessThan(
+        [...banner.querySelectorAll('button')].indexOf(close),
+      )
+      // Retry from the banner: the flow re-runs and the pick lands.
+      createWorkspace.mockResolvedValueOnce({ workspaceId: 'w2' })
+      fireEvent.click(action)
+      await waitFor(() => { expect(startSession).toHaveBeenCalledWith('w2') })
+      expect(document.querySelector('[data-markdown-banner]')).toBeNull()
+    } finally {
+      resetContextLocale()
+      resetWorkspaceVerbSource()
+      resetWorkspaceAddSource()
+      resetWorkspaceAddLocale()
     }
   })
 })

@@ -89,7 +89,7 @@ _Avoid_: 计划按钮（原生是 chip 形态的座位，非普通按钮）
 _Avoid_: dock（是实现名，不是概念名）
 
 **工作区行（Workspace row）**:
-接管卡卡顶重建的原生 hero 工作区座位（#42，原生 `heroWorkspaceRow` 的 chip 与选择菜单随回退栏被接管隐藏）：标签走原生五级解析链（刚选定 → 占位 → 会话归属工作区 → cwd 桥 → 占位），选定 = 在该工作区复用或创建空白会话并切换；菜单无「添加工作区」行（directory-flow 洞在卡内必然未占）。
+接管卡卡顶重建的原生 hero 工作区座位（#42，原生 `heroWorkspaceRow` 的 chip 与选择菜单随回退栏被接管隐藏）：标签走原生五级解析链（刚选定 → 占位 → 会话归属工作区 → cwd 桥 → 占位），选定 = 在该工作区复用或创建空白会话并切换；菜单底部「添加工作区」行经宿主 `uiWorkspace.pickDirectory` + `workspaces.create` 直达添加流程（**（alpha.14 修订）**无须 directory-flow 洞；两动词同时可达才出现该行，失败落卡横幅附「重新选择」重试，列表就绪且为空时打开手势直接拉起流程）。
 _Avoid_: hero（指原生居中形态，接管卡不复刻）
 
 **工作区触发姿态（Workspace trigger posture）**:

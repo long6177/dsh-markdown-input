@@ -96,9 +96,11 @@ import { StatsPillsFace, statsPillsFaceDefinition, type StatsPillsFaceProps } fr
 import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
 import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
 import {
+  addWorkspaceEntry, addWorkspaceIsOnlyEntry, resolveAddWorkspaceCopy,
   workspaceLabelState, workspaceMenuItems, workspaceRowSupported, workspaceTriggerPosture,
   type WorkspaceRowSnapshot,
 } from './workspace-row-core.ts'
+import { workspaceAddFace, workspaceAddLocale } from './workspace-add.ts'
 import { workspaceVerbFace } from './workspace-verb.ts'
 import { WorkspaceRowFace } from './WorkspaceRowFace.tsx'
 
@@ -258,7 +260,12 @@ export function MarkdownComposer({
   const [mode, setMode] = useState<EditMode>(storedMode)
   const [hasText, setHasText] = useState(false)
   const [dragging, setDragging] = useState(false)
-  const [banner, setBanner] = useState<{ seq: number; text: string } | null>(null)
+  const [banner, setBanner] = useState<{
+    seq: number
+    text: string
+    /** Optional recovery action (the add flow's native `folderError.retry` arm). */
+    action?: { label: string; run: () => void } | undefined
+  } | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
   // The editor handle as state: the tool-row faces need it in their effects
   // (the menu key seam binds on arrival), and child effects run before this
@@ -313,9 +320,9 @@ export function MarkdownComposer({
   const machineBusy = input.phase === 'adjudicating' || input.phase === 'submitting'
 
   const bannerSeq = useRef(0)
-  const showBanner = useCallback((text: string) => {
+  const showBanner = useCallback((text: string, action?: { label: string; run: () => void }) => {
     bannerSeq.current += 1
-    setBanner({ seq: bannerSeq.current, text })
+    setBanner({ seq: bannerSeq.current, text, action })
   }, [])
 
   // Transient error banner (Toast parity: hold, then fade); keyed so an
@@ -635,6 +642,72 @@ export function MarkdownComposer({
     }
   }, [workspaceVerb, showBanner])
 
+  // The add-workspace flow (issue #42, alpha.13 retest): the menu footer's
+  // "add workspace" row adopts a NEW directory as a Workspace and picks it —
+  // the native `WorkspacePickFlow`'s two moves (`pickDirectory` then
+  // `create`, WorkspacePicker.tsx:141-146 + :131-139) reached directly
+  // through the host verbs; no directory-flow hole is needed. The row itself
+  // is present exactly when both verbs probe (face rule: a half-reachable
+  // flow hides whole); the copy is the host `workspace` namespace's own words
+  // with the plugin's verbatim fallback under a miss.
+  const addVerb = workspaceAddFace()
+  const addCopy = resolveAddWorkspaceCopy(workspaceAddLocale(), {
+    'menu.addWorkspace': t('workspace.menu.addWorkspace'),
+    'folderError.title': t('workspace.folderError.title'),
+    'folderError.retry': t('workspace.folderError.retry'),
+  })
+  // Native `flowBusy` (WorkspacePicker.tsx:88): one flow at a time — from the
+  // OS picker opening until the adoption settles, the add row is disabled.
+  // The ref mirrors the state so the flow's own guard reads the CURRENT fact
+  // (a retry action captured earlier must not consult a stale closure value).
+  const [addBusy, setAddBusy] = useState(false)
+  const addBusyRef = useRef(false)
+  const runAddFlow = useCallback(async (): Promise<void> => {
+    if (addVerb === undefined || addBusyRef.current) return
+    addBusyRef.current = true
+    setAddBusy(true)
+    try {
+      const path = await addVerb.pickDirectory()
+      // Cancelled: the native flow just closes (`onCancel`), no error.
+      if (path === null || path === '') return
+      const created = await addVerb.createWorkspace({ path })
+      // The native `adoptDirectory` tail: onPick(workspace.workspaceId) —
+      // here the same reuse-or-create pick the rows use, so the session
+      // lands in the new Workspace.
+      pickWorkspace(created.workspaceId)
+    } catch (error: unknown) {
+      // The native folder-error dialog (title + message, `folderError.retry`
+      // button — WorkspacePicker.tsx:204-219) mirrored onto the card's one
+      // error surface: the banner, with the retry action beside the text.
+      showBanner(
+        `${addCopy['folderError.title']}: ${error instanceof Error ? error.message : String(error)}`,
+        { label: addCopy['folderError.retry'], run: () => { void runAddFlow() } },
+      )
+    } finally {
+      addBusyRef.current = false
+      setAddBusy(false)
+    }
+  }, [addVerb, pickWorkspace, showBanner, addCopy['folderError.title'], addCopy['folderError.retry']])
+  // The native "add is the only entry" edge (WorkspacePicker.tsx:157-162):
+  // nothing listed, the list settled, and the flow reachable — a menu would
+  // offer nothing to choose between, so the anchor gesture (chip or the
+  // whole-card trigger click) IS the action: the open request is consumed
+  // (the menu never shows) and the directory flow opens directly.
+  const addIsOnlyEntry = addWorkspaceIsOnlyEntry({
+    addPresent: addVerb !== undefined,
+    phase: workspaces?.phase ?? 'pending',
+    itemCount: workspaceItems.length,
+  })
+  useEffect(() => {
+    if (pickerOpen && addIsOnlyEntry && !addBusy) {
+      setPickerOpen(false)
+      void runAddFlow()
+    }
+  }, [pickerOpen, addIsOnlyEntry, addBusy, runAddFlow])
+  const addRow = addVerb === undefined || !rowSupported
+    ? undefined
+    : addWorkspaceEntry(addCopy['menu.addWorkspace'], addBusy)
+
   // Tool-row collapse measurement (the model pill's truncation ladder, host
   // parity): flips `data-model-compact` when the expanded controls cannot
   // share the line, which switches the pill to pure icon. The row exists on
@@ -889,6 +962,18 @@ export function MarkdownComposer({
           <div key={banner.seq} className={css.banner} role="alert" data-markdown-banner>
             <IconWarningOutlineMedium size={14} />
             <span className={css.bannerText}>{banner.text}</span>
+            {/* Recovery action (the add flow's retry): the native folder-error
+                dialog's `重新选择` button mirrored onto the card's one error
+                surface — click dismisses the banner and re-opens the flow. */}
+            {banner.action !== undefined && (
+              <button type="button" className={css.bannerAction} data-markdown-banner-action
+                onClick={() => {
+                  setBanner(null)
+                  banner.action?.run()
+                }}>
+                {banner.action.label}
+              </button>
+            )}
             <button type="button" className={css.bannerClose} aria-label={t('composer.notice.dismiss')}
               onClick={() => { setBanner(null) }}>
               <IconCloseOutlineMedium size={12} />
@@ -918,10 +1003,12 @@ export function MarkdownComposer({
                 label={rowLabel}
                 selectedWorkspaceId={pendingWorkspaceId ?? sessionWorkspace?.workspaceId}
                 menuItems={workspaceMenuItems(workspaceItems, workspaceCopy('workspace.defaultName'))}
-                open={pickerOpen}
+                open={pickerOpen && !addIsOnlyEntry}
                 onToggleMenu={() => { setPickerOpen(value => !value) }}
                 onCloseMenu={closePicker}
                 onPick={pickWorkspace}
+                onAdd={() => { void runAddFlow() }}
+                addRow={addRow}
                 triggerPosture={triggerPosture}
                 copy={{ choose: workspaceCopy('hero.chooseWorkspace') }}
                 testId="hero-workspace"

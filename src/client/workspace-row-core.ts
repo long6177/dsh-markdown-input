@@ -130,12 +130,12 @@ export interface WorkspaceMenuItem {
 
 /**
  * The picker rows: every listed Workspace in list order, each labelled
- * through {@link workspaceDisplayTitle}. There is deliberately no "add
- * workspace" row: the native flow emits it only when the surface's
- * `conversation.hero.workspace.directoryFlow` hole has an occupant
- * (`WorkspacePicker.tsx:106-108`), and no directory-flow plugin occupies a
- * hole declared by THIS card, so the row can never exist here. The absence is
- * asserted by tests rather than left to composition luck.
+ * through {@link workspaceDisplayTitle}. These are the menu's ITEMS only —
+ * since the alpha.13 retest the "add workspace" action rides the Menu's
+ * `footer` prop pinned below the list (the native picker's own shape,
+ * `WorkspacePicker.tsx:111-119`), fed by the add-flow verb plane
+ * (workspace-add.ts); the items stay workspace rows, so an add row can never
+ * be mistaken for a pick target here.
  * @param items - the Workspace list from the standard hook.
  * @param localizedDefaultTitle - `t('workspace.defaultName')`.
  */
@@ -192,4 +192,90 @@ export function workspaceTriggerPosture(input: {
   readonly label: WorkspaceLabelState
 }): boolean {
   return input.blank && input.label === undefined
+}
+
+// ---------------------------------------------------------------------------
+// The add-workspace flow (issue #42 alpha.13 retest): the menu footer row and
+// its two edge decisions, mirroring the native `WorkspacePickFlow` — the row
+// id (`WorkspacePicker.tsx:24`), the pinned footer entry (`:106-108`), and
+// the "add is the only entry" verdict that consumes the anchor's open request
+// and pulls the directory flow directly (`:157-162`).
+// ---------------------------------------------------------------------------
+
+/** The menu id of the add row — the native `ADD_WORKSPACE` sentinel, verbatim. */
+export const ADD_WORKSPACE_ID = '::add-workspace'
+
+/** The host `workspace` namespace keys the add row and its error surface read. */
+export type WorkspaceAddKey =
+  | 'menu.addWorkspace'
+  | 'folderError.title'
+  | 'folderError.retry'
+
+/** The add flow's copy record: host words when bound, plugin words otherwise. */
+export type WorkspaceAddCopy = Record<WorkspaceAddKey, string>
+
+/**
+ * The host seat the add flow's copy fold reads. `ctx.locale.bind('workspace')`
+ * resolves through the untyped overload (the namespace lives in ui-workspace,
+ * outside this build's merge table), so the seat is narrowed structurally to
+ * exactly the keys this flow reads.
+ */
+export type WorkspaceAddHostTranslate = (key: WorkspaceAddKey, params?: Record<string, unknown>) => string
+
+/**
+ * Resolve the add flow's copy: the HOST `workspace` namespace's own words
+ * through the bound seat, the plugin's verbatim fallback lines under a miss
+ * (a bound translate answers a miss with the echoed key) or an unbound
+ * namespace. The `resolveStatsCopy` fold, one namespace over.
+ * @param hostT - the bound `workspace` translate, or undefined before apply binds it.
+ * @param own - the plugin's fallback copy (the host's zh/en strings verbatim).
+ */
+export function resolveAddWorkspaceCopy(
+  hostT: WorkspaceAddHostTranslate | undefined,
+  own: WorkspaceAddCopy,
+): WorkspaceAddCopy {
+  if (hostT === undefined) return own
+  const read = (key: WorkspaceAddKey): string => {
+    const value = hostT(key)
+    return value === key ? own[key] : value
+  }
+  return {
+    'menu.addWorkspace': read('menu.addWorkspace'),
+    'folderError.title': read('folderError.title'),
+    'folderError.retry': read('folderError.retry'),
+  }
+}
+
+/**
+ * One add-flow footer entry, the shape the primitives `Menu` consumes
+ * (minus the leading icon, which only the face can build — the core stays
+ * React-free). Mirrors the native entry: `label: t('menu.addWorkspace')`,
+ * `disabled: flowBusy` (`WorkspacePicker.tsx:106-108`).
+ * @param label - the resolved `menu.addWorkspace` copy.
+ * @param busy - whether the flow is in flight (picker or adoption pending).
+ */
+export function addWorkspaceEntry(label: string, busy: boolean): {
+  readonly id: string
+  readonly label: string
+  readonly disabled: boolean
+} {
+  return { id: ADD_WORKSPACE_ID, label, disabled: busy }
+}
+
+/**
+ * The native "add is the only entry" verdict (`WorkspacePicker.tsx:157-162`):
+ * nothing is listed, the list has settled (`ready` — a pending list may still
+ * be hiding rows), and the flow is reachable — so a menu would offer nothing
+ * to choose between and the anchor gesture IS the action. The native gates it
+ * `!pinAdd && listSettled && addEntries.length === 1` with `pinAdd` false
+ * exactly when the list is empty; this card never mounts the add-only
+ * surface, so the three facts collapse to these.
+ * @param input - flow reachability, list lifecycle, and the row count.
+ */
+export function addWorkspaceIsOnlyEntry(input: {
+  readonly addPresent: boolean
+  readonly phase: 'pending' | 'ready'
+  readonly itemCount: number
+}): boolean {
+  return input.addPresent && input.phase === 'ready' && input.itemCount === 0
 }

@@ -26,6 +26,9 @@ import {
   resetWorkspaceVerbSource, setWorkspaceVerbSource, workspaceVerbFace,
   type UiWorkspaceVerbFace,
 } from '../src/client/workspace-verb.ts'
+import {
+  resetWorkspaceAddLocale, resetWorkspaceAddSource, setWorkspaceAddLocale, setWorkspaceAddSource,
+} from '../src/client/workspace-add.ts'
 import { MARKDOWN_INPUT_EN } from './copy.ts'
 
 /** The host `conversation` namespace, with the shared vocabulary underneath. */
@@ -156,6 +159,8 @@ afterEach(() => {
   cleanup()
   resetContextLocale()
   resetWorkspaceVerbSource()
+  resetWorkspaceAddSource()
+  resetWorkspaceAddLocale()
   resetAgentPresetsSource()
   resetFaces()
   resetGoalFace()
@@ -281,8 +286,9 @@ describe('workspace pick menu', () => {
     ])
     // The current workspace carries the trailing check (native `selectedId`).
     expect(rows[0]?.querySelector('svg')).not.toBeNull()
-    // The native add row exists only when the surface's directory-flow hole is
-    // occupied, which cannot happen inside this card.
+    // The add row rides the Menu footer and renders only when the add-flow
+    // verbs probe — this test installs no add source, so the footer stays
+    // away (the same row the alpha.13 retest found missing).
     expect(document.body.textContent).not.toContain(ADD_WORKSPACE_ROW)
     expect(chip()).toHaveAttribute('aria-expanded', 'true')
   })
@@ -457,5 +463,236 @@ describe('hero line — one row for both seats (issue #42 alpha.12 feedback)', (
     render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
     expect(document.querySelector('[data-markdown-hero-row]')).toBeNull()
     expect(row()).toBeNull()
+  })
+})
+
+describe('workspace menu add row (issue #42, alpha.13 retest)', () => {
+  // The host `workspace` namespace's own words for the add flow (the native
+  // picker's `t` seat reads this dictionary; ui-workspace is not in this
+  // build's dependency graph, so the tests speak its documented strings).
+  const hostWorkspaceCopy: Record<string, string> = {
+    'menu.addWorkspace': 'Add workspace…',
+    'folderError.title': 'Couldn’t open folder',
+    'folderError.retry': 'Choose again',
+  }
+  const zhAddRow = '添加工作区…'
+
+  interface AddFaceStub {
+    pickDirectory: () => Promise<string | null>
+    createWorkspace: (input: { path: string }) => Promise<{ workspaceId: string }>
+  }
+
+  /** Install an add-flow face for the duration of one test (the apply seam). */
+  function installAdd(face: AddFaceStub | undefined): void {
+    setWorkspaceAddSource(() => face)
+  }
+
+  /** The menu's footer add row (its label is the plugin fallback's en copy). */
+  function addRow(): HTMLElement {
+    return menuRow('Add workspace…')
+  }
+
+  function banner(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-markdown-banner]')
+  }
+
+  function bannerAction(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-markdown-banner-action]')
+  }
+
+  /** A complete face: pick resolves `path`, create adopts it as `w3`. */
+  function happyFace(path: string): AddFaceStub & {
+    pickMock: ReturnType<typeof vi.fn>
+    createMock: ReturnType<typeof vi.fn>
+  } {
+    const pickMock = vi.fn(() => Promise.resolve(path))
+    const createMock = vi.fn(() => Promise.resolve({ workspaceId: 'w3' }))
+    return { pickDirectory: pickMock, createWorkspace: createMock, pickMock, createMock }
+  }
+
+  it('pins the add row into the menu footer, after every workspace row', () => {
+    installAdd(happyFace('/new/path'))
+    const seats = hostSeats({
+      workspaces: {
+        items: [
+          { workspaceId: 'w1', title: 'default-workspace', sessionIds: ['s1'] },
+          { workspaceId: 'w2', title: 'project', sessionIds: [] },
+        ],
+        phase: 'ready',
+      },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    const rows = menuRows()
+    expect(rows).toHaveLength(3)
+    // The footer is pinned BELOW the items area (native `footer={addEntries}`).
+    expect(rows[2]?.textContent).toContain('Add workspace…')
+    // The native entry's plus glyph rides the row (`.itemIcon` span > svg).
+    expect(rows[2]?.querySelector('span svg')).not.toBeNull()
+    expect(rows[2]).not.toBeDisabled()
+  })
+
+  it('renders the row whole away when the add-flow verbs do not both probe', () => {
+    // The installer (workspace-add.test.ts) already rejects half-probing
+    // service pairs; at this seam the verdict arrives as `undefined`, and the
+    // footer row disappears while the workspace rows stay.
+    for (const absent of [undefined, undefined]) {
+      installAdd(absent)
+      const seats = hostSeats({
+        workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+      })
+      render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+      fireEvent.click(chip())
+      expect(menuRows()).toHaveLength(1)
+      expect(document.body.textContent).not.toContain('Add workspace…')
+      cleanup()
+    }
+  })
+
+  it('labels the row from the bound host `workspace` seat, plugin fallback otherwise', () => {
+    installAdd(happyFace('/new/path'))
+    // Bound: the host dictionary's words win (zh here, proving the seat — not
+    // the plugin's en fallback — answered).
+    setWorkspaceAddLocale(
+      ((key: string) => hostWorkspaceCopy[key].replaceAll('Add workspace…', zhAddRow)) as Parameters<
+        typeof setWorkspaceAddLocale
+      >[0],
+    )
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    expect(menuRow(zhAddRow)).not.toBeNull()
+  })
+
+  it('runs pick -> create -> the reuse-or-create pick, and closes the menu', async () => {
+    const startSession = vi.fn()
+    const face = happyFace('/new/path')
+    installAdd(face)
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+      verb: { startSession },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    fireEvent.click(addRow())
+    // The menu closes first (the native `openDirectoryFlow`), then the flow.
+    expect(menuRows()).toHaveLength(0)
+    await waitFor(() => { expect(face.createMock).toHaveBeenCalledWith({ path: '/new/path' }) })
+    await waitFor(() => { expect(startSession).toHaveBeenCalledWith('w3') })
+    // No error surface on the happy path.
+    expect(banner()).toBeNull()
+  })
+
+  it('keeps the flow one-at-a-time: the re-opened menu reads disabled while busy', async () => {
+    const startSession = vi.fn()
+    let release: ((path: string | null) => void) | undefined
+    const face = {
+      pickDirectory: () => new Promise<string | null>(resolve => { release = resolve }),
+      createWorkspace: () => Promise.resolve({ workspaceId: 'w3' }),
+    }
+    installAdd(face)
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+      verb: { startSession },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    fireEvent.click(addRow())
+    expect(menuRows()).toHaveLength(0)
+    // Mid-flow re-open: the add row is dead (native `disabled: flowBusy`) and
+    // the workspace rows with it ("one picking interaction at a time").
+    fireEvent.click(chip())
+    expect(addRow()).toBeDisabled()
+    expect(menuRows()[0]).toBeDisabled()
+    // The released pick completes the flow: the adoption lands (menu closes —
+    // the pick consumes it), and a fresh menu reads live again.
+    release?.('/new/path')
+    await waitFor(() => { expect(startSession).toHaveBeenCalledWith('w3') })
+    expect(menuRows()).toHaveLength(0)
+    fireEvent.click(chip())
+    expect(addRow()).not.toBeDisabled()
+    expect(menuRows()[0]).not.toBeDisabled()
+  })
+
+  it('reports a failed adoption on the banner with the native retry action', async () => {
+    const startSession = vi.fn()
+    const pickMock = vi.fn(() => Promise.resolve('/new/path'))
+    const createMock = vi.fn(() => Promise.reject(new Error('workspace/invalid-path')))
+    installAdd({ pickDirectory: pickMock, createWorkspace: createMock })
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+      verb: { startSession },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    fireEvent.click(addRow())
+    // The native folder-error dialog mirrored onto the banner: title + message
+    // + the `重新选择` action (the fallback copy speaks the host words).
+    await waitFor(() => { expect(banner()).not.toBeNull() })
+    expect(banner()?.textContent).toContain('Couldn’t open folder')
+    expect(banner()?.textContent).toContain('workspace/invalid-path')
+    expect(bannerAction()).not.toBeNull()
+    expect(bannerAction()?.textContent).toBe('Choose again')
+    expect(startSession).not.toHaveBeenCalled()
+    // Retry: dismisses the banner and re-opens the flow (the native
+    // `openDirectoryFlow` behind the dialog button).
+    createMock.mockResolvedValueOnce({ workspaceId: 'w3' })
+    fireEvent.click(bannerAction() as HTMLElement)
+    await waitFor(() => { expect(startSession).toHaveBeenCalledWith('w3') })
+    expect(banner()).toBeNull()
+  })
+
+  it('treats a cancelled picker as a quiet close, never an error', async () => {
+    const startSession = vi.fn()
+    const face = happyFace('/new/path')
+    face.pickMock.mockReturnValueOnce(Promise.resolve(null))
+    installAdd(face)
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+      verb: { startSession },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    fireEvent.click(addRow())
+    await waitFor(() => { expect(face.pickMock).toHaveBeenCalled() })
+    expect(face.createMock).not.toHaveBeenCalled()
+    expect(startSession).not.toHaveBeenCalled()
+    expect(banner()).toBeNull()
+    // The flow settled: the row is live again.
+    fireEvent.click(chip())
+    expect(addRow()).not.toBeDisabled()
+  })
+
+  it('consumes the anchor gesture as the flow when the settled list is empty', async () => {
+    const startSession = vi.fn()
+    const face = happyFace('/new/path')
+    installAdd(face)
+    const seats = hostSeats({
+      workspaces: { items: [], phase: 'ready' },
+      verb: { startSession },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    // The trigger posture's whole-card click IS the open request.
+    expect(card()).toHaveAttribute('data-workspace-trigger')
+    fireEvent.click(card())
+    // The native "add is the only entry" edge: no menu ever shows, the OS
+    // directory flow opens directly.
+    expect(menuRows()).toHaveLength(0)
+    await waitFor(() => { expect(face.pickMock).toHaveBeenCalled() })
+    await waitFor(() => { expect(startSession).toHaveBeenCalledWith('w3') })
+  })
+
+  it('keeps the menu (no auto-fire) while the list is still pending', () => {
+    const face = happyFace('/new/path')
+    installAdd(face)
+    const seats = hostSeats({
+      workspaces: { items: [], phase: 'pending' },
+      verb: { startSession: () => {} },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(card())
+    expect(face.pickMock).not.toHaveBeenCalled()
   })
 })

@@ -49,6 +49,9 @@ import { en as modelEn, zh as modelZh, type ModelKey } from './ModelSelectFace.l
 import { MarkdownUserMessage } from './UserMessage.tsx'
 import { installWorkspaceVerbSource } from './workspace-verb.ts'
 import {
+  WORKSPACE_ADD_NS, installWorkspaceAddSource, resetWorkspaceAddLocale, setWorkspaceAddLocale,
+} from './workspace-add.ts'
+import {
   AGENT_PRESET_NS, installAgentPresetsSource, resetAgentPresetLocale, setAgentPresetLocale,
 } from './agent-preset-face.ts'
 import {
@@ -161,6 +164,14 @@ export function apply(ctx: ClientContext): void {
   // service the row hides whole — a pick target with no verb is a dead
   // control, and the card must behave exactly as it does today.
   installWorkspaceVerbSource(ctx)
+  // The workspace menu's add row (issue #42, alpha.13 retest) reads the add
+  // flow's two verbs the same lazy way — `uiWorkspace.pickDirectory` (the
+  // Host-native directory chooser over RPC) and `workspaces.create` (adopt
+  // the picked path), the native `WorkspacePickFlow`'s two moves without its
+  // directory-flow hole. The face is present only when BOTH probe; a host
+  // build without either hides the menu footer row alone while the workspace
+  // rows and the pick stay.
+  installWorkspaceAddSource(ctx)
   // The agent-preset seat beside it (issue #42) reads the host
   // `remote.agentPresets` namespace — the preset registry's roster read and
   // its composition switch — the same lazy way; without the registry the seat
@@ -218,6 +229,21 @@ export function apply(ctx: ClientContext): void {
     setStatsLocale(ctx.locale.bind(STATS_NS))
     return resetStatsLocale
   }, 'markdown-input: stats pills host copy')
+  // The workspace menu's add row (issue #42, alpha.13 retest) binds the HOST
+  // `workspace` namespace the same read-only way: `menu.addWorkspace` and the
+  // folder-error pair (`folderError.title` / `folderError.retry`) are
+  // ui-workspace's own dictionary keys (`ui-workspace/src/client/locales.ts`,
+  // the namespace the native picker's `t` seat reads). The namespace is
+  // outside this build's merge table (no dsh-client-ui-workspace types), so
+  // `bind` resolves through its untyped overload — the seat is narrowed to
+  // the three keys the flow reads, and the plugin's locales.ts ships the host
+  // zh/en strings verbatim as fallback keys for a build whose `workspace`
+  // dictionary misses them. The add row only renders when the add-flow verbs
+  // probe (`workspaceAddFace`), so the binding alone surfaces nothing.
+  ctx.effect(() => {
+    setWorkspaceAddLocale(ctx.locale.bind(WORKSPACE_ADD_NS))
+    return resetWorkspaceAddLocale
+  }, 'markdown-input: workspace add-flow host copy')
   installStatsSettingsSource(ctx)
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback

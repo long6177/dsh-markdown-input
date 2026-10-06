@@ -21,6 +21,7 @@ import { ContextMeterFace } from '../src/client/ContextMeterFace.tsx'
 import { CONTEXT_NS } from '../src/client/context-meter-face.ts'
 import { agentPresetsRemoteFace, resetAgentPresetsSource } from '../src/client/agent-preset-face.ts'
 import { resetWorkspaceVerbSource, workspaceVerbFace } from '../src/client/workspace-verb.ts'
+import { resetWorkspaceAddSource, workspaceAddFace } from '../src/client/workspace-add.ts'
 
 interface RecordedRegistration {
   name: string
@@ -38,6 +39,7 @@ function recordedContext(options: {
   remoteCommands?: unknown
   remoteAgentPresets?: unknown
   uiWorkspace?: unknown
+  workspaces?: unknown
 } = {}): {
   ctx: ClientContext
   injected: readonly string[]
@@ -54,6 +56,7 @@ function recordedContext(options: {
       if (key === 'remote.commands') return options.remoteCommands
       if (key === 'remote.agentPresets') return options.remoteAgentPresets
       if (key === 'uiWorkspace') return options.uiWorkspace
+      if (key === 'workspaces') return options.workspaces
       return key === 'remote' ? options.remote : undefined
     },
     effect(fn: () => unknown): unknown {
@@ -95,6 +98,7 @@ afterEach(() => {
   resetCommandFace()
   resetWorkspaceVerbSource()
   resetAgentPresetsSource()
+  resetWorkspaceAddSource()
 })
 
 describe('client apply registration', () => {
@@ -197,6 +201,26 @@ describe('client apply registration', () => {
     apply(ctx)
     expect(typeof workspaceVerbFace()?.startSession).toBe('function')
     expect(agentPresetsRemoteFace()).toBe(agentPresets)
+  })
+
+  it('wires the add-flow source only when both verbs probe (issue #42 alpha.13)', () => {
+    // The menu footer's add row needs the picker AND the adoption verb; a
+    // host with both exposes the complete face, one without either reads as
+    // absent (the row hides alone — never a half-reachable flow).
+    const both = { uiWorkspace: { startSession: () => {}, pickDirectory: () => {} }, workspaces: { create: () => {} } }
+    const { ctx: withBoth } = recordedContext(both)
+    apply(withBoth)
+    expect(typeof workspaceAddFace()?.pickDirectory).toBe('function')
+    expect(typeof workspaceAddFace()?.createWorkspace).toBe('function')
+    for (const half of [
+      { uiWorkspace: { pickDirectory: () => {} } },
+      { workspaces: { create: () => {} } },
+      { uiWorkspace: { startSession: () => {} }, workspaces: { create: () => {} } },
+    ]) {
+      const { ctx } = recordedContext(half)
+      apply(ctx)
+      expect(workspaceAddFace()).toBeUndefined()
+    }
   })
 
   it('leaves the hero seats hidden when the host lacks ui-workspace or the preset registry', () => {

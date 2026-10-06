@@ -243,6 +243,22 @@
   overflow-wrap: anywhere;
 }
 
+/* Recovery action inside the banner (the add flow's `重新选择` retry, the
+   native folder-error dialog's footer button mirrored onto this surface):
+   a quiet text button — the close button's chrome carrying a label. */
+.bannerAction {
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+
 .bannerClose {
   border: none;
   background: transparent;

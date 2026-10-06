@@ -157,6 +157,14 @@ const zh = {
   'message.turnUsage.count': '{count} tok',
   'number.thousand': '{value}K',
   'number.million': '{value}M',
+  // Workspace menu add row (issue #42, alpha.13 retest). The copy is the host
+  // `workspace` namespace's own (`ui-workspace/src/client/locales.ts`,
+  // `menu.addWorkspace` / `folderError.*`, bound read-only in apply); these
+  // are the same lines copied verbatim as the fallback keys a build without
+  // those dictionary entries resolves through.
+  'workspace.menu.addWorkspace': '添加工作区…',
+  'workspace.folderError.title': '无法打开文件夹',
+  'workspace.folderError.retry': '重新选择',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -282,6 +290,12 @@ const en: Record<ComposerKey, string> = {
   'message.turnUsage.count': '{count} tok',
   'number.thousand': '{value}K',
   'number.million': '{value}M',
+  // Workspace menu add row (issue #42, alpha.13 retest) — the host
+  // `workspace` namespace's own lines copied verbatim (see the zh block
+  // above for the fold).
+  'workspace.menu.addWorkspace': 'Add workspace…',
+  'workspace.folderError.title': 'Couldn’t open folder',
+  'workspace.folderError.retry': 'Choose again',
 }
 
 export { zh, en }

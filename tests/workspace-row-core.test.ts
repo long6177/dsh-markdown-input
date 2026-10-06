@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
+  ADD_WORKSPACE_ID, addWorkspaceEntry, addWorkspaceIsOnlyEntry, resolveAddWorkspaceCopy,
   workspaceDisplayTitle, workspaceLabel, workspaceLabelState, workspaceMenuItems,
   workspaceRowSupported, workspaceTitleOf, workspaceTriggerPosture,
   type WorkspaceRowView,
@@ -120,7 +121,7 @@ describe('workspaceLabelState — the native five-level chain', () => {
 })
 
 describe('workspaceMenuItems', () => {
-  it('lists every workspace in order, localized, with no add row', () => {
+  it('lists every workspace in order, localized, with no add row inside the items', () => {
     const items = workspaceMenuItems([
       view('w1', 'default-workspace'),
       view('w2', 'project'),
@@ -129,15 +130,63 @@ describe('workspaceMenuItems', () => {
       { id: 'w1', label: DEFAULT_NAME },
       { id: 'w2', label: 'project' },
     ])
-    // The native "add workspace" entry is gated on the surface's
-    // `conversation.hero.workspace.directoryFlow` hole having an occupant
-    // (`WorkspacePicker.tsx:106-108`); no plugin occupies a hole declared by
-    // this card, so the row cannot exist here.
+    // The add action is NOT an item: since the alpha.13 retest it rides the
+    // Menu's pinned `footer` (the native picker's `footer={addEntries}`,
+    // `WorkspacePicker.tsx:111-119`), so no add entry can ever be mistaken
+    // for a pick target here.
     expect(items.some(item => item.label.includes('Add'))).toBe(false)
+    expect(items.some(item => item.id === ADD_WORKSPACE_ID)).toBe(false)
   })
 
   it('is empty for an empty list (no dead pick row)', () => {
     expect(workspaceMenuItems([], DEFAULT_NAME)).toEqual([])
+  })
+})
+
+describe('addWorkspaceEntry (the native footer row, WorkspacePicker.tsx:106-108)', () => {
+  it('carries the native add sentinel, the label, and the busy gate', () => {
+    const entry = addWorkspaceEntry('Add workspace…', false)
+    expect(entry).toEqual({ id: ADD_WORKSPACE_ID, label: 'Add workspace…', disabled: false })
+    expect(ADD_WORKSPACE_ID).toBe('::add-workspace')
+    // Native `disabled: flowBusy`: one flow at a time.
+    expect(addWorkspaceEntry('添加工作区…', true).disabled).toBe(true)
+  })
+})
+
+describe('addWorkspaceIsOnlyEntry (the native anchor-gesture edge, WorkspacePicker.tsx:157-162)', () => {
+  it('fires only when the flow is reachable, the list settled, and nothing is listed', () => {
+    expect(addWorkspaceIsOnlyEntry({ addPresent: true, phase: 'ready', itemCount: 0 })).toBe(true)
+  })
+
+  it('stays a menu while rows are listed, the list is pending, or the flow is unreachable', () => {
+    expect(addWorkspaceIsOnlyEntry({ addPresent: true, phase: 'ready', itemCount: 2 })).toBe(false)
+    expect(addWorkspaceIsOnlyEntry({ addPresent: true, phase: 'pending', itemCount: 0 })).toBe(false)
+    expect(addWorkspaceIsOnlyEntry({ addPresent: false, phase: 'ready', itemCount: 0 })).toBe(false)
+  })
+})
+
+describe('resolveAddWorkspaceCopy (host `workspace` words, plugin fallback under a miss)', () => {
+  const own = {
+    'menu.addWorkspace': 'Add workspace…',
+    'folderError.title': 'Couldn’t open folder',
+    'folderError.retry': 'Choose again',
+  }
+
+  it('reads the host seat when bound', () => {
+    const host = (key: string): string => ({ 'menu.addWorkspace': '添加工作区…' })[key] ?? key
+    expect(resolveAddWorkspaceCopy(host, own)['menu.addWorkspace']).toBe('添加工作区…')
+  })
+
+  it('falls back per key when the host dictionary misses (the echoed key)', () => {
+    const host = ((key: string) => key === 'menu.addWorkspace' ? '添加工作区…' : key) as Parameters<typeof resolveAddWorkspaceCopy>[0]
+    const resolved = resolveAddWorkspaceCopy(host, own)
+    expect(resolved['menu.addWorkspace']).toBe('添加工作区…')
+    expect(resolved['folderError.title']).toBe(own['folderError.title'])
+    expect(resolved['folderError.retry']).toBe(own['folderError.retry'])
+  })
+
+  it('uses the plugin copy whole when the namespace is unbound', () => {
+    expect(resolveAddWorkspaceCopy(undefined, own)).toBe(own)
   })
 })
 
