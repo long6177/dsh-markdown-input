@@ -49,3 +49,28 @@ describe('card face ↔ native input fill CSS contract (issue #44)', () => {
     expect(overlay).toContain('border-radius: var(--dsw-radius-panel')
   })
 })
+
+describe('render-mode small-widget CSS contract (issue #48)', () => {
+  it('keeps the task checkbox shape and adds only the pointer hover cue', () => {
+    // The pre-#48 shape contract stands untouched: same box, same alignment.
+    const box = ruleOf(composerCss, '.surface :global(.cm-md-taskbox)')
+    expect(box).toContain('width: 0.9em')
+    expect(box).toContain('height: 0.9em')
+    expect(box).toContain('vertical-align: -0.1em')
+    // The one new affordance is restrained: a pointer cursor, and the hover
+    // state only strengthens the existing border instead of adding chrome.
+    expect(box).toContain('cursor: pointer')
+    const hover = ruleOf(composerCss, '.surface :global(.cm-md-taskbox:hover)')
+    expect(hover).toContain('border-color: color-mix(in srgb, currentColor 75%, transparent)')
+    expect(hover).not.toContain('background')
+  })
+
+  it('paints the folded rule line as one restrained full-width hairline', () => {
+    const hr = ruleOf(composerCss, '.surface :global(.cm-md-hr)')
+    expect(hr).toContain('background-size: 100% 1px')
+    expect(hr).toContain('background-repeat: no-repeat')
+    expect(hr).toContain('background-position: 0 50%')
+    // One currentColor-derived wash, no theme entry point (out of scope).
+    expect(hr).toContain('color-mix(in srgb, currentColor 20%, transparent)')
+  })
+})

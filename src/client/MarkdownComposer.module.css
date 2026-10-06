@@ -799,6 +799,10 @@
   text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
 }
 
+/* Folded task marker (issue #48): the box is now clickable — it toggles the
+   source marker in place (live-render.ts dispatches the transaction). The
+   box geometry is the pre-#48 contract, untouched; the only new affordance
+   is a pointer cursor, the restrained click cue the issue asks for. */
 .surface :global(.cm-md-taskbox) {
   display: inline-block;
   width: 0.9em;
@@ -807,6 +811,14 @@
   border: 1px solid color-mix(in srgb, currentColor 45%, transparent);
   border-radius: 3px;
   vertical-align: -0.1em;
+  cursor: pointer;
+}
+
+/* Hover deepens the same border a step — no fill, no shadow, no scale: the
+   click target is the folded marker itself, and the cue should read as
+   "this is pressable", not as a new control. */
+.surface :global(.cm-md-taskbox:hover) {
+  border-color: color-mix(in srgb, currentColor 75%, transparent);
 }
 
 .surface :global(.cm-md-taskbox-checked) {
@@ -848,6 +860,23 @@
 .surface :global(.cm-md-listmark) {
   display: inline-block;
   min-width: var(--cm-md-li-hang);
+}
+
+/* Folded horizontal rule (issue #48): the `---`/`***`/`___` line folds away
+   and this class paints one restrained hairline across it, derived from
+   currentColor so it sits quiet in both themes with no theme entry point
+   (style customization is out of scope for #48). The gradient is the
+   standard 1px-stripe trick: one solid strip, centered in the line box,
+   full width. Render mode only — the active line keeps raw source and this
+   class is never mounted on it. */
+.surface :global(.cm-md-hr) {
+  background-image: linear-gradient(
+    color-mix(in srgb, currentColor 20%, transparent),
+    color-mix(in srgb, currentColor 20%, transparent)
+  );
+  background-repeat: no-repeat;
+  background-size: 100% 1px;
+  background-position: 0 50%;
 }
 
 /* Reference chips (T9): marks over the plain draft, styled after the host

@@ -4,8 +4,12 @@
  * the cursor line (and any selected line) stays raw source. Decorations are
  * derived from the lezer markdown syntax tree, so escaped characters
  * (`\*`) are never folded — the parser hands them to us as `Escape`, not
- * as formatting. Source mode simply omits this extension.
+ * as formatting. Two widgets ride the folds (issue #48): the task-list
+ * checkbox is clickable and toggles its source marker in place, and a
+ * horizontal-rule line folds into a `cm-md-hr` hairline. Source mode simply
+ * omits this extension.
  */
+import { isolateHistory } from '@codemirror/commands'
 import { syntaxTree } from '@codemirror/language'
 import { RangeSet, type EditorState, type Range, type Text } from '@codemirror/state'
 import {
@@ -25,7 +29,14 @@ const headingLineClass: Record<string, string> = {
   SetextHeading2: 'cm-md-h2',
 }
 
-/** Checkbox glyph replacing a folded `[ ]` / `[x]` task marker. */
+/**
+ * Checkbox glyph replacing a folded `[ ]` / `[x]` task marker. Issue #48:
+ * clicking toggles the marker in the source — one transaction, isolated in
+ * history so one undo step returns to the pre-click marker. The box stays
+ * aria-hidden (keyboard focus/toggling is out of scope for #48; announcing
+ * a button with no keyboard path would be a false affordance), and the
+ * geometry lives in the render-mode CSS contract, unchanged by this issue.
+ */
 class TaskCheckboxWidget extends WidgetType {
   constructor(private readonly checked: boolean) { super() }
 
@@ -33,10 +44,35 @@ class TaskCheckboxWidget extends WidgetType {
     return other.checked === this.checked
   }
 
-  override toDOM(): HTMLElement {
+  override toDOM(view: EditorView): HTMLElement {
     const span = document.createElement('span')
     span.className = this.checked ? 'cm-md-taskbox cm-md-taskbox-checked' : 'cm-md-taskbox'
     span.setAttribute('aria-hidden', 'true')
+    span.addEventListener('mousedown', (event) => {
+      // mousedown, not click: the browser's default caret placement (and the
+      // selection churn that would retire the widget mid-gesture) must not
+      // run before the toggle lands. preventDefault stops that default;
+      // ignoreEvent (below) keeps the editor's own mouse handling away.
+      event.preventDefault()
+      // A read-only surface never edits (the takeover's sending face shows
+      // the draft without offering mutations).
+      if (view.state.readOnly) return
+      // Position is looked back up at click time (pos 回查), never cached —
+      // so the widget stays eq-comparable on `checked` alone and a reused DOM
+      // can never dispatch at a stale marker. The marker is the three source
+      // characters the widget replaces; anything else at that spot is not a
+      // task marker and the click fails open (no dispatch).
+      const from = view.posAtDOM(span)
+      const marker = view.state.doc.sliceString(from, from + 3)
+      if (!/^\[[xX ]\]$/u.test(marker)) return
+      const checked = marker.toLowerCase() === '[x]'
+      view.dispatch({
+        changes: { from, to: from + 3, insert: checked ? '[ ]' : '[x]' },
+        // One click, one undo step: a toggle never merges with adjacent
+        // typing or a fast second toggle into one history entry.
+        annotations: isolateHistory.of('full'),
+      })
+    })
     return span
   }
 
@@ -258,6 +294,16 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
         const quoted = quoteFoldEnds.get(line.number)
         if (quoted !== undefined && from < quoted) from = quoted
         ranges.push(Decoration.replace({ widget: new ListMarkerWidget(label) }).range(from, endOfSpaces(doc, node.to)))
+        return
+      }
+      if (name === 'HorizontalRule') {
+        // Issue #48: the whole rule folds into a hairline drawn by the
+        // `cm-md-hr` line class. The class rides the fold — on the active
+        // line the raw marker shows and the hairline must not paint behind
+        // it (unlike the heading classes, which style the raw text itself).
+        if (touchesActiveLine(doc, active, node.from, node.to)) return
+        fold(node.from, node.to)
+        addLineClass(node.from, node.to, 'cm-md-hr')
         return
       }
       if (name === 'Task') {

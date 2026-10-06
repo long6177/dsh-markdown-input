@@ -600,6 +600,87 @@ describe('composition-end probe re-emit (#45)', () => {
   })
 })
 
+describe('task checkbox click (issue #48)', () => {
+  /** A plain mousedown on the folded checkbox widget. */
+  function press(box: Element): void {
+    box.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+  }
+
+  it('toggles an unchecked box to checked in the source with one click', () => {
+    const { handle } = mount()
+    handle.setText('- [ ] todo\nsecond')
+    const box = document.querySelector('.cm-md-taskbox') as HTMLElement
+    expect(box).not.toBeNull()
+    const caretBefore = handle.view.state.selection.main
+    press(box)
+    expect(handle.getText()).toBe('- [x] todo\nsecond')
+    // The widget re-renders in its checked shape without relocating the
+    // caret — the task line never becomes active, so the box stays a box.
+    expect(document.querySelector('.cm-md-taskbox-checked')).not.toBeNull()
+    expect(handle.view.state.selection.main).toEqual(caretBefore)
+  })
+
+  it('toggles a checked box back to unchecked', () => {
+    const { handle } = mount()
+    handle.setText('- [x] done\nsecond')
+    press(document.querySelector('.cm-md-taskbox') as HTMLElement)
+    expect(handle.getText()).toBe('- [ ] done\nsecond')
+    // The unchecked box carries no checked class.
+    expect(document.querySelector('.cm-md-taskbox-checked')).toBeNull()
+    expect(document.querySelector('.cm-md-taskbox')).not.toBeNull()
+  })
+
+  it('takes one undo step back to the pre-click marker', () => {
+    const { handle } = mount()
+    // Two lines so setText's end-of-doc caret parks OFF the task line — a
+    // caret on the task line itself keeps the raw marker (exemption).
+    handle.setText('- [ ] todo\nsecond')
+    press(document.querySelector('.cm-md-taskbox') as HTMLElement)
+    expect(handle.getText()).toBe('- [x] todo\nsecond')
+    // historyKeymap's Mod-z runs this same command; one step, not two.
+    expect(undo(handle.view)).toBe(true)
+    expect(handle.getText()).toBe('- [ ] todo\nsecond')
+  })
+
+  it('keeps the raw bracket marker with no clickable widget while the caret is on the task line', () => {
+    const { handle } = mount()
+    handle.setText('- [ ] todo\nother')
+    handle.view.dispatch({ selection: { anchor: 5 } })
+    expect(document.querySelector('.cm-md-taskbox')).toBeNull()
+    expect(handle.getText()).toContain('[ ]')
+  })
+
+  it('leaves the box untoggled in source mode and read-only faces', () => {
+    const { handle } = mount()
+    // Two lines: the setText caret parks on the second line, leaving the
+    // task line free to fold into a widget.
+    handle.setText('- [ ] todo\nsecond')
+    handle.setMode('source', 'ph')
+    expect(document.querySelector('.cm-md-taskbox')).toBeNull()
+    // Source mode mounts no render decorations at all — the raw source is
+    // the whole face (issue #48 acceptance: source mode unchanged).
+    expect(document.querySelectorAll('.cm-md-hr').length).toBe(0)
+    handle.setMode('render', 'ph')
+    const box = document.querySelector('.cm-md-taskbox') as HTMLElement
+    expect(box).not.toBeNull()
+    // A read-only surface never edits: the takeover's sending face shows
+    // the draft without offering mutations.
+    handle.setEditable(false)
+    press(box)
+    expect(handle.getText()).toBe('- [ ] todo\nsecond')
+  })
+
+  it('folds a horizontal rule line outside the cursor and paints no hairline in source mode', () => {
+    const { handle } = mount()
+    handle.setText('above\n\n---\n\nbelow')
+    const hrLine = document.querySelector('.cm-md-hr')
+    expect(hrLine).not.toBeNull()
+    handle.setMode('source', 'ph')
+    expect(document.querySelector('.cm-md-hr')).toBeNull()
+    expect(handle.getText()).toBe('above\n\n---\n\nbelow')
+  })
+})
+
 describe('claim helpers', () => {
   it('isLeadingSelection: only whitespace before the caret answers true', () => {
     const { handle } = mount()
