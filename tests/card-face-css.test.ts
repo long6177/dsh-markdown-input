@@ -74,3 +74,24 @@ describe('render-mode small-widget CSS contract (issue #48)', () => {
     expect(hr).toContain('color-mix(in srgb, currentColor 20%, transparent)')
   })
 })
+
+describe('live-render code language tag CSS contract (issue #47)', () => {
+  it('gives the tag-bearing line a positioning context', () => {
+    expect(ruleOf(composerCss, '.surface :global(.cm-md-codelang-line)')).toContain('position: relative')
+  })
+
+  it('floats the tag over the block top-right corner, pure display', () => {
+    const tag = ruleOf(composerCss, '.surface :global(.cm-md-codelang)')
+    expect(tag).toContain('position: absolute')
+    expect(tag).toContain('top: 0')
+    expect(tag).toContain('right: 8px')
+    // Read-only: no pointer interaction, no selection, not clickable.
+    expect(tag).toContain('pointer-events: none')
+    expect(tag).toContain('user-select: none')
+    expect(tag).not.toMatch(/cursor:\s*pointer/u)
+    // Small muted reading, coordinated with the codeblock wash via
+    // currentColor — the same mixing base the codeblock background uses.
+    expect(tag).toContain('font-size: 0.75em')
+    expect(tag).toMatch(/color:\s*color-mix\(in srgb, currentColor 45%, transparent\)/u)
+  })
+})

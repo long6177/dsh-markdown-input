@@ -4,10 +4,12 @@
  * the cursor line (and any selected line) stays raw source. Decorations are
  * derived from the lezer markdown syntax tree, so escaped characters
  * (`\*`) are never folded — the parser hands them to us as `Escape`, not
- * as formatting. Two widgets ride the folds (issue #48): the task-list
- * checkbox is clickable and toggles its source marker in place, and a
- * horizontal-rule line folds into a `cm-md-hr` hairline. Source mode simply
- * omits this extension.
+ * as formatting. Widgets ride the folds: the task-list checkbox is clickable
+ * and toggles its source marker in place, and a horizontal-rule line folds
+ * into a `cm-md-hr` hairline (issue #48); fenced code hides its opening and
+ * closing fence lines whole (fence, info string and line break included) and
+ * floats a read-only language tag over the block's top-right corner while
+ * the cursor is away (issue #47). Source mode simply omits this extension.
  */
 import { isolateHistory } from '@codemirror/commands'
 import { syntaxTree } from '@codemirror/language'
@@ -82,6 +84,36 @@ class TaskCheckboxWidget extends WidgetType {
 }
 
 /**
+ * Read-only language tag floating at a folded code block's top-right corner
+ * (#47): pure display — no pointer interaction, no selection, positioned by
+ * CSS against the line carrying `cm-md-codelang-line`.
+ */
+export class CodeLangWidget extends WidgetType {
+  constructor(readonly lang: string) { super() }
+
+  override eq(other: CodeLangWidget): boolean {
+    return other.lang === this.lang
+  }
+
+  override toDOM(): HTMLElement {
+    const span = document.createElement('span')
+    span.className = 'cm-md-codelang'
+    span.textContent = this.lang
+    span.setAttribute('aria-hidden', 'true')
+    return span
+  }
+
+  override ignoreEvent(): boolean {
+    return true
+  }
+}
+
+/** First whitespace-separated word of a fence info string ('' when absent). */
+function firstInfoWord(info: string): string {
+  return info.trim().split(/\s+/u, 1)[0] ?? ''
+}
+
+/**
  * Lines that must stay raw: every line a selection range touches.
  * @param state - editor state to read the selection from.
  */
@@ -112,6 +144,11 @@ function endOfSpaces(doc: Text, to: number): number {
 
 const hide = Decoration.replace({})
 
+/** Block replacement hiding a whole line: swallows the line break after it,
+ * so the line disappears entirely — except a document-final line, which has
+ * no break to swallow and folds to end-of-line, leaving one blank line. */
+const hideLine = Decoration.replace({ block: true })
+
 /**
  * Build the render-mode decoration set for the whole document. Pure over
  * (state, active lines): testable at the EditorState seam, mounted by the
@@ -137,6 +174,13 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
 
   const fold = (from: number, to: number): void => {
     if (to > from) ranges.push(hide.range(from, to))
+  }
+
+  /** Hide the whole line holding `pos`, line break included when one follows. */
+  const foldLine = (pos: number): void => {
+    const line = doc.lineAt(pos)
+    const to = line.to < doc.length ? line.to + 1 : line.to
+    if (to > line.from) ranges.push(hideLine.range(line.from, to))
   }
 
   /** Fold two emphasis-style marks and style the content between them. */
@@ -189,9 +233,35 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
         if (touchesActiveLine(doc, active, node.from, node.to)) return
         const marks = node.node?.getChildren('CodeMark') ?? []
         if (marks.length === 0) return
-        fold(marks[0]!.from, marks[0]!.to)
+        // Whole-line folds (#47): the opening fence line (fence + info
+        // string) and, for a closed block, the closing fence line each hide
+        // entire — break included — so the block visually starts at its
+        // first code line and ends at its last. A document-final fence has
+        // no break to swallow and folds to end-of-line, leaving one blank
+        // line (accepted by the issue).
         const closing = marks[marks.length - 1]!
-        if (closing !== marks[0]) fold(closing.from, closing.to)
+        const closeLine = closing !== marks[0] ? doc.lineAt(closing.to) : null
+        foldLine(node.from)
+        if (closeLine !== null) foldLine(closeLine.to)
+        // Language tag (#47): floats over the block's top-right corner while
+        // the fences are folded. Rendered only when a content line exists
+        // between the fences to carry it (an empty block — adjacent fences —
+        // folds away whole and gets nothing) and the info string names a
+        // language; the tag shows the info string's first word, additional
+        // parameters ride the hidden line.
+        const contentStart = doc.lineAt(node.from).number + 1
+        const contentEnd = closeLine === null ? doc.lines : closeLine.number - 1
+        if (contentStart <= contentEnd) {
+          const info = node.node?.getChild('CodeInfo')
+          const lang = info === null || info === undefined
+            ? ''
+            : firstInfoWord(doc.sliceString(info.from, info.to))
+          if (lang !== '') {
+            const first = doc.line(contentStart)
+            ranges.push(Decoration.widget({ widget: new CodeLangWidget(lang) }).range(first.from))
+            addLineClass(first.from, first.to, 'cm-md-codelang-line')
+          }
+        }
         return
       }
       if (name === 'Blockquote') {
