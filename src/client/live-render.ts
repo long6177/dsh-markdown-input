@@ -15,10 +15,10 @@
  */
 import { isolateHistory } from '@codemirror/commands'
 import { syntaxTree } from '@codemirror/language'
-import { RangeSet, type EditorState, type Range, type Text } from '@codemirror/state'
+import { RangeSet, StateField, type EditorState, type Range, type Text } from '@codemirror/state'
 import {
-  Decoration, EditorView, ViewPlugin, WidgetType,
-  type DecorationSet, type ViewUpdate,
+  Decoration, EditorView, WidgetType,
+  type DecorationSet,
 } from '@codemirror/view'
 import type { SyntaxNode, SyntaxNodeRef } from '@lezer/common'
 
@@ -204,9 +204,15 @@ function endOfSpaces(doc: Text, to: number): number {
 
 const hide = Decoration.replace({})
 
-/** Block replacement hiding a whole line: swallows the line break after it,
- * so the line disappears entirely — except a document-final line, which has
- * no break to swallow and folds to end-of-line, leaving one blank line. */
+/** Block replacement hiding a whole line's content. It deliberately stops at
+ * the line's end and leaves the break: a block replacement that also covers
+ * the break ends exactly on the next line's start, and the ranges at that
+ * boundary — the next line's line decoration and the language-tag widget
+ * opening it — are swallowed along with it (measured against CM6 6.43: the
+ * widget and classes do not render at all; `side` does not rescue point
+ * decorations inside an open replacement). The remaining line break costs
+ * nothing visually: the replacement leaves a bare zero-height block, so the
+ * line still collapses. */
 const hideLine = Decoration.replace({ block: true })
 
 /**
@@ -240,11 +246,10 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
     if (to > from) ranges.push(hide.range(from, to))
   }
 
-  /** Hide the whole line holding `pos`, line break included when one follows. */
+  /** Hide the whole line holding `pos` — its content, break left in place. */
   const foldLine = (pos: number): void => {
     const line = doc.lineAt(pos)
-    const to = line.to < doc.length ? line.to + 1 : line.to
-    if (to > line.from) ranges.push(hideLine.range(line.from, to))
+    if (line.to > line.from) ranges.push(hideLine.range(line.from, line.to))
   }
 
   /** Fold two emphasis-style marks and style the content between them. */
@@ -299,10 +304,10 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
         if (marks.length === 0) return
         // Whole-line folds (#47): the opening fence line (fence + info
         // string) and, for a closed block, the closing fence line each hide
-        // entire — break included — so the block visually starts at its
-        // first code line and ends at its last. A document-final fence has
-        // no break to swallow and folds to end-of-line, leaving one blank
-        // line (accepted by the issue).
+        // their entire content so the block visually starts at its first
+        // code line and ends at its last. The line break itself stays (see
+        // `hideLine`: swallowing it would eat the next line's decorations);
+        // the replacement collapses the line to a bare zero-height block.
         const closing = marks[marks.length - 1]!
         const closeLine = closing !== marks[0] ? doc.lineAt(closing.to) : null
         foldLine(node.from)
@@ -399,19 +404,20 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
   return RangeSet.of(ranges, true)
 }
 
-/** View plugin mounting the decorations; rebuilt on doc/selection changes. */
-export const liveRender = ViewPlugin.fromClass(class {
-  decorations: DecorationSet
-
-  constructor(view: EditorView) {
-    this.decorations = buildRenderDecorations(view.state, activeLinesOf(view.state))
-  }
-
-  update(update: ViewUpdate): void {
-    if (update.docChanged || update.selectionSet) {
-      this.decorations = buildRenderDecorations(update.view.state, activeLinesOf(update.view.state))
-    }
-  }
-}, {
-  decorations: plugin => plugin.decorations,
+/**
+ * The render-mode decoration source. A state field, not a view plugin: the
+ * fence folds (#47) are block replacements that swallow their line's break,
+ * and CodeMirror refuses block decorations — and any replacement spanning a
+ * line break — from plugin-provided sources, throwing mid-update on the
+ * first fold ("Block decorations may not be specified via plugins",
+ * view/dist TileUpdate.emit — the alpha.16 editor wedge). Provided through
+ * the state, the same fold set is legal. Rebuilt on doc/selection changes,
+ * the cadence the plugin had; source mode simply omits the extension.
+ */
+export const liveRender = StateField.define<DecorationSet>({
+  create: (state) => buildRenderDecorations(state, activeLinesOf(state)),
+  update: (decorations, transaction) => (transaction.docChanged || transaction.selection !== undefined
+    ? buildRenderDecorations(transaction.state, activeLinesOf(transaction.state))
+    : decorations),
+  provide: (field) => EditorView.decorations.from(field),
 })

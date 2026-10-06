@@ -876,10 +876,14 @@
 
 /* The bullet dot / computed ordinal itself: left-aligned inside the shared
    column, so the gap to the content is the column's slack and every row's
-   marker sits flush at its depth indent. */
+   marker sits flush at its depth indent. `text-indent` inherits, and the
+   row's -1 * hang first-line pull would reach inside this inline-block and
+   shift the glyph a full hang column left of its own box (width kept, glyph
+   gone — real-machine alpha.16): the widget zeroes the pull. */
 .surface :global(.cm-md-listmark) {
   display: inline-block;
   min-width: var(--cm-md-li-hang);
+  text-indent: 0;
 }
 
 /* Folded horizontal rule (issue #48): the `---`/`***`/`___` line folds away

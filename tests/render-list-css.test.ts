@@ -37,4 +37,13 @@ describe('render-mode list CSS contract (issue #46)', () => {
     expect(mark).toContain('display: inline-block')
     expect(mark).toContain('min-width: var(--cm-md-li-hang)')
   })
+
+  it('resets the inherited first-line pull inside the marker box so the glyph stays visible (alpha.16 regression)', () => {
+    // `text-indent` is inherited: the row's -1 * hang pull reached inside the
+    // inline-block widget and shifted the `•`/ordinal glyph a full hang
+    // column left of its own box — the column stayed, the glyph did not
+    // (real-machine alpha.16). The widget must zero the pull.
+    const mark = ruleOf(composerCss, '.surface :global(.cm-md-listmark)')
+    expect(mark).toContain('text-indent: 0')
+  })
 })

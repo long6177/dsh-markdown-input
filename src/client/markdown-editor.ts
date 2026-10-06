@@ -430,6 +430,15 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       { key: 'Tab', run: runMenu('tab') },
       { key: 'Shift-Tab', run: runMenu('close') },
       { key: 'Escape', run: runMenu('close') },
+      // Enter always submits (#46) — and it must sit in THIS keymap, not the
+      // default-precedence one below: lang-markdown's own keymap binds Enter
+      // to insertNewlineContinueMarkup at Prec.high (markdownKeymap, pushed
+      // by markdown() at lang-markdown/dist:423), which outranks every
+      // default-precedence binding and claims Enter for a continuation
+      // newline on list and quote lines (lazy-continuation lines included) —
+      // the alpha.16 regression. After the menu pick, precedence no longer
+      // matters: the menu answers first, everywhere else Enter sends.
+      { key: 'Enter', run: enterCommand(options.onSubmit) },
     ])),
     // The render-mode list keys (#46) sit ahead of the send/newline base so
     // the continuation dispatch replaces the plain Shift+Enter newline and
@@ -438,9 +447,9 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     // compartment to [] and keeps the base alone.
     renderCompartment.of(options.mode === 'render' ? [liveRender, renderListKeymap] : []),
     keymap.of([
-      // Enter always submits (#46: no fence exception); Shift+Enter is the
-      // generic indented newline — the base the render compartment rebinds.
-      { key: 'Enter', run: enterCommand(options.onSubmit) },
+      // Enter always submits (#46: no fence exception) and rides the
+      // Prec.highest keymap above; Shift+Enter is the generic indented
+      // newline — the base the render compartment rebinds.
       { key: 'Shift-Enter', run: insertNewlineAndIndent },
     ]),
     keymap.of([...defaultKeymap, ...historyKeymap]),

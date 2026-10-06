@@ -86,6 +86,30 @@ describe('createMarkdownEditor', () => {
     expect(handle.getText()).toBe('```\ncode')
   })
 
+  it('sends on Enter in a list item — lang-markdown\'s Prec.high continuation must not claim it (alpha.16 regression)', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('- alpha')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(handle.getText()).toBe('- alpha')
+  })
+
+  it('sends on Enter on a blockquote line (same continuation-claim regression)', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('> quoted')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(handle.getText()).toBe('> quoted')
+  })
+
+  it('sends on Enter on the lazy-continuation line right after a list item', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('- alpha\nbeta')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(handle.getText()).toBe('- alpha\nbeta')
+  })
+
   it('never sends while IME composition is active (editor-level gating)', () => {
     const { handle, onSubmit } = mount()
     handle.setText('nihao')

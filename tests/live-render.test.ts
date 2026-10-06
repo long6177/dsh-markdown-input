@@ -10,7 +10,7 @@ import type { Decoration, DecorationSet } from '@codemirror/view'
 import { EditorView } from '@codemirror/view'
 import { forceParsing } from '@codemirror/language'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
-import { activeLinesOf, buildRenderDecorations, CodeLangWidget } from '../src/client/live-render.ts'
+import { activeLinesOf, buildRenderDecorations, CodeLangWidget, liveRender } from '../src/client/live-render.ts'
 
 // markdownLanguage is the GFM-extended base (task lists included).
 const extensions = [markdown({ base: markdownLanguage })]
@@ -139,10 +139,15 @@ describe('buildRenderDecorations: strikethrough', () => {
 describe('buildRenderDecorations: fenced code', () => {
   const doc = 'before\n```ts title="x"\nconst a = 1;\n```\nafter'
 
-  it('hides the opening and closing fence lines whole, including their line breaks (#47)', () => {
+  it('hides each fence line\'s whole content — never the break (#47, boundary rule)', () => {
     const records = collect(setup(doc))
     expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
-      .toEqual(['```ts title="x"\n', '```\n'])
+      .toEqual(['```ts title="x"', '```'])
+    // A replacement that covered the break would end exactly on the next
+    // line's start and swallow that line's decorations (the language-tag
+    // widget and its line class do not render — measured against CM6 6.43,
+    // the alpha.16 live defect). No fold range may contain a newline.
+    expect(records.filter(r => r.kind === 'replace').some(r => text(doc, r.from, r.to).includes('\n'))).toBe(false)
     const lines = records.filter(r => r.kind === 'line')
     expect(lines.map(r => doc.slice(0, r.from).split('\n').length)).toEqual([2, 3, 4])
     // Every block line keeps the codeblock class; the tag's first content
@@ -157,22 +162,25 @@ describe('buildRenderDecorations: fenced code', () => {
     expect(records.filter(r => r.kind === 'line').length).toBe(3)
   })
 
-  it('swallows the closing fence line break so no blank line remains mid-document (#47)', () => {
+  it('leaves the closing fence line break in place — the line still collapses (zero-height block) (#47)', () => {
     const closed = '```ts\nconst a = 1;\n```\nafter'
     expect(collect(setup(closed)).filter(r => r.kind === 'replace').map(r => text(closed, r.from, r.to)))
-      .toEqual(['```ts\n', '```\n'])
+      .toEqual(['```ts', '```'])
+    // Mid-document the break between the folded closing fence and `after`
+    // stays uncovered; the browser verification shows the replacement
+    // renders as a bare zero-height block, so no blank row remains.
   })
 
-  it('folds a document-final closing fence to line end only, leaving one blank line (#47)', () => {
+  it('folds a document-final closing fence the same way — one uniform rule (#47)', () => {
     const final = '```ts\nconst a = 1;\n```'
     expect(collect(setup(final)).filter(r => r.kind === 'replace').map(r => text(final, r.from, r.to)))
-      .toEqual(['```ts\n', '```'])
+      .toEqual(['```ts', '```'])
   })
 
   it('folds an unclosed fence whole when the cursor is elsewhere (#47)', () => {
     const unclosed = 'before\n```py\nopen\ncode'
     expect(collect(setup(unclosed)).filter(r => r.kind === 'replace').map(r => text(unclosed, r.from, r.to)))
-      .toEqual(['```py\n'])
+      .toEqual(['```py'])
     expect(collect(setup(unclosed)).filter(r => r.kind === 'line').map(r => r.class?.split(' ')[0]))
       .toEqual(Array(3).fill('cm-md-codeblock'))
   })
@@ -228,6 +236,41 @@ describe('buildRenderDecorations: fenced code language tag (#47)', () => {
   it('drops the tag while the cursor is inside the block or on a fence line', () => {
     for (const active of [[3], [2], [4]]) {
       expect(collect(setup(doc, active)).filter(r => r.kind === 'widget')).toEqual([])
+    }
+  })
+})
+
+describe('liveRender mounted in a real view (#47 fence folds)', () => {
+  it('folds fence lines through the render path without crashing — the fold set must ride a state field, never a plugin', () => {
+    // alpha.16 regression: the decoration source was a ViewPlugin, and CM6
+    // refuses block decorations (and replacements spanning a line break)
+    // from plugin-provided sources, throwing mid-update on the first fold:
+    // "Block decorations may not be specified via plugins" (view/dist
+    // TileUpdate.emit). A real view must render the fold without throwing.
+    const doc = '```ts\ncode\n```\nafter\n'
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        // Cursor on the last line: every fence line is outside the active
+        // lines, so the opening and closing fence folds are both live.
+        selection: { anchor: doc.length },
+        extensions: [markdown({ base: markdownLanguage }), liveRender],
+      }),
+      parent: document.body,
+    })
+    try {
+      // The raw fence text is folded away and the language tag floats.
+      expect(view.dom.textContent).not.toContain('```')
+      expect(view.dom.querySelectorAll('.cm-md-codelang')).toHaveLength(1)
+      // Moving the cursor into the block restores the fences in place — the
+      // transition that used to wedge the editor.
+      view.dispatch({ selection: { anchor: 4 } })
+      expect(view.dom.textContent).toContain('```ts')
+      // …and leaving again folds them back, still without throwing.
+      view.dispatch({ selection: { anchor: doc.length } })
+      expect(view.dom.textContent).not.toContain('```')
+    } finally {
+      view.destroy()
     }
   })
 })
