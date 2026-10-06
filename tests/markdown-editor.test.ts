@@ -7,17 +7,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent } from '@testing-library/react'
 import { undo } from '@codemirror/commands'
-import { createMarkdownEditor, insideOpenFence, type MarkdownEditorHandle } from '../src/client/markdown-editor.ts'
+import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from '../src/client/markdown-editor.ts'
 
 const mounted: MarkdownEditorHandle[] = []
 
-function mount(): { handle: MarkdownEditorHandle, host: HTMLElement, onSubmit: () => void, onDocChange: (text: string) => void, onFiles: (files: readonly File[]) => boolean } {
+function mount(mode: EditMode = 'render'): { handle: MarkdownEditorHandle, host: HTMLElement, onSubmit: () => void, onDocChange: (text: string) => void, onFiles: (files: readonly File[]) => boolean } {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const onSubmit = vi.fn()
   const onDocChange = vi.fn()
   const onFiles = vi.fn(() => true)
-  const handle = createMarkdownEditor({ parent: host, placeholder: 'ph', mode: 'render', onSubmit, onDocChange, onFiles })
+  const handle = createMarkdownEditor({ parent: host, placeholder: 'ph', mode, onSubmit, onDocChange, onFiles })
   mounted.push(handle)
   return { handle, host, onSubmit, onDocChange, onFiles }
 }
@@ -50,31 +50,6 @@ function pasteEvent(clipboard: { html?: string, plain?: string, fileKinds?: read
   return event
 }
 
-describe('insideOpenFence', () => {
-  it('answers false without any fence', () => {
-    expect(insideOpenFence('plain text', 0)).toBe(false)
-  })
-
-  it('answers true while the fence is open', () => {
-    expect(insideOpenFence('```\ncode', 1)).toBe(true)
-    expect(insideOpenFence('text\n```ts\nconst a', 2)).toBe(true)
-    expect(insideOpenFence('~~~\nx', 1)).toBe(true)
-  })
-
-  it('answers false after the fence closes', () => {
-    expect(insideOpenFence('```\ncode\n```\nafter', 3)).toBe(false)
-  })
-
-  it('treats a caret on a fence line as inside the block', () => {
-    expect(insideOpenFence('```\ncode\n```', 2)).toBe(true)
-    expect(insideOpenFence('```', 0)).toBe(true)
-  })
-
-  it('ignores inline triple backticks mid-line', () => {
-    expect(insideOpenFence('run ```a``` now', 0)).toBe(false)
-  })
-})
-
 describe('createMarkdownEditor', () => {
   it('mounts a contenteditable surface with the placeholder', () => {
     const { handle, host } = mount()
@@ -102,13 +77,13 @@ describe('createMarkdownEditor', () => {
     expect(handle.getText()).toBe('hello\n')
   })
 
-  it('inserts a newline on Enter inside an open fence', () => {
+  it('sends on Enter inside an open fence too (#46 strict send)', () => {
     const { handle, onSubmit } = mount()
     handle.setText('```\ncode')
     const content = document.querySelector('.cm-content') as HTMLElement
     fireEvent.keyDown(content, { key: 'Enter' })
-    expect(onSubmit).not.toHaveBeenCalled()
-    expect(handle.getText()).toBe('```\ncode\n')
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(handle.getText()).toBe('```\ncode')
   })
 
   it('never sends while IME composition is active (editor-level gating)', () => {
@@ -295,6 +270,159 @@ describe('createMarkdownEditor', () => {
     handle.setMode('render', 'render ph')
     expect(host.querySelectorAll('.cm-md-h1').length).toBeGreaterThan(0)
     expect(handle.getText()).toBe('# Head')
+  })
+})
+
+describe('list keys (issue #46, render mode)', () => {
+  it('Tab indents the list row by two spaces at the line start', () => {
+    const { handle } = mount()
+    handle.setText('- item')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('  - item')
+    // The caret (parked at the end by setText) rides the insert.
+    expect(handle.view.state.selection.main.head).toBe('  - item'.length)
+  })
+
+  it('Tab falls through outside a list and inside a fence', () => {
+    const { handle } = mount()
+    handle.setText('hello')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('hello')
+    handle.setText('```\n- code')
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('```\n- code')
+  })
+
+  it('Shift+Tab outdents up to two leading spaces and consumes the key at the margin', () => {
+    const { handle } = mount()
+    handle.setText('  - deep')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab', shiftKey: true })
+    expect(handle.getText()).toBe('- deep')
+    fireEvent.keyDown(content(), { key: 'Tab', shiftKey: true })
+    expect(handle.getText()).toBe('- deep')
+  })
+
+  it('a declining menu chain hands Tab to the list indent binding', () => {
+    const { handle } = mount()
+    handle.setMenuKeyHandler(() => false)
+    handle.setText('- x')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('  - x')
+  })
+
+  it('Shift+Enter exits an empty list item line without inserting a newline', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('- ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('')
+    expect(handle.view.state.selection.main.head).toBe(0)
+  })
+
+  it('exiting the second item leaves the first intact and parks the caret at the line start', () => {
+    const { handle } = mount()
+    handle.setText('- a\n- ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('- a\n')
+    expect(handle.view.state.selection.main.head).toBe(4)
+  })
+
+  it('exits an empty ordered item and an empty quote line the same way', () => {
+    const { handle } = mount()
+    handle.setText('1. ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('')
+    handle.setText('> ')
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('')
+  })
+
+  it('exits an empty markup line from any caret position on it, line start included (#46)', () => {
+    const { handle } = mount()
+    handle.setText('- ')
+    handle.focus()
+    handle.view.dispatch({ selection: { anchor: 0 } })
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('')
+    handle.setText('> ')
+    handle.view.dispatch({ selection: { anchor: 0 } })
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('')
+  })
+
+  it('an empty item inside a quote exits the item only, while one inside a fence keeps the generic newline', () => {
+    const { handle } = mount()
+    handle.setText('> - ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('> ')
+    handle.setText('```\n- ')
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('```\n- \n')
+  })
+
+  it('Shift+Enter continues list and quote rows with the next marker', () => {
+    const { handle } = mount()
+    const cases: readonly [string, string][] = [
+      ['- x', '- x\n- '],
+      ['* x', '* x\n* '],
+      ['1. x', '1. x\n2. '],
+      ['1) x', '1) x\n2) '],
+      ['> q', '> q\n> '],
+      ['- top\n  - inner', '- top\n  - inner\n  - '],
+    ]
+    for (const [before, after] of cases) {
+      handle.setText(before)
+      handle.focus()
+      fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+      expect(handle.getText()).toBe(after)
+      expect(handle.view.state.selection.main.head).toBe(after.length)
+    }
+  })
+
+  it('Shift+Enter keeps the generic newline inside a fence', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('```\ncode')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('```\ncode\n')
+  })
+
+  it('folds list markers into dot and computed-number widgets and keeps the source markdown intact', () => {
+    const { handle } = mount()
+    handle.setText('- a\n1. b\n1. c\nplain tail')
+    const marks = [...document.querySelectorAll('.cm-md-listmark')]
+    expect(marks.map(el => el.textContent)).toEqual(['•', '1.', '2.'])
+    expect(handle.getText()).toBe('- a\n1. b\n1. c\nplain tail')
+  })
+})
+
+describe('list keys stay out of source mode (#46)', () => {
+  it('source mode keeps the plain Shift+Enter newline and no Tab indent', () => {
+    const { handle, onSubmit } = mount('source')
+    handle.setText('- x')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('- x\n')
+    fireEvent.keyDown(content(), { key: 'Tab' })
+    expect(handle.getText()).toBe('- x\n')
+  })
+
+  it('Enter still sends in source mode, fence or not', () => {
+    const { handle, onSubmit } = mount('source')
+    handle.setText('```\ncode')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(handle.getText()).toBe('```\ncode')
   })
 })
 
