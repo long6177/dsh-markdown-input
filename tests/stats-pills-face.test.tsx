@@ -26,8 +26,7 @@
  *    the native default (detailed).
  */
 import { afterEach, describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
+import { readSheet, ruleOf } from './sheet.ts'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
@@ -453,19 +452,9 @@ describe('stats settings face (the configForms plane)', () => {
 
 /* ------------------------------------------------------------------ *
  * Sheet contract: the vendored pill geometry (the issue #44 pattern).
+ * The CRLF-normalizing readSheet and the ruleOf matcher are the shared
+ * tests/sheet.ts helpers.
  * ------------------------------------------------------------------ */
-
-function readSheet(path: string): string {
-  // Normalize CRLF: the pins match sheet text with `\n`-joined multi-line
-  // selectors, and an autocrlf checkout hands the file `\r\n` endings — the
-  // contract is what the sheet says, not how the platform ends its lines.
-  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8').replace(/\r\n/gu, '\n')
-}
-
-function ruleOf(sheet: string, selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  return sheet.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
-}
 
 describe('StatsPillsFace CSS contract (host StatsPills.module.css vendored)', () => {
   const sheet = readSheet('../src/client/StatsPillsFace.module.css')

@@ -4,20 +4,8 @@
  * #44 pattern): jsdom has no layout and the sheet is the shipped artifact,
  * so these are regression nails on what the rules say, not behavior tests.
  */
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-
-/** The sheet text as shipped: read straight off disk (vitest stubs *.module.css). */
-function readSheet(path: string): string {
-  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
-}
-
-/** The body of one selector's rule, or '' when absent. */
-function ruleOf(sheet: string, selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  return sheet.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
-}
+import { readSheet, ruleOf } from './sheet.ts'
 
 const composerCss = readSheet('../src/client/MarkdownComposer.module.css')
 

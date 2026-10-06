@@ -6,19 +6,10 @@
  * survives missing observers or DOM faces — a layout hint must never
  * throw into the card.
  */
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { observeControlRow, type ControlRow } from '../src/client/control-row.ts'
+import { readSheet, ruleOf } from './sheet.ts'
 
-/**
- * The sheet text as shipped: vitest's `css: false` stubs `*.module.css`
- * imports (a `?raw` query rides the same stub and returns the class-map
- * object), so the CSS contract below is read straight off disk.
- */
-function readSheet(path: string): string {
-  return readFileSync(fileURLToPath(new URL(path, import.meta.url)), 'utf8')
-}
 const composerCss = readSheet('../src/client/MarkdownComposer.module.css')
 const modelSelectCss = readSheet('../src/client/ModelSelectFace.module.css')
 
@@ -111,12 +102,6 @@ describe('observeControlRow', () => {
     expect(() => dispose()).not.toThrow()
   })
 })
-
-/** A rule's declaration block, matched by its literal selector text. */
-function ruleOf(sheet: string, selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-  return sheet.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1] ?? ''
-}
 
 /**
  * The CSS half of the same seam, pinned as sheet text (issue #39): the row's

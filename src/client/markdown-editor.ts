@@ -124,14 +124,23 @@ function isListItemLine(state: EditorState, line: { from: number, to: number }):
 }
 
 /**
+ * The caret's line when it holds a list marker, or null — the shared gate
+ * for the Tab indent commands: outside a list row both decline and the key
+ * keeps the browser's focus move (native semantics).
+ */
+function listItemCaretLine(state: EditorState): { from: number, to: number, text: string } | null {
+  const line = state.doc.lineAt(state.selection.main.head)
+  return isListItemLine(state, line) ? line : null
+}
+
+/**
  * Tab inside a list row (render mode): two spaces at the line start — one
  * indent level. Outside a list the command declines and the key keeps the
  * browser's focus move (native semantics).
  */
 function listItemTab(view: EditorView): boolean {
-  const { state } = view
-  const line = state.doc.lineAt(state.selection.main.head)
-  if (!isListItemLine(state, line)) return false
+  const line = listItemCaretLine(view.state)
+  if (!line) return false
   view.dispatch({
     changes: { from: line.from, insert: '  ' },
     userEvent: 'input.indent',
@@ -145,9 +154,8 @@ function listItemTab(view: EditorView): boolean {
  * the focus never jumps out mid-list.
  */
 function listItemShiftTab(view: EditorView): boolean {
-  const { state } = view
-  const line = state.doc.lineAt(state.selection.main.head)
-  if (!isListItemLine(state, line)) return false
+  const line = listItemCaretLine(view.state)
+  if (!line) return false
   const spaces = /^ */.exec(line.text)![0].length
   const remove = Math.min(2, spaces)
   if (remove > 0) {
