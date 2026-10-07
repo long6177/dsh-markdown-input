@@ -1,71 +1,82 @@
 # dsh-markdown-input
 
-[English](#english) | [中文](#中文)
+English | [简体中文](README.zh-CN.md)
 
-<a id="english"></a>
+[![CI](https://github.com/long6177/dsh-markdown-input/actions/workflows/ci.yml/badge.svg)](https://github.com/long6177/dsh-markdown-input/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-markdown-input)](https://www.npmjs.com/package/dsh-markdown-input)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## English
+A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) plugin with one core capability — **live Markdown rendering in the composer** — so that prompts written in dsh are easier to organize and easier to think through.
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (`dsh`) web-UI plugin that layers Markdown onto the composer and chat history:
+> **Status: alpha, under active development.** dsh itself is a developer preview with compatibility-breaking changes between versions — see [Compatibility](#compatibility) for what has actually been verified on a real machine.
 
-- **Markdown-rendered user messages** — sent user messages and queued steering messages render as Markdown in the chat history (reusing the host's own renderer), with `@`-mention and skill chips preserved.
-- **Live-rendering takeover composer** — a low-priority `conversation.composer` chain entry ([ADR-0005](docs/adr/0005-composer-revival.md)) takes the composer over with a bundled CodeMirror 6 editor, Obsidian-style: bold/italic/inline code/strikethrough take their real styles, syntax markers fold away once the cursor leaves their line (render mode; a source toggle keeps every marker visible), Enter sends (IME-safe), `Shift+Enter` breaks the line, typed text mirrors into the host draft so it survives page reloads, and the attachment bar covers upload/remove/uploading states. Built-in takeover panels (approvals, questions, subagent) outrank the entry and keep their elections.
-- **Paste conversion** — pasting rich text from the web or Word converts the clipboard `text/html` to clean Markdown: in the takeover editor at the caret, and on the native composer through the host's version-guarded insertion API; `Ctrl/Cmd+Shift+V` still pastes plain, and plain-text, file, and image pastes keep their native behavior.
-- **Graceful degradation** — every surface probes its host face before activating and degrades independently: built-in panels keep the composer when they need it, missing host surfaces shed their feature (never the text face), and a card-level error boundary reverts to the native composer silently with the draft intact.
+![Typing Markdown in the composer: headings, bold, lists and code blocks render while you type, and the sent bubble shows the same content](docs/assets/hero-markdown-composer.gif)
 
-> **Status: alpha, under active development.** dsh itself is a developer preview with compatibility-breaking changes; this plugin tracks the `0.2.0-rc.x` line of `@deepseek-ai/dsh` and is re-tested against upstream master.
+## What it does
 
-### Install
+### Live-rendering composer
+
+A low-priority entry on the host's `conversation.composer` election chain ([ADR-0005](docs/adr/0005-composer-revival.md)) takes the composer over with a bundled CodeMirror 6 editor that renders while you type, Obsidian Live Preview style: bold, italic, inline code and strikethrough take their real styles, and syntax markers fold away once the cursor leaves their line. A toggle switches to source mode, where every marker stays visible. Enter sends (IME-safe), `Shift+Enter` breaks the line, and everything you type mirrors into the host draft, so it survives a page reload.
+
+![The same message in render mode (markers folded, real styles) and source mode (every marker visible)](docs/assets/render-vs-source.png)
+
+### Markdown-rendered user messages
+
+Sent user messages and queued steering messages render as Markdown in the chat history — reusing the host's own rendering pipeline — instead of a wall of plain text. `@`-mentions and skill chips are preserved, and the line breaks you typed are rendered as hard breaks.
+
+![A sent user message rendered as Markdown: heading, list and a syntax-highlighted code block](docs/assets/bubble-markdown.png)
+
+### Paste-to-Markdown
+
+Pasting rich text from a web page or a word processor converts the clipboard's `text/html` into clean Markdown — in the takeover editor at the caret, and on the native composer through the host's version-guarded insertion API. `Ctrl/Cmd+Shift+V` still pastes plain text, and plain-text, file and image pastes keep their native behavior.
+
+![Pasting a rich-text snippet converts it to clean Markdown source in the composer](docs/assets/paste-conversion.png)
+
+### Graceful degradation, face by face
+
+Every surface probes the host before it activates and degrades on its own: built-in takeover panels (approvals, questions, subagents) outrank this plugin and keep the composer whenever they need it; a missing host surface sheds its own feature, never the text face; and a card-level error boundary silently falls back to the native composer with the draft intact.
+
+## Install
+
+Requires dsh with the web UI (the desktop app). Verified against dsh `0.2.0-rc.2` — see the [compatibility matrix](#compatibility) before installing on a newer dsh.
 
 ```sh
-dsh plugin --profile web add dsh-markdown-input   # npm
+dsh plugin --profile web add dsh-markdown-input
 dsh plugin --profile web add github:long6177/dsh-markdown-input
 ```
 
-### Testing
+## Compatibility
 
-> Dev dependencies link into a local checkout of [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) at `../deepseek-harness` (pinned to the `dsh-v0.2.0-rc.2` tag); clone it beside this repo before `pnpm install`.
+This project makes no range claims. What it has instead is a tested matrix — combinations actually run on a real machine, with dates and outcomes — and a standing watch on upstream drift.
 
-```sh
-pnpm test                     # unit + component + bundle contract (vitest, jsdom)
-bash scripts/retest-wizard.sh # guided on-device re-test; writes outputs/retest-*.md
-```
+| dsh version | Plugin versions verified | Last on-device verification | Result |
+|---|---|---|---|
+| `0.2.0-rc.2` | `0.2.0-alpha.0` → `0.2.0-alpha.20` | 2026-10-07 | Passed |
+| `0.2.1-alpha.1` | — | — | **Not verified** |
 
-### License
+- Every npm release so far — `0.2.0-alpha.0` (2026-10-02) through `0.2.0-alpha.20` (2026-10-07) — was re-tested on the official desktop client running the `0.2.0-rc.2` kernel. Each release ships an acceptance checklist; the per-version index with dates lives in [docs/release/README.md](docs/release/README.md).
+- Upstream has published `0.2.1-alpha.1`. This plugin's peer range is `^0.2.0-rc.2` (see [package.json](package.json)); by semver's prerelease rule, that range does not accept `0.2.1-alpha.1`. Verification of it is triggered by drift watch (below); until it passes, no compatibility is claimed for that version.
+- **Drift watch.** A scheduled repository workflow checks four upstream signals every day: the npm registry (new versions and dist-tags), upstream releases and tags, commits touching the contract paths this plugin depends on, and the official contract documentation. A new upstream version triggers the full test suite plus semver checks against it, and one tracking issue per version (labelled `upstream-drift`). The workflow only opens issues — it does not change code and does not declare compatibility on its own.
 
-[MIT](./LICENSE)
+## Design notes
 
----
+Four short lines here, deep dives in [docs/design/](docs/design/):
 
-<a id="中文"></a>
+- [Why takeover](docs/design/why-takeover.md) — the composer route's engineering story (paint layer → takeover → revival) and the four precise gaps in the current extension model, each backed by upstream source locations.
+- [Extension points](docs/design/extension-points.md) — a source-backed survey of what the dsh web UI lets plugins touch: slots, the composer election chain, message renderers.
+- [Native surfaces, rebuilt](docs/design/native-surfaces-rebuild.md) — surface-by-surface specs for the tool-row popups a takeover has to redraw (command menu, permission presets, model selection).
+- [Prior art](docs/design/prior-art.md) — how mainstream chat composers handle Markdown input, compiled from first-party sources.
 
-## 中文
+Decision records (editor choice, takeover, release ritual, dev-dependency model) live in [docs/adr/](docs/adr/).
 
-一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh`）Web UI 插件，在输入区与聊天记录之上分层叠加 Markdown 体验：
+**Upstream wishlist.** The gaps above translate into five concrete interface wishes — view-layer reuse, native seats surviving a takeover, a formal takeover contract with a conformance suite, plugin scaffolding, and a stability or deprecation policy for the preview period. They are written up in [docs/design/why-takeover.md · upstream wishlist](docs/design/why-takeover.md#上游愿望清单) and will be published as a Discussions "Ideas" thread for community upvoting.
 
-- **用户消息 Markdown 化** —— 已发送的用户消息与排队中的 steering 消息在聊天记录中按 Markdown 渲染（复用宿主自带渲染管线），并保留 @提及 与技能引用 chip。
-- **实时渲染接管卡** —— 经 `conversation.composer` 选举链低优先级条目（[ADR-0005](docs/adr/0005-composer-revival.md)）以自带 CodeMirror 6 编辑器接管输入区，Obsidian 式实时渲染：粗体/斜体/行内代码/删除线以真样式呈现，语法标记折叠：光标行保留原文标记，光标离开后标记折叠隐去（渲染模式；源码模式标记始终可见）；Enter 发送（中文 IME 安全）、`Shift+Enter` 换行，输入内容实时镜像进宿主草稿、页面刷新不丢，附件栏覆盖上传/移除/上传中状态。内置接管面板（审批、提问、子代理）优先级更高、照常抢占。
-- **粘贴转换** —— 从网页/Word 粘贴富文本时，剪贴板 `text/html` 自动转为干净 Markdown：接管卡内在光标处直转；原生输入区经宿主带版本守卫的插入 API 一步写入、一步撤销；`Ctrl/Cmd+Shift+V` 仍直插纯文本，纯文本、文件与图片粘贴行为不变。
-- **逐面降级** —— 各面激活前先探测宿主能力，失败即独立降级：内置面板需要输入区时照常接管，宿主面缺失时只失去对应功能（文本面永不因此下线），卡级 error boundary 在渲染异常时静默回落原生输入区、草稿不丢。
+<!-- post-publish: swap in the live Discussions URL -->
 
-> **状态：alpha，积极开发中。** dsh 本身处于 developer preview、存在破坏性变更；本插件跟随 `@deepseek-ai/dsh` 的 `0.2.0-rc.x` 版本线，并对上游 master 持续重测。
+## Contributing
 
-### 安装
+[CONTRIBUTING.md](CONTRIBUTING.md) covers the environment (most work needs no dsh desktop app), what still has to be verified on a real device, and the merge gate: **green tests plus a maintainer's on-device re-test**. Bugs and feature requests go to [Issues](https://github.com/long6177/dsh-markdown-input/issues) (templates provided). The path to becoming a co-maintainer is written down as well — this project is maintained with others, not just by one.
 
-```sh
-dsh plugin --profile web add dsh-markdown-input   # npm
-dsh plugin --profile web add github:long6177/dsh-markdown-input
-```
+## License
 
-### 测试
-
-> 开发依赖以 `link:` 指向本仓库旁的 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) 本地检出（固定在 `dsh-v0.2.0-rc.2` 标签）；执行 `pnpm install` 前请先克隆到相邻目录。
-
-```sh
-pnpm test                     # 单元 + 组件 + bundle 契约（vitest，jsdom）
-bash scripts/retest-wizard.sh # 真机重测引导脚本；结果写入 outputs/retest-*.md
-```
-
-### 协议
-
-[MIT](./LICENSE)
+[MIT](./LICENSE). This is a community plugin — not an official DeepSeek product, and not affiliated with or endorsed by DeepSeek.

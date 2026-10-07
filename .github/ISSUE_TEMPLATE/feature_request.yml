@@ -1,0 +1,22 @@
+name: Feature request
+description: Suggest an improvement to this plugin
+labels: [enhancement, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Feature ideas about dsh itself (not this plugin) belong in the upstream [Ideas](https://github.com/deepseek-ai/deepseek-harness/discussions/categories/ideas) category, where upvotes feed the team's prioritization.
+  - type: textarea
+    id: scenario
+    attributes:
+      label: Scenario
+      description: What are you trying to do? Describe the workflow and where it falls short — the situation first, the solution second.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should happen instead? What would "done" look like for you?
+    validations:
+      required: true
