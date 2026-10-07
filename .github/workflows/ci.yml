@@ -58,30 +58,23 @@ jobs:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
       - name: Sparse-checkout the upstream source face @ dsh-v0.2.0-rc.2
-        # Nine cone-mode paths, split by role:
-        # - ui-renderer / locale / ui-conversation — the runtime source face
-        #   the source-face suites import (renderer `scoped-slots.tsx` and
-        #   its closure, the two upstream `en` dictionaries).
-        # - ui-slots / store / invariants / cordis / cosmokit / schemastery —
-        #   the tsconfig reference closure of `packages/client/ui-renderer`:
-        #   vite's transform parses the nearest tsconfig of the checkout files
-        #   and follows its `references` transitively, so every referenced
-        #   tsconfig must EXIST or the transform crashes (drill-verified).
-        #   Their sources stay inert here — published mode imports these
-        #   packages from node_modules, the checkout only satisfies the graph.
+        # One shared face for both workflows (this file and upstream-drift.yml),
+        # printed by `node scripts/dev-harness.mjs sparse-paths`
+        # (SPARSE_CHECKOUT_PATHS in scripts/dev-harness.mjs): every
+        # fidelity-alias client package dir plus the tsconfig `references`
+        # closure vite's transform follows from the checkout files — every
+        # referenced tsconfig must EXIST or the transform crashes
+        # (drill-verified; commit 8822095's 24-file fake failure). This is the
+        # union of this workflow's former minimal cone and the drift
+        # workflow's face; in published mode the extra dirs stay inert —
+        # the published packages win, the checkout only satisfies the graph.
         run: |
           git clone --filter=blob:none --depth 1 --branch dsh-v0.2.0-rc.2 --sparse \
             https://github.com/deepseek-ai/deepseek-harness.git "$DSH_HARNESS_DIR"
-          git -C "$DSH_HARNESS_DIR" sparse-checkout set \
-            packages/client/ui-renderer \
-            packages/client/locale \
-            packages/client/ui-conversation \
-            packages/client/ui-slots \
-            packages/client/store \
-            packages/runtime-diagnostics/invariants \
-            vendor/cordis \
-            vendor/cosmokit \
-            vendor/schemastery
+          # Assignment (not inline $()) so a failed `node` aborts this step
+          # under the runner's `bash -e` instead of feeding git an empty list.
+          FACE="$(node scripts/dev-harness.mjs sparse-paths)"
+          git -C "$DSH_HARNESS_DIR" sparse-checkout set $FACE
 
       - name: Install dependencies (published packages, frozen lockfile)
         run: pnpm install --frozen-lockfile

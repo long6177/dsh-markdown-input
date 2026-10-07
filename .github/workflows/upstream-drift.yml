@@ -50,9 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      # Sparse upstream checkout of the TARGET version (the ci.yml cone plus
-      # the four paths the fidelity face needs, see the checkout step below);
-      # consumed by scripts/dev-harness.mjs.
+      # Sparse upstream checkout of the TARGET version (the shared
+      # SPARSE_CHECKOUT_PATHS face both workflows consume, see the checkout
+      # step below); consumed by scripts/dev-harness.mjs.
       DSH_HARNESS_DIR: ${{ github.workspace }}/.upstream/deepseek-harness
     steps:
       - name: Check out this repository
@@ -87,25 +87,17 @@ jobs:
           VERSION="${{ steps.detect.outputs.version }}"
           git clone --filter=blob:none --depth 1 --branch "dsh-v$VERSION" --sparse \
             https://github.com/deepseek-ai/deepseek-harness.git "$DSH_HARNESS_DIR"
-          # The fidelity face aliases all six client packages to the checkout's
-          # src/ trees (scripts/dev-harness.mjs HARNESS_CLIENT_PACKAGES), and
-          # ui-primitives' tsconfig references the two util packages — verified
-          # against 0.2.1-alpha.1: omitting any of these makes every face test
-          # fail at import/transform time (environment, not drift).
-          git -C "$DSH_HARNESS_DIR" sparse-checkout set \
-            packages/client/ui-renderer \
-            packages/client/locale \
-            packages/client/ui-conversation \
-            packages/client/ui-primitives \
-            packages/client/ui-chat \
-            packages/client/ui-slots \
-            packages/client/store \
-            packages/util/code-language \
-            packages/util/workspace-path \
-            packages/runtime-diagnostics/invariants \
-            vendor/cordis \
-            vendor/cosmokit \
-            vendor/schemastery
+          # One shared face for both workflows, printed by
+          # `node scripts/dev-harness.mjs sparse-paths`
+          # (SPARSE_CHECKOUT_PATHS): every fidelity-alias client package dir
+          # (the fidelity face aliases all six to the checkout's src/ trees)
+          # plus the tsconfig reference closure — verified against
+          # 0.2.1-alpha.1: omitting any of these makes every face test fail
+          # at import/transform time (environment, not drift).
+          # Assignment (not inline $()) so a failed `node` aborts this step
+          # under the runner's `bash -e` instead of feeding git an empty list.
+          FACE="$(node scripts/dev-harness.mjs sparse-paths)"
+          git -C "$DSH_HARNESS_DIR" sparse-checkout set $FACE
 
       - name: Install dependencies (published packages, frozen lockfile)
         if: steps.detect.outputs.version != ''

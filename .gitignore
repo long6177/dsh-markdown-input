@@ -10,3 +10,4 @@ lib/
 .playwright-mcp/
 skills-lock.json
 outputs/
+.upstream/

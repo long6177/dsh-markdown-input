@@ -28,6 +28,10 @@
  * - `node scripts/dev-harness.mjs snapshot` — regenerate the committed
  *   locale snapshots from the checkout (run when the pinned upstream tag
  *   moves; the fidelity contract test verifies them on every enabled run).
+ * - `node scripts/dev-harness.mjs sparse-paths` — print the sparse-checkout
+ *   face ({@link SPARSE_CHECKOUT_PATHS}), one path per line; `ci.yml` and
+ *   `upstream-drift.yml` feed it to `git sparse-checkout set` so both
+ *   workflows consume one source of truth.
  */
 import { existsSync } from 'node:fs'
 import { spawn } from 'node:child_process'
@@ -80,6 +84,41 @@ export const HARNESS_CLIENT_PACKAGES = [
   { pkg: '@deepseek-ai/dsh-client-ui-primitives', dir: 'packages/client/ui-primitives', subpaths: {} },
   { pkg: '@deepseek-ai/dsh-client-ui-renderer', dir: 'packages/client/ui-renderer', subpaths: { '/client': 'src/client/index.ts', '/invariant': 'src/invariant.ts' } },
   { pkg: '@deepseek-ai/dsh-client-ui-slots', dir: 'packages/client/ui-slots', subpaths: {} },
+]
+
+/**
+ * Sparse-checkout support paths beyond the client package dirs themselves:
+ * the tsconfig `references` closure that vite's transform follows from the
+ * checkout files' nearest tsconfigs (ui-renderer's references plus
+ * ui-primitives', which pulls in the two util packages). Drill-verified
+ * against upstream tags: a missing tsconfig crashes the transform at
+ * import/parse time and every face test fails — environment, not drift
+ * (commit 8822095's 24-file fake failure). Sources here stay inert in
+ * published mode: those packages import from node_modules, the checkout only
+ * satisfies the source-face import graph.
+ */
+export const SPARSE_SUPPORT_PATHS = [
+  'packages/client/store',
+  'packages/runtime-diagnostics/invariants',
+  'packages/util/code-language',
+  'packages/util/workspace-path',
+  'vendor/cordis',
+  'vendor/cosmokit',
+  'vendor/schemastery',
+]
+
+/**
+ * The full sparse-checkout face BOTH workflows consume (`ci.yml` at the
+ * pinned base tag, `upstream-drift.yml` at the judged target ref): every
+ * fidelity-alias client package dir — derived from
+ * {@link HARNESS_CLIENT_PACKAGES}, so a package added there can never be
+ * missed by a sparse checkout again — plus the tsconfig reference closure
+ * ({@link SPARSE_SUPPORT_PATHS}). Printed by `node scripts/dev-harness.mjs
+ * sparse-paths` for the workflows' `git sparse-checkout set` step; the union
+ * is safe for both faces (extra dirs stay inert in published mode).
+ */
+export const SPARSE_CHECKOUT_PATHS = [
+  ...new Set([...HARNESS_CLIENT_PACKAGES.map(entry => entry.dir), ...SPARSE_SUPPORT_PATHS]),
 ]
 
 /**
@@ -206,7 +245,8 @@ async function runFidelityTest(extraArgs) {
   child.on('exit', code => { process.exitCode = code ?? 1 })
 }
 
-async function main(argv) {
+/** Exported for tests; the direct-invocation guard below calls the same. */
+export async function main(argv) {
   const [command, ...rest] = argv
   if (command === undefined || command === 'status') {
     printStatus()
@@ -229,7 +269,11 @@ async function main(argv) {
     }
     return
   }
-  console.error(`unknown command "${command}" — expected status | test [args…] | snapshot`)
+  if (command === 'sparse-paths') {
+    for (const path of SPARSE_CHECKOUT_PATHS) console.log(path)
+    return
+  }
+  console.error(`unknown command "${command}" — expected status | test [args…] | snapshot | sparse-paths`)
   process.exitCode = 2
 }
 
