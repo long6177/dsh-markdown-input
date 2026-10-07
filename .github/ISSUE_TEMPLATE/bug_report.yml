@@ -1,0 +1,53 @@
+name: Bug report
+description: Something in the plugin misbehaves in a real dsh session
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time. This plugin tracks the `0.2.0-rc.x` line of `@deepseek-ai/dsh`; if you are on a different upstream version, say so below — unverified combinations are expected while dsh itself is a developer preview.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect to happen instead?
+    validations:
+      required: true
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DeepSeek Harness (dsh) version
+      description: Output of `dsh --version` (for example `0.2.0-rc.2`).
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: dsh-markdown-input version
+      description: The npm version (for example `0.2.0-alpha.20`), or the commit if installed from GitHub.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Minimal steps from a fresh dsh session. Note whether the takeover composer was active (the plugin card) or you were on the native composer, and which feature misbehaved (live rendering, sent-message projection, paste conversion, …).
+    validations:
+      required: true
+  - type: dropdown
+    id: on-device
+    attributes:
+      label: Did this happen in a real dsh session?
+      description: On-device reports (a running host — the desktop app or `dsh web`) are the most actionable.
+      options:
+        - "Yes — real dsh session (desktop app or dsh web)"
+        - "No — only outside a host (tests, docs, another browser context)"
+        - "Not sure"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Screenshots / logs
+      description: DevTools console output (F12 in the host window), screenshots, or a short screen recording. Images and files can be attached after submitting.
