@@ -36,6 +36,17 @@ describe('render-mode list CSS contract (issue #46; single level per the alpha.1
     expect(mark).toContain('min-width: var(--cm-md-li-hang)')
   })
 
+  it('sends marker-less continuation rows to the content column with no first-line pull (fourth feedback round)', () => {
+    const cont = ruleOf(composerCss, '.surface :global(.cm-md-li-cont)')
+    expect(cont).toContain('text-indent: 0')
+    expect(cont).toContain('padding-left: calc(var(--cm-md-li-inset) + var(--cm-md-li-hang))')
+    // The row carries the column variables itself, and the ordered override
+    // must stay after it so ordered continuation rows take the wider column.
+    expect(cont).toContain('--cm-md-li-hang: 0.9em')
+    expect(composerCss.indexOf('.surface :global(.cm-md-li-ordered)'))
+      .toBeGreaterThan(composerCss.indexOf('.surface :global(.cm-md-li-cont)'))
+  })
+
   it('resets the inherited first-line pull inside the marker box so the glyph stays visible (alpha.16 regression)', () => {
     // `text-indent` is inherited: the row's -1 * hang pull reached inside the
     // inline-block widget and shifted the `•`/ordinal glyph a full hang

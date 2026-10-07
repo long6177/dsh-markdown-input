@@ -184,6 +184,15 @@ function endOfSpaces(doc: Text, to: number): number {
   return end
 }
 
+/** Whether the markup run ending at `to` carries its separator — a space or
+ * tab follows it. The fifth-round decision: a marker without its separator
+ * (`-`, `1.`, `>` at the line end) stays raw text, so the row only takes
+ * list/quote shape once the space arrives. */
+function followedBySpace(doc: Text, to: number): boolean {
+  const next = doc.sliceString(to, to + 1)
+  return next === ' ' || next === '\t'
+}
+
 const hide = Decoration.replace({})
 
 /** Block replacement hiding a whole line's content. It deliberately stops at
@@ -214,6 +223,15 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
   // fold prefix to it, so a `- ` widget on a quoted line never overlaps the
   // quote fold already covering `> `.
   const quoteFoldEnds = new Map<number, number>()
+  // List items seen by the walk, for the continuation pass below: a row the
+  // tree keeps inside an item but which carries no marker of its own needs
+  // the item's kind and its content column.
+  const listItems: Array<{ from: number; to: number; contentColumn: number; kind: string }> = []
+  // Lines that carry a list marker of their own: the continuation pass must
+  // not restyle them (their own row class owns the column). Keyed by line
+  // number — the row classes are stored as one combined Set entry, so a
+  // membership test has to be tracked separately.
+  const markerLines = new Set<number>()
 
   const addLineClass = (from: number, to: number, className: string): void => {
     const last = doc.lineAt(to).number
@@ -316,15 +334,38 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
         return
       }
       if (name === 'Blockquote') {
-        addLineClass(node.from, node.to, 'cm-md-quote')
+        // Per row: a line whose quote run has no separator (`>` into the line
+        // end) stays raw text — same rule as the bare list marker below — so
+        // the quote class goes to every other row the node spans.
+        for (let n = doc.lineAt(node.from).number; n <= doc.lineAt(node.to).number; n++) {
+          const line = doc.line(n)
+          if (/^[ \t]*>+$/u.test(line.text)) continue
+          addLineClass(line.from, line.to, 'cm-md-quote')
+        }
         return
       }
       if (name === 'QuoteMark') {
+        // No separator, no quote row: the raw `>` shows and nothing folds
+        // (the Blockquote branch above skips the row's class alike).
+        if (!followedBySpace(doc, node.to)) return
         const end = endOfSpaces(doc, node.to)
         quoteFoldEnds.set(doc.lineAt(node.from).number, end)
         if (!touchesActiveLine(doc, active, node.from, node.from)) {
           fold(node.from, end)
         }
+        return
+      }
+      if (name === 'ListItem') {
+        const item = node.node
+        const mark = item?.getChild('ListMark') ?? null
+        const list = item?.parent ?? null
+        if (item === null || mark === null || list === null) return
+        listItems.push({
+          from: item.from,
+          to: item.to,
+          contentColumn: endOfSpaces(doc, mark.to) - doc.lineAt(mark.from).from,
+          kind: list.name === 'OrderedList' ? 'cm-md-li-ordered' : 'cm-md-li-bullet',
+        })
         return
       }
       if (name === 'ListMark') {
@@ -334,6 +375,13 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
         if (item === null || list === null || (list.name !== 'BulletList' && list.name !== 'OrderedList')) return
         const line = doc.lineAt(node.from)
         const ordered = list.name === 'OrderedList'
+        // The marker's separator space decides whether the row reads as a
+        // list row yet (fifth-round decision): `-`/`1.` at the line end stay
+        // raw text, so typing the marker never snaps the line into list
+        // shape before the space arrives. The line still counts as a marker
+        // row for the continuation pass below.
+        markerLines.add(line.number)
+        if (!followedBySpace(doc, mark.to)) return
         // One list level only (maintainer decision on the alpha.18 feedback):
         // nested rows from pasted source render at the same single-level
         // inset — no per-depth classes.
@@ -377,6 +425,54 @@ export function buildRenderDecorations(state: EditorState, active: ReadonlySet<n
       }
     },
   })
+
+  // Rows the tree declines but the keyboard is about to produce (fifth-round
+  // follow-up): `1. ` right after a paragraph is not a list yet — an empty
+  // list item cannot interrupt a paragraph (spec) — so nothing above styles
+  // the line, and the row only appeared once content followed. Preview it a
+  // keystroke early instead: the inset takes effect from the moment the
+  // separator space is typed, the marker folds once the caret leaves. Only
+  // interruptible markers qualify (a bullet, or the number 1); any other
+  // number can never start a list there, and a bare `-` belongs to a setext
+  // heading underline (the heading class keeps the line).
+  for (let n = 1; n <= doc.lines; n++) {
+    if (markerLines.has(n) || lineClasses.has(n)) continue
+    const line = doc.line(n)
+    const match = /^ {0,3}([-+*]|1[.)])([ \t]+)$/u.exec(line.text)
+    if (match === null) continue
+    const marker = match[1]!
+    const bullet = marker === '-' || marker === '*' || marker === '+'
+    markerLines.add(n)
+    addLineClass(line.from, line.to, `cm-md-listitem ${bullet ? 'cm-md-li-bullet' : 'cm-md-li-ordered'}`)
+    if (active.has(n)) continue
+    ranges.push(Decoration.replace({
+      widget: new ListMarkerWidget(bullet ? '•' : marker),
+    }).range(line.from, line.from + match[0].length))
+  }
+
+  // Continuation rows (mainstream alignment, fourth feedback round): every
+  // line the tree keeps inside a list item while carrying no marker of its
+  // own reads as the item's text continued — the content column, never the
+  // outdented body row mainline renderers never draw. Items go innermost
+  // first so a nested item's own continuation is judged against the deepest
+  // item that owns it; the row's leading whitespace is markup up to that
+  // item's content column and folds, while deeper spaces are content and
+  // stay. Code rows keep their indentation (the fence's own fold set owns
+  // them) and the active row stays raw.
+  const continued = new Set<number>()
+  const bySpan = [...listItems].sort((a, b) => (a.to - a.from) - (b.to - b.from))
+  for (const item of bySpan) {
+    for (let n = doc.lineAt(item.from).number; n <= doc.lineAt(item.to).number; n++) {
+      const line = doc.line(n)
+      if (continued.has(n) || active.has(n) || line.text.trim() === '') continue
+      if (markerLines.has(n) || lineClasses.get(n)?.has('cm-md-codeblock') === true) continue
+      continued.add(n)
+      addLineClass(line.from, line.to, `cm-md-li-cont ${item.kind}`)
+      const lead = /^[ \t]*/u.exec(line.text)![0].length
+      const take = Math.min(lead, item.contentColumn)
+      if (take > 0) fold(line.from, line.from + take)
+    }
+  }
 
   for (const [line, classes] of lineClasses) {
     const pos = doc.line(line).from

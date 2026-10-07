@@ -321,58 +321,127 @@ describe('list keys (issue #46; Tab removed on the third feedback round)', () =>
     expect(handle.getText()).toBe('  - deep')
   })
 
-  it('Shift+Enter exits an empty list item line without inserting a newline', () => {
+  // Fifth-round decision: an empty markup row's role is "clear the row's
+  // markup and open the next line" — Shift+Enter does the exit (caret on the
+  // new line, the emptied row stays as markdown's separator), Backspace
+  // cancels in place (no line break), and a marker without its separator
+  // space (`-`, `1.`) is not a row yet: the plain newline applies.
+  it('Shift+Enter exits an empty list item and opens the next line', () => {
     const { handle, onSubmit } = mount()
     handle.setText('- ')
     handle.focus()
     fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
     expect(onSubmit).not.toHaveBeenCalled()
-    expect(handle.getText()).toBe('')
-    expect(handle.view.state.selection.main.head).toBe(0)
+    expect(handle.getText()).toBe('\n')
+    expect(handle.view.state.selection.main.head).toBe(1)
   })
 
-  it('exiting the second item leaves the first intact and parks the caret at the line start', () => {
+  it('the exit leaves the preceding content intact and parks the caret below the emptied row', () => {
     const { handle } = mount()
     handle.setText('- a\n- ')
     handle.focus()
     fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
-    expect(handle.getText()).toBe('- a\n')
-    expect(handle.view.state.selection.main.head).toBe(4)
+    expect(handle.getText()).toBe('- a\n\n')
+    expect(handle.view.state.selection.main.head).toBe(5)
   })
 
-  it('exits an empty ordered item and an empty quote line the same way', () => {
+  it('empty ordered and quote rows exit the same way', () => {
     const { handle } = mount()
     handle.setText('1. ')
     handle.focus()
     fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
-    expect(handle.getText()).toBe('')
+    expect(handle.getText()).toBe('\n')
     handle.setText('> ')
     fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
-    expect(handle.getText()).toBe('')
+    expect(handle.getText()).toBe('\n')
   })
 
-  it('exits an empty markup line from any caret position on it, line start included (#46)', () => {
+  it('exits an empty markup row from any caret position on it, line start included', () => {
     const { handle } = mount()
     handle.setText('- ')
     handle.focus()
     handle.view.dispatch({ selection: { anchor: 0 } })
     fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
-    expect(handle.getText()).toBe('')
-    handle.setText('> ')
-    handle.view.dispatch({ selection: { anchor: 0 } })
-    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
-    expect(handle.getText()).toBe('')
+    expect(handle.getText()).toBe('\n')
+    expect(handle.view.state.selection.main.head).toBe(1)
   })
 
-  it('an empty item inside a quote exits the item only, while one inside a fence keeps the generic newline', () => {
+  it('a separator-less marker row takes the plain newline — it is not a row yet', () => {
+    const { handle } = mount()
+    handle.setText('-')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('-\n')
+    handle.setText('1.')
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('1.\n')
+    handle.setText('>')
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('>\n')
+  })
+
+  it('an empty task row exits like any other empty row', () => {
+    // `- [ ] ` is markup and nothing else: the task body is empty, so the
+    // row leaves the list exactly like `- ` does (fifth-round follow-up).
+    const { handle } = mount()
+    handle.setText('- [ ] ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('\n')
+    expect(handle.view.state.selection.main.head).toBe(1)
+    handle.setText('- [x] ')
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('\n')
+  })
+
+  it('Backspace cancels an empty task row in place too', () => {
+    const { handle } = mount()
+    handle.setText('- [ ] ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Backspace' })
+    expect(handle.getText()).toBe('')
+    expect(handle.view.state.selection.main.head).toBe(0)
+  })
+
+  it('a task row with a body still continues with the next task marker', () => {
+    const { handle } = mount()
+    handle.setText('- [ ] task')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
+    expect(handle.getText()).toBe('- [ ] task\n- [ ] ')
+  })
+
+  it('an empty item inside a quote exits whole; inside a fence the generic newline holds', () => {
     const { handle } = mount()
     handle.setText('> - ')
     handle.focus()
     fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
-    expect(handle.getText()).toBe('> ')
+    expect(handle.getText()).toBe('\n')
     handle.setText('```\n- ')
     fireEvent.keyDown(content(), { key: 'Enter', shiftKey: true })
     expect(handle.getText()).toBe('```\n- \n')
+  })
+
+  it('Backspace cancels an empty item marker in place — no newline, no leftover row', () => {
+    const { handle } = mount()
+    handle.setText('- a\n- ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Backspace' })
+    expect(handle.getText()).toBe('- a\n')
+    expect(handle.view.state.selection.main.head).toBe(4)
+  })
+
+  it('Backspace cancels empty ordered and quote rows the same way', () => {
+    const { handle } = mount()
+    handle.setText('1. ')
+    handle.focus()
+    fireEvent.keyDown(content(), { key: 'Backspace' })
+    expect(handle.getText()).toBe('')
+    expect(handle.view.state.selection.main.head).toBe(0)
+    handle.setText('> ')
+    fireEvent.keyDown(content(), { key: 'Backspace' })
+    expect(handle.getText()).toBe('')
+    expect(handle.view.state.selection.main.head).toBe(0)
   })
 
   it('Shift+Enter continues list and quote rows with the next marker', () => {

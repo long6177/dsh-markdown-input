@@ -76,12 +76,12 @@
   margin-bottom: 0;
 }
 
-/* Lists in the bubble (maintainer decision on the alpha.18 feedback): the
-   marker rides the item's first line (inside positioning, no hanging
-   column), so a continuation line — the author's own hardened line break —
-   sits flush at the bubble's text edge while the item text reads a level
-   in. The list padding goes with it: the marker is inline content now. */
+/* Lists in the bubble (maintainer decision on the fourth-round feedback:
+   read mainstream): outside positioning keeps the marker in the list's
+   hanging column, so a continuation line — the author's own hardened line
+   break — aligns with the item text, the way every markdown renderer draws
+   a list. The padding is the marker column. */
 .bubble :global(ol), .bubble :global(ul) {
-  list-style-position: inside;
-  padding-left: 0;
+  list-style-position: outside;
+  padding-left: 2em;
 }

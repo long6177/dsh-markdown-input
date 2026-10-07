@@ -500,6 +500,62 @@ describe('buildRenderDecorations: horizontal rules (issue #48)', () => {
   })
 })
 
+describe('buildRenderDecorations: marker separator space (fifth-round decision)', () => {
+  it('leaves a separator-less marker row raw — no list shape until the space arrives', () => {
+    for (const doc of ['-', '1.', '>']) {
+      expect(collect(setup(doc))).toEqual([])
+    }
+  })
+
+  it('renders the same shapes as rows once the separator space is typed', () => {
+    for (const doc of ['- ', '1. ', '> ']) {
+      const records = collect(setup(doc))
+      expect(records.filter(r => r.kind === 'line').length).toBe(1)
+      expect(records.filter(r => r.kind !== 'line').length).toBe(1)
+    }
+  })
+
+  it('keeps a separator-less marker row from being restyled as a continuation either', () => {
+    // `-` is still its own item for the parser; the continuation pass must
+    // not claim the row (no list padding on a row that reads as raw text).
+    const doc = '- a\n-'
+    const records = collect(setup(doc))
+    expect(records.filter(r => r.kind === 'line').map(r => r.class)).toEqual([
+      'cm-md-listitem cm-md-li-bullet',
+    ])
+  })
+
+  it('previews the row it is about to become after a paragraph — the empty item cannot interrupt yet', () => {
+    // Spec: an empty list item never interrupts a paragraph, so `1. ` right
+    // after prose has no list in the tree. It becomes one the moment content
+    // follows; the render shows that row a keystroke early, so typing the
+    // space already reads as a list row instead of jumping later.
+    const doc = 'foo\n1. '
+    const records = collect(setup(doc))
+    expect(records.filter(r => r.kind === 'line').map(r => ({ from: r.from, class: r.class })))
+      .toEqual([{ from: 4, class: 'cm-md-listitem cm-md-li-ordered' }])
+    expect(labelOf(setup(doc), 4, 7)).toBe('1.')
+  })
+
+  it('previews nothing the spec can never turn into a row there', () => {
+    // Only an interruptible marker previews: a number other than 1 can
+    // never start a list after a paragraph.
+    expect(collect(setup('foo\n2. '))).toEqual([])
+    // A bare `-` under a paragraph is a setext heading underline (spec); the
+    // heading keeps the line, so it is not a list row.
+    const setext = collect(setup('foo\n- '))
+    expect(setext.some(r => r.class?.includes('cm-md-h2') === true)).toBe(true)
+    expect(setext.some(r => r.class?.includes('cm-md-listitem') === true)).toBe(false)
+  })
+
+  it('previews the row class but folds nothing while the caret is on the previewed row', () => {
+    const records = collect(setup('foo\n1. ', [2]))
+    expect(records.filter(r => r.kind === 'line').map(r => r.class))
+      .toEqual(['cm-md-listitem cm-md-li-ordered'])
+    expect(records.filter(r => r.kind !== 'line')).toEqual([])
+  })
+})
+
 describe('buildRenderDecorations: escapes and plain text', () => {
   it('never folds escaped characters', () => {
     const doc = 'literal \\* star \\`tick'
@@ -512,5 +568,72 @@ describe('buildRenderDecorations: escapes and plain text', () => {
 
   it('returns an empty set for an empty document', () => {
     expect(collect(setup(''))).toEqual([])
+  })
+})
+
+describe('buildRenderDecorations: list continuation rows (mainstream alignment, fourth feedback round)', () => {
+  it('gives a marker-less row inside an item the item’s content column — never a body row', () => {
+    // `c` is item 2's lazy continuation: markdown keeps it in the item, so
+    // the render must too — the content column, not the editor’s left edge.
+    const doc = '1. a\n2. b\nc'
+    const records = collect(setup(doc))
+    expect(records.filter(r => r.kind === 'line').map(r => r.class)).toEqual([
+      'cm-md-listitem cm-md-li-ordered',
+      'cm-md-listitem cm-md-li-ordered',
+      'cm-md-li-cont cm-md-li-ordered',
+    ])
+    expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
+      .toEqual(['1. ', '2. '])
+  })
+
+  it('folds a source-indented continuation’s markup indent, leaving content spaces alone', () => {
+    // 5 spaces against a `1. ` item: 3 are the item’s markup indent, 2 are content.
+    const doc = '1. a\n     b'
+    const records = collect(setup(doc))
+    expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
+      .toEqual(['1. ', '   '])
+    expect(records.filter(r => r.kind === 'line')[1]!.class).toBe('cm-md-li-cont cm-md-li-ordered')
+  })
+
+  it('keeps the active continuation row raw', () => {
+    const doc = '1. a\nc'
+    const records = collect(setup(doc, [2]))
+    expect(records.filter(r => r.kind === 'line').map(r => r.class)).toEqual(['cm-md-listitem cm-md-li-ordered'])
+    expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to))).toEqual(['1. '])
+  })
+
+  it('keeps continuation rows at the single level, nested sources included (alpha.18 contract)', () => {
+    const doc = '- top\n  - inner\n    cont\n- top2'
+    const records = collect(setup(doc))
+    expect(records.filter(r => r.kind === 'line').map(r => r.class)).toEqual([
+      'cm-md-listitem cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
+      'cm-md-li-cont cm-md-li-bullet',
+      'cm-md-listitem cm-md-li-bullet',
+    ])
+    expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
+      .toEqual(['- ', '  - ', '    ', '- '])
+  })
+
+  it('keeps a lazy quote continuation inside the quote styling (no drop to the left edge)', () => {
+    // `b` is the quote paragraph's lazy continuation: the Blockquote node
+    // spans it, so the quote's own row class (and its inset) already covers
+    // the line — nothing to align here, and the list pass must not touch it.
+    const doc = '> a\nb'
+    const records = collect(setup(doc))
+    expect(records.filter(r => r.kind === 'line').map(r => r.class)).toEqual([
+      'cm-md-quote',
+      'cm-md-quote',
+    ])
+  })
+
+  it('never pads or folds code lines inside an item — code indentation is content', () => {
+    const doc = '1. a\n\n   ```\n   code\n   ```'
+    const records = collect(setup(doc))
+    const codeLine = records.find(r => r.kind === 'line' && r.from === doc.indexOf('   code'))
+    expect(codeLine?.class?.split(' ')).toContain('cm-md-codeblock')
+    expect(codeLine?.class?.split(' ')).not.toContain('cm-md-li-cont')
+    expect(records.filter(r => r.kind === 'replace').map(r => text(doc, r.from, r.to)))
+      .not.toContain('   ')
   })
 })

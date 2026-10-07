@@ -42,33 +42,52 @@ export type MenuKeyHandler = (intent: MenuKeyIntent) => boolean
 export type CompletionProbeListener = (probe: CompletionProbe | null) => void
 
 /**
- * Shift+Enter continuation, path a: a line holding only a list marker and
- * whitespace. `1)`-style markers included.
+ * The empty-markup row shapes: a marker row or quote row whose separator
+ * space has arrived — `- `, `1. `, `> `, quote nesting in front allowed
+ * (`> - `) — plus the empty task row (`- [ ] `, `- [x] `: the task marker
+ * with no body after it), each with nothing else on the line. Until the
+ * separator space is typed the markup stays raw text (fifth-round decision:
+ * the row only reads as a list once its separator arrives; editor feel over
+ * the spec's EOL allowance).
  */
-const EMPTY_ITEM_LINE_RE = /^[ \t]*(?:[-+*]|\d{1,9}[.)])[ \t]*$/u
+const EMPTY_ITEM_LINE_RE = /^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d{1,9}[.)])[ \t]+(?:\[[ xX]\][ \t]*)?$/u
 
-/** Shift+Enter continuation, path b: a line holding only `>` and whitespace. */
-const EMPTY_QUOTE_LINE_RE = /^[ \t]*>[ \t]*$/u
+/** The empty-quote row shape: `>` + separator space, nothing else. */
+const EMPTY_QUOTE_LINE_RE = /^[ \t]*>[ \t]+$/u
 
-/**
- * The empty-marker exit kind at `pos`, or null. The line-shape regexes only
- * nominate; the syntax tree confirms the context — a ListItem or a
- * Blockquote must own the line — and vetoes fenced code, where markup
- * shapes are code text, not a list or quote to exit. (The tree covers
- * unterminated fences: a fence without a closer still spans to the end of
- * the document.) The resolution anchors at the markup's own character, not
- * the caret: a caret parked before the marker's end (the line start
- * included) resolves to no marker-bearing ancestor of its own, while the
- * marker character always sits inside the ListItem/Blockquote the line
- * belongs to.
- */
-function emptyMarkupExit(state: EditorState, pos: number): 'item' | 'quote' | null {
+/** The separator-less shapes — a marker or quote run straight into the line
+ * end (`-`, `1.`, `>`, `>>`). Not rows: no row keys, and the newline path
+ * must leave them alone (lang-markdown's continuation command would delete
+ * the markup as an empty item's). */
+const BARE_ITEM_LINE_RE = /^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d{1,9}[.)])$/u
+const BARE_QUOTE_LINE_RE = /^[ \t]*>+$/u
+
+/** One markup level and nothing else — a bare marker row, an empty task row
+ * (`- [ ] `), or a bare `>` row. Backspace cancels exactly these whole;
+ * nested shapes (`> - `) keep lang-markdown's level-wise cancel instead. */
+const WHOLE_LINE_MARKUP_RE = /^[ \t]*(?:(?:[-+*]|\d{1,9}[.)])[ \t]*(?:\[[ xX]\][ \t]*)?|>[ \t]*)$/u
+
+/** The markup row at `pos`: `'bare'` while the separator space has not
+ * arrived, `'item'`/`'quote'` for the real rows, null for anything else. The
+ * line-shape regexes only nominate; the syntax tree confirms the context — a
+ * ListItem or a Blockquote must own the line — and vetoes fenced code, where
+ * markup shapes are code text, not a list or quote to touch. (The tree covers
+ * unterminated fences: a fence without a closer still spans to the end of the
+ * document.) The resolution anchors at the line's last markup character — the
+ * marker itself, or the `>` of a bare quote row — which always sits inside
+ * the ListItem/Blockquote the line belongs to, so a caret parked anywhere on
+ * the line, the line start included, resolves through the same node. */
+type MarkupRowKind = 'item' | 'quote' | 'bare'
+
+function markupRowKind(state: EditorState, pos: number): MarkupRowKind | null {
   const line = state.doc.lineAt(pos)
-  const item = EMPTY_ITEM_LINE_RE.test(line.text)
-  const quote = EMPTY_QUOTE_LINE_RE.test(line.text)
+  const text = line.text
+  if (BARE_ITEM_LINE_RE.test(text) || BARE_QUOTE_LINE_RE.test(text)) return 'bare'
+  const item = EMPTY_ITEM_LINE_RE.test(text)
+  const quote = EMPTY_QUOTE_LINE_RE.test(text)
   if (!item && !quote) return null
-  const mark = line.from + /^[ \t]*/.exec(line.text)![0].length
-  for (let cur: SyntaxNode | null = syntaxTree(state).resolveInner(mark, 1); cur !== null; cur = cur.parent) {
+  const anchor = line.from + text.replace(/[ \t]+$/u, '').length - 1
+  for (let cur: SyntaxNode | null = syntaxTree(state).resolveInner(anchor, 1); cur !== null; cur = cur.parent) {
     if (cur.name === 'FencedCode') return null
     if (item && cur.name === 'ListItem') return 'item'
     if (quote && cur.name === 'Blockquote') return 'quote'
@@ -77,23 +96,29 @@ function emptyMarkupExit(state: EditorState, pos: number): 'item' | 'quote' | nu
 }
 
 /**
- * Shift+Enter's list/quote continuation dispatch (#46), in priority order:
- * an empty list-item or quote line deletes its markup and exits (paths a/b —
- * the caret returns to the line start, no newline is inserted); list and
- * quote rows continue through lezer's markup-continuation command (path c —
- * same indent, next marker, ordered numbers advance by the written source
- * number); inside a fence that command declines itself (non-markdown
- * context) so the generic indented newline keeps the status quo (path d);
- * everywhere else it declines too and the bare newline remains (path e).
+ * Shift+Enter's newline dispatch (#46; empty-row role settled on the fifth
+ * round), in priority order: an empty list-item or quote row — the marker
+ * and its space, nothing else — exits in place and opens the next line (the
+ * row's markup goes, a line break takes its place and the caret rests on the
+ * new line; the emptied row stays as markdown's paragraph separator); a
+ * separator-less marker row (`-`, `1.`) is not a row yet, so it takes the
+ * plain newline (the continuation command would delete its markup); a
+ * non-empty list or quote row continues through lezer's markup-continuation
+ * command (same indent, next marker, ordered numbers advance by the written
+ * source number); inside a fence that command declines itself (non-markdown
+ * context) so the generic indented newline keeps the status quo; everywhere
+ * else it declines too and the bare newline remains.
  */
 function shiftEnterCommand(view: EditorView): boolean {
   const { state } = view
   const range = state.selection.main
-  if (range.empty && emptyMarkupExit(state, range.head) !== null) {
+  const row = range.empty ? markupRowKind(state, range.head) : null
+  if (row === 'bare') return insertNewlineAndIndent(view)
+  if (row !== null) {
     const line = state.doc.lineAt(range.head)
     view.dispatch({
-      changes: { from: line.from, to: line.to },
-      selection: { anchor: line.from },
+      changes: { from: line.from, to: line.to, insert: state.lineBreak },
+      selection: { anchor: line.from + state.lineBreak.length },
       userEvent: 'input',
     })
     return true
@@ -103,22 +128,33 @@ function shiftEnterCommand(view: EditorView): boolean {
 }
 
 /**
- * Shift+Enter's list/quote continuation dispatch (#46), in priority order:
- * an empty list-item or quote line deletes its markup and exits (paths a/b —
- * the caret returns to the line start, no newline is inserted); list and
- * quote rows continue through lezer's markup-continuation command (path c —
- * same indent, next marker, ordered numbers advance by the written source
- * number); inside a fence that command declines itself (non-markdown
- * context) so the generic indented newline keeps the status quo (path d);
- * everywhere else it declines too and the bare newline remains (path e).
- * Tab carries no editor binding (maintainer decision on the alpha.18
- * feedback: no indent key, single-level lists only — the browser's own
- * focus move applies everywhere).
+ * Backspace on an empty list-item or quote row (fifth-round decision): the
+ * row's content — marker and its space — goes in place, no line break is
+ * inserted, and the caret rests at the line start; opening the next line is
+ * Shift+Enter's job. Separator-less rows and everything else decline,
+ * leaving the key to lang-markdown's `deleteMarkupBackward` (the mainstream
+ * markup-backward semantics).
  */
+function eraseEmptyMarkup(view: EditorView): boolean {
+  const { state } = view
+  const range = state.selection.main
+  if (!range.empty) return false
+  const line = state.doc.lineAt(range.head)
+  const row = markupRowKind(state, range.head)
+  if (row !== 'item' && row !== 'quote') return false
+  if (!WHOLE_LINE_MARKUP_RE.test(line.text)) return false
+  view.dispatch({
+    changes: { from: line.from, to: line.to },
+    selection: { anchor: line.from },
+    userEvent: 'delete.backward',
+  })
+  return true
+}
 
-/** Render-mode-only keymap: the list continuation dispatch. Mounted through
- * the render compartment so source mode keeps its plain newline; Tab has no
- * editor binding in either mode (the browser's focus move applies). */
+/** Render-mode-only keymap: the Shift+Enter newline dispatch. Mounted
+ * through the render compartment so source mode keeps its plain newline;
+ * Tab has no editor binding in either mode (the browser's focus move
+ * applies). */
 const renderListKeymap = keymap.of([
   { key: 'Shift-Enter', run: shiftEnterCommand },
 ])
@@ -386,6 +422,13 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       // the alpha.16 regression. After the menu pick, precedence no longer
       // matters: the menu answers first, everywhere else Enter sends.
       { key: 'Enter', run: enterCommand(options.onSubmit) },
+      // Backspace cancels an empty list-item or quote row in place (fourth
+      // feedback round) — same precedence reason as Enter above:
+      // lang-markdown binds Backspace to deleteMarkupBackward at Prec.high,
+      // which would claim the key first and leave trailing whitespace behind
+      // on a second item's row. Non-empty rows decline here and stay with
+      // that command's mainstream markup-backward semantics.
+      { key: 'Backspace', run: eraseEmptyMarkup },
     ])),
     // The render-mode list keys (#46) sit ahead of the send/newline base so
     // the continuation dispatch replaces the plain Shift+Enter newline and
