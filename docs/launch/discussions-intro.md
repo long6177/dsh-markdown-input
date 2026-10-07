@@ -3,7 +3,8 @@
   渠道：deepseek-ai/deepseek-harness 官方 Discussions
   分类：Show Your Plugins!
   发布序：repo topics 设好 → awesome 收录 PR 提交 → 本帖
-  发布前：把下方「素材位」注释替换为实际 hero GIF / 截图（素材票产出后接入）
+  发布前：把下方 [asset slot] 整行替换为这行 Markdown 图片（素材已入库，GitHub 会内联渲染）：
+  ![live rendering in the composer](https://raw.githubusercontent.com/long6177/dsh-markdown-input/main/docs/assets/hero-markdown-composer.gif)
 -->
 
 ## 标题
@@ -20,7 +21,8 @@ Hi all,
 
 I built a community plugin that layers Markdown onto the DSH Web UI composer and chat history, and I'd like to share it here.
 
-[asset slot: hero GIF — insert the recorded demo before posting]
+[asset slot: hero GIF — replace this whole line before posting with:
+![live rendering in the composer](https://raw.githubusercontent.com/long6177/dsh-markdown-input/main/docs/assets/hero-markdown-composer.gif)]
 
 ### What it does
 

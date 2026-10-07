@@ -1,7 +1,8 @@
 <!--
   状态：草稿，待维护者审阅，未发布（#37 人工节点）。
   渠道：V2EX「分享创造」节点
-  发布前：把「素材位」注释替换为实际 GIF（素材票产出后接入）
+  发布前：把「素材位」注释替换为 GIF 链接（V2EX 不托管图片，贴仓库托管地址即可）：
+  https://raw.githubusercontent.com/long6177/dsh-markdown-input/main/docs/assets/hero-markdown-composer.gif
 -->
 
 ## 标题
@@ -23,7 +24,7 @@
 - 发出去的消息也按 Markdown 渲染（排队插话的 steering 消息同样生效），@提及和技能引用的 chip 都保留；
 - 打的字实时镜像进宿主草稿，刷新页面不丢。
 
-<!-- 素材位：hero GIF（输入 → 渲染 → 发送 → 气泡），素材票产出后插入 -->
+<!-- 素材位：此处贴仓库托管链接（V2EX 不托管图片）https://raw.githubusercontent.com/long6177/dsh-markdown-input/main/docs/assets/hero-markdown-composer.gif —— 输入 → 渲染 → 发送 → 气泡 -->
 
 实现方式上有点故事。输入区不是普通文本框：宿主用自带的编辑器、编辑器实例不外借，周边的槽位又改不了文本面本身，所以插件走了官方的 `conversation.composer` 选举链、低优先级「接管」输入区——自带 CodeMirror 6 当编辑面，审批、提问这类内置面板优先级更高、照常抢占，被隐藏的原生控件（工具行、目标栏、统计这些）在卡片里逐个重建。中间还绕过一次「只画不改」的弯路：浏览器的绘制 API 撑不起真加粗，最后回到接管路线、外加两条保险（渲染出错自动退回原生输入区；每个部件先探测再启用，缺谁降谁、不影响打字）。为什么这么选、每条事实的上游出处，都写在仓库的 docs/design/why-takeover.md 里。
 
