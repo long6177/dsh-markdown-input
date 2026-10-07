@@ -103,6 +103,16 @@ describe('judgeSignals', () => {
     expect(judgeSignals({ ...base, suite: { provided: false, results: {} } }).verdict).toBe('risk')
   })
 
+  it('the suite risk reason names the failing entries and only claims 未跑 for actually-absent keys', () => {
+    const base = { signals: makeSignals(), watchlist: WATCHLIST, pinned: PINNED, targetVersion: '0.2.1-alpha.1' }
+    // All four provided, two failing: the passing entries ran too — no 未跑 claim.
+    const allProvided = judgeSignals({ ...base, suite: parseSuiteResult('typecheck:pass;build:pass;test-published:fail;test-fidelity:fail') })
+    expect(allProvided.reasons).toContain('套件未全绿：test-published=fail、test-fidelity=fail')
+    // Partially provided: the absent keys are named explicitly.
+    const partial = judgeSignals({ ...base, suite: parseSuiteResult('typecheck:pass;test-fidelity:fail') })
+    expect(partial.reasons).toContain('套件未全绿：test-fidelity=fail（未跑：build、test-published）')
+  })
+
   it('zero hits + accepting peer + all-green provided suite = clean', () => {
     const judgment = judgeSignals({
       signals: makeSignals(),

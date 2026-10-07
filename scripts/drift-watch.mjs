@@ -416,7 +416,8 @@ export function judgeSignals({ signals, watchlist, pinned, targetVersion, suite 
     reasons.push('套件结果未提供（该版本未跑全套测试）')
   } else if (!allPass) {
     const bad = SUITE_KEYS.filter(key => suite.results[key] && suite.results[key] !== 'pass')
-    reasons.push(`套件未全绿：${bad.map(key => `${key}=${suite.results[key]}`).join('、')}${bad.length < SUITE_KEYS.length ? '（其余未跑）' : ''}`)
+    const missing = SUITE_KEYS.filter(key => !suite.results[key])
+    reasons.push(`套件未全绿：${bad.map(key => `${key}=${suite.results[key]}`).join('、')}${missing.length > 0 ? `（未跑：${missing.join('、')}）` : ''}`)
   }
 
   const verdict = reasons.length === 0 ? 'clean' : 'risk'
