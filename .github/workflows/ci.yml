@@ -1,0 +1,109 @@
+# PR checks for dsh-markdown-input: typecheck → build → test, run on the
+# published-package dev face plus the pinned upstream tag's SOURCE face
+# (ADR-0007 / scripts/dev-harness.mjs).
+#
+# Why this shape: `typecheck`/`build` and most tests run against the exact npm
+# releases matching upstream tag `dsh-v0.2.0-rc.2` (minute-level install — no
+# upstream clone/install/build, no committed lib/), while the two source-face
+# suites — the #42 slot-reachability proof and the locale fidelity contract —
+# run FOR REAL against a sparse checkout of that same tag. The checkout is
+# placed INSIDE the workspace so bare imports inside it resolve upward into
+# this project's node_modules (it gets none of its own), and `DSH_HARNESS_DIR`
+# points `resolveDevHarness` at it — nothing skips. The published tarballs
+# carry the upstream build products, so the upstream `lib/` build is not
+# needed either.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref (a force-push to a PR branch, a
+# quick series of main pushes) instead of queueing stale checks.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The single check this workflow reports; the branch protection on `main`
+  # requires this status context (docs/agents + issue #58).
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Absolute path of the sparse upstream checkout below; consumed by
+      # scripts/dev-harness.mjs (`resolveDevHarness`). Inside the workspace on
+      # purpose: the checkout has no node_modules of its own, so bare imports
+      # in its sources resolve from this project's — the published packages
+      # the devDependencies pin.
+      DSH_HARNESS_DIR: ${{ github.workspace }}/.upstream/deepseek-harness
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Use Node 24 (upstream requires ^22.19.0 || >=24)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable corepack (pnpm version comes from packageManager)
+        run: corepack enable
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+      - name: Sparse-checkout the upstream source face @ dsh-v0.2.0-rc.2
+        # Nine cone-mode paths, split by role:
+        # - ui-renderer / locale / ui-conversation — the runtime source face
+        #   the source-face suites import (renderer `scoped-slots.tsx` and
+        #   its closure, the two upstream `en` dictionaries).
+        # - ui-slots / store / invariants / cordis / cosmokit / schemastery —
+        #   the tsconfig reference closure of `packages/client/ui-renderer`:
+        #   vite's transform parses the nearest tsconfig of the checkout files
+        #   and follows its `references` transitively, so every referenced
+        #   tsconfig must EXIST or the transform crashes (drill-verified).
+        #   Their sources stay inert here — published mode imports these
+        #   packages from node_modules, the checkout only satisfies the graph.
+        run: |
+          git clone --filter=blob:none --depth 1 --branch dsh-v0.2.0-rc.2 --sparse \
+            https://github.com/deepseek-ai/deepseek-harness.git "$DSH_HARNESS_DIR"
+          git -C "$DSH_HARNESS_DIR" sparse-checkout set \
+            packages/client/ui-renderer \
+            packages/client/locale \
+            packages/client/ui-conversation \
+            packages/client/ui-slots \
+            packages/client/store \
+            packages/runtime-diagnostics/invariants \
+            vendor/cordis \
+            vendor/cosmokit \
+            vendor/schemastery
+
+      - name: Install dependencies (published packages, frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Before test on purpose: lib/client.js must exist or the
+      # bundle-contract suite degrades to skipIf.
+      - name: Build (tsc + tsdown)
+        run: pnpm build
+
+      - name: Test (resolved face first, then the suite)
+        run: |
+          node scripts/dev-harness.mjs status
+          set -o pipefail
+          pnpm test 2>&1 | tee "$RUNNER_TEMP/vitest.log"
+          # Guard "no unexpected skips": on this face every suite must RUN —
+          # the source-face ones included (that is what the checkout is for).
+          # Any count in the vitest summary's skipped columns fails the step,
+          # so a lost checkout cannot look green with 4 quiet skips.
+          if grep -E 'Test Files.*skipped|Tests.*skipped' "$RUNNER_TEMP/vitest.log"; then
+            echo '::error::The CI test face must not skip suites — check the sparse upstream checkout step above.'
+            exit 1
+          fi
