@@ -50,8 +50,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      # Sparse upstream checkout of the TARGET version (same nine cone-mode
-      # paths as ci.yml); consumed by scripts/dev-harness.mjs.
+      # Sparse upstream checkout of the TARGET version (the ci.yml cone plus
+      # the four paths the fidelity face needs, see the checkout step below);
+      # consumed by scripts/dev-harness.mjs.
       DSH_HARNESS_DIR: ${{ github.workspace }}/.upstream/deepseek-harness
     steps:
       - name: Check out this repository
@@ -86,12 +87,21 @@ jobs:
           VERSION="${{ steps.detect.outputs.version }}"
           git clone --filter=blob:none --depth 1 --branch "dsh-v$VERSION" --sparse \
             https://github.com/deepseek-ai/deepseek-harness.git "$DSH_HARNESS_DIR"
+          # The fidelity face aliases all six client packages to the checkout's
+          # src/ trees (scripts/dev-harness.mjs HARNESS_CLIENT_PACKAGES), and
+          # ui-primitives' tsconfig references the two util packages — verified
+          # against 0.2.1-alpha.1: omitting any of these makes every face test
+          # fail at import/transform time (environment, not drift).
           git -C "$DSH_HARNESS_DIR" sparse-checkout set \
             packages/client/ui-renderer \
             packages/client/locale \
             packages/client/ui-conversation \
+            packages/client/ui-primitives \
+            packages/client/ui-chat \
             packages/client/ui-slots \
             packages/client/store \
+            packages/util/code-language \
+            packages/util/workspace-path \
             packages/runtime-diagnostics/invariants \
             vendor/cordis \
             vendor/cosmokit \
