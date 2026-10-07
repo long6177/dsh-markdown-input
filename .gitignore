@@ -1,3 +1,13 @@
 node_modules/
 lib/
 *.log
+
+# Local agent/tool directories and working drafts — kept on disk, never committed.
+.agents/
+.claude/
+.codebuddy/
+.zcode/
+.playwright-mcp/
+skills-lock.json
+outputs/
+.upstream/

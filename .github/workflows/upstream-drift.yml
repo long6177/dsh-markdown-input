@@ -1,0 +1,154 @@
+# Upstream drift watch (issue #59): daily probe of upstream deepseek-harness
+# signals, a full-suite run against any new version, and one issue per version.
+#
+# Shape: the same mechanics as ci.yml — the plugin's own suite runs against the
+# NEW version's published npm packages plus a sparse checkout of that
+# version's source face (DSH_HARNESS_DIR) — with the version/ref parameterized.
+# All judgment lives in scripts/drift-watch.mjs (unit-tested in
+# tests/drift-*.test.ts); this workflow only schedules, supplies the network
+# signals, runs the suite, and hands the results back to the script, which
+# opens at most ONE issue per version (title-match dedup, labels
+# `upstream-drift` + `needs-triage`). It never modifies code and never closes
+# issues; triage priority is the maintainer's call.
+#
+# NOTE: `schedule` only fires once this workflow exists on the DEFAULT branch —
+# while it lives on a feature branch, `workflow_dispatch` is the way to run it.
+name: Upstream drift watch
+
+on:
+  schedule:
+    # Daily at 22:37 UTC (~06:37 Beijing) — off-peak, an arbitrary minute away
+    # from the top of the hour where scheduled jobs queue hardest.
+    - cron: '37 22 * * *'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Upstream version to judge (e.g. 0.2.1-alpha.1). Empty = auto-detect the newest version newer than the pinned base.'
+        required: false
+        type: string
+      dry_run:
+        description: 'Judge and print, but do not create the issue.'
+        required: false
+        type: boolean
+        default: false
+
+# Issues need write; everything else is read-only. No code changes are ever
+# pushed from this workflow.
+permissions:
+  contents: read
+  issues: write
+
+# A scheduled run and a manual dispatch may overlap; the last report wins the
+# dedup check anyway, so never cancel a run mid-verification.
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: drift-watch
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      # Sparse upstream checkout of the TARGET version (the shared
+      # SPARSE_CHECKOUT_PATHS face both workflows consume, see the checkout
+      # step below); consumed by scripts/dev-harness.mjs.
+      DSH_HARNESS_DIR: ${{ github.workspace }}/.upstream/deepseek-harness
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+
+      - name: Use Node 24 (upstream requires ^22.19.0 || >=24)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable corepack (pnpm version comes from packageManager)
+        run: corepack enable
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
+
+      - name: Collect signals, pick the target version
+        id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/drift-watch.mjs check --json ${{ inputs.version && format('--version {0}', inputs.version) || '' }} \
+            | tee "$GITHUB_WORKSPACE/drift.json"
+          VERSION="$(jq -r '.targetVersion // ""' "$GITHUB_WORKSPACE/drift.json")"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ -z "$VERSION" ]; then
+            echo "### Drift watch: no upstream version newer than the pinned base — nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Sparse-checkout the upstream source face @ the target ref
+        if: steps.detect.outputs.version != ''
+        run: |
+          VERSION="${{ steps.detect.outputs.version }}"
+          git clone --filter=blob:none --depth 1 --branch "dsh-v$VERSION" --sparse \
+            https://github.com/deepseek-ai/deepseek-harness.git "$DSH_HARNESS_DIR"
+          # One shared face for both workflows, printed by
+          # `node scripts/dev-harness.mjs sparse-paths`
+          # (SPARSE_CHECKOUT_PATHS): every fidelity-alias client package dir
+          # (the fidelity face aliases all six to the checkout's src/ trees)
+          # plus the tsconfig reference closure — verified against
+          # 0.2.1-alpha.1: omitting any of these makes every face test fail
+          # at import/transform time (environment, not drift).
+          # Assignment (not inline $()) so a failed `node` aborts this step
+          # under the runner's `bash -e` instead of feeding git an empty list.
+          FACE="$(node scripts/dev-harness.mjs sparse-paths)"
+          git -C "$DSH_HARNESS_DIR" sparse-checkout set $FACE
+
+      - name: Install dependencies (published packages, frozen lockfile)
+        if: steps.detect.outputs.version != ''
+        run: pnpm install --frozen-lockfile
+
+      - name: Re-pin the suite to the target version's published packages
+        if: steps.detect.outputs.version != ''
+        # CI-only workspace change: package.json here is throwaway, the repo's
+        # pins stay as committed. Cordis rides its versioned dist-tag.
+        run: |
+          VERSION="${{ steps.detect.outputs.version }}"
+          SPECS="$(jq -r '.packages[] | . + "@" + "'"$VERSION"'"' "$GITHUB_WORKSPACE/drift.json" | tr '\n' ' ')"
+          SPECS="$SPECS @deepseek-ai/cordis@$(jq -r '.cordisDistTag' "$GITHUB_WORKSPACE/drift.json")"
+          echo "overriding: $SPECS"
+          if pnpm add -D $SPECS; then
+            echo "SUITE_PIN=pass" >> "$GITHUB_ENV"
+          else
+            echo "SUITE_PIN=fail" >> "$GITHUB_ENV"
+          fi
+
+      - name: Suite — typecheck
+        if: steps.detect.outputs.version != '' && env.SUITE_PIN == 'pass'
+        run: |
+          if pnpm typecheck; then echo "SUITE_TYPECHECK=pass" >> "$GITHUB_ENV"
+          else echo "SUITE_TYPECHECK=fail" >> "$GITHUB_ENV"; fi
+
+      - name: Suite — build
+        if: steps.detect.outputs.version != '' && env.SUITE_PIN == 'pass'
+        run: |
+          if pnpm build; then echo "SUITE_BUILD=pass" >> "$GITHUB_ENV"
+          else echo "SUITE_BUILD=fail" >> "$GITHUB_ENV"; fi
+
+      - name: Suite — test (published face, target packages)
+        if: steps.detect.outputs.version != '' && env.SUITE_PIN == 'pass'
+        run: |
+          if pnpm test; then echo "SUITE_TEST_PUBLISHED=pass" >> "$GITHUB_ENV"
+          else echo "SUITE_TEST_PUBLISHED=fail" >> "$GITHUB_ENV"; fi
+
+      - name: Suite — test (fidelity face, target ref source)
+        if: steps.detect.outputs.version != '' && env.SUITE_PIN == 'pass'
+        run: |
+          if DSH_FIDELITY=1 node scripts/dev-harness.mjs test; then echo "SUITE_TEST_FIDELITY=pass" >> "$GITHUB_ENV"
+          else echo "SUITE_TEST_FIDELITY=fail" >> "$GITHUB_ENV"; fi
+
+      - name: Judge and report (one issue per version, deduped by title)
+        if: steps.detect.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.detect.outputs.version }}"
+          RESULT="typecheck:${SUITE_TYPECHECK:-skip};build:${SUITE_BUILD:-skip};test-published:${SUITE_TEST_PUBLISHED:-skip};test-fidelity:${SUITE_TEST_FIDELITY:-skip}"
+          node scripts/drift-watch.mjs check --version "$VERSION" --suite-result "$RESULT" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            ${{ inputs.dry_run && '--dry-run' || '--create' }}

@@ -192,7 +192,21 @@ finish() {
 # lands in outputs/ and the link: install path is stable.
 cd "$(dirname "$0")/.."
 
-REPO_WIN='D:\csdiy\AIcode\dsh-markdown-input'
+# Repo root, derived from this script's location (see cd above). The link:
+# install wants the Windows form, so convert via cygpath when available and
+# fall back to rewriting a Git Bash (/d/…) or WSL (/mnt/d/…) drive mount.
+REPO_UNIX="$(pwd)"
+REPO_WIN=""; REPO_FWD=""
+if command -v cygpath >/dev/null 2>&1; then
+  REPO_WIN="$(cygpath -w "$REPO_UNIX")"
+  REPO_FWD="$(cygpath -m "$REPO_UNIX")"
+elif [[ "$REPO_UNIX" =~ ^/(mnt/)?([A-Za-z])/(.*)$ ]]; then
+  _drive="$(printf '%s' "${BASH_REMATCH[2]}" | tr '[:lower:]' '[:upper:]')"
+  REPO_FWD="${_drive}:/${BASH_REMATCH[3]}"
+  REPO_WIN="$(printf '%s' "$REPO_FWD" | tr '/' '\\')"
+fi
+REPO_WIN="${REPO_WIN:-$REPO_UNIX}"
+REPO_FWD="${REPO_FWD:-$REPO_WIN}"
 REPORT="outputs/retest-$(date +%Y%m%d-%H%M).md"
 # Closing comment lands on issue #1 (v1 spec) by default; a focused retest
 # targets its own ticket, e.g. ISSUE_NO=3 bash scripts/retest-wizard.sh
@@ -250,7 +264,7 @@ stage "构建与安装"
 say "目标：让一个真实 dsh web 实例加载本插件。"
 step "构建产物（lib/ 已存在时可跳过）：cd \"$REPO_WIN\" 然后 pnpm build"
 step "本地 link 安装：dsh plugin --profile web add link:\"$REPO_WIN\""
-note "  （若 dsh 不认 Windows 路径形式，改试 link:D:/csdiy/AIcode/dsh-markdown-input，以 dsh 报错提示为准）"
+note "  （若 dsh 不认 Windows 路径形式，改试 link:$REPO_FWD，以 dsh 报错提示为准）"
 step "启动：dsh web  （浏览器打开 http://127.0.0.1:3080）"
 open_url "http://127.0.0.1:3080"
 say "验收：聊天输入区被插件接管 —— 出现「渲染」按钮和等宽编辑面。"

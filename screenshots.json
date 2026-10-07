@@ -1,0 +1,22 @@
+[
+  {
+    "title": "Live-rendering Markdown composer",
+    "description": "Type Markdown in the takeover composer — bold, lists, headings and code blocks render while you type, with syntax markers folding away once the cursor leaves the line.",
+    "src": "docs/assets/hero-markdown-composer.gif"
+  },
+  {
+    "title": "Render mode vs source mode",
+    "description": "The same message in render mode (markers folded, real styles) and source mode (every marker visible). One toggle switches between them.",
+    "src": "docs/assets/render-vs-source.png"
+  },
+  {
+    "title": "Rich-text paste conversion",
+    "description": "Pasting rich text from a webpage converts the clipboard text/html to clean Markdown at the caret.",
+    "src": "docs/assets/paste-conversion.png"
+  },
+  {
+    "title": "Markdown-rendered user messages",
+    "description": "Sent user messages render as Markdown — headings, lists and syntax-highlighted code blocks — instead of a wall of plain text.",
+    "src": "docs/assets/bubble-markdown.png"
+  }
+]

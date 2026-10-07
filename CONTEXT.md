@@ -119,3 +119,19 @@ _Avoid_: 上下文进度条（形态是环，且面板是主体）
 **会话统计（Stats pills）**:
 接管卡 dock 行内量表之前自渲染的原生 StatsPills（#43，原生是 `conversation.composer.dock` 槽位的 order-0 occupant（`ui-chat/src/client/apply.ts:284-288`），槽位同样只由隐藏的 InputBar 挂载——接管期间不可见，与量表同一结构性缺口，故与量表同位重建且保持原生先于量表的次序）：计数 pill 读 `sessionStats` 投影显示回合/步数与解码速度（tok/s），用量 pill 读 `tokenUsage` 投影显示四桶合计（未缓存输入 + 缓存读 + 缓存写 + 输出）与缓存命中百分比（部分命中永不进位到 100）；detailed/compact 形态读 `ui-chat` 设置节（`configForms` 服务，缺席回落原生默认 detailed）；detailed 模式两 pill 是按钮，点击经互斥槽位展开锚定其上方的会话统计 / Token 用量对话框（Escape、点外、再点同 pill 关闭；对话框面板复用量表的定位/关闭设施），无任何计时数据时计数 pill 降为静态 span（对话框将无行可显），用量对话框标题右侧恒显精确分组总量；compact 模式保持纯读数无按钮；无步数且无 token 整件隐藏，两 pill 各自独立降级，词典走宿主 `chat` 命名空间只读 bind、插件 locales 备同值兜底。
 _Avoid_: 性能设置（宿主 `performanceUsage` 是展示形态设置，pill 是读数不是设置入口）
+
+**保真模式（Fidelity mode）**:
+开发依赖模型的可选姿态（ADR-0007）：把上游依赖指回本地 `deepseek-harness` 检出的源码面（`DSH_HARNESS_DIR`，默认 `../deepseek-harness`），让测试跑在与真实宿主同源的源码与构建产物上；发布前真机重测与漂移监视走此模式，日常开发与 CI 默认走发布包（安装分钟级）。
+_Avoid_: 开发模式（过泛——日常开发走的正是发布包）、源码模式（已被编辑器占义：语法标记不做折叠）
+
+**漂移监视（Drift watch）**:
+每日自动探测上游四路信号（npm 版本与 dist-tag、上游 Release/Tag、白名单路径提交、官方契约文档提交）的仓库工作流；命中新版本即以该版本跑全套测试与 semver 检查，并开一张 `upstream-drift` 票（一版一票、按版本幂等去重），标题前缀 `[drift:clean]` / `[drift:risk]` 只是机械判定。工作流只出票：不改代码、不自动关票。
+_Avoid_: 依赖升级（不做自动升级）、CI（CI 管 PR 门禁，监视管上游变化）
+
+**实测矩阵（Tested matrix）**:
+对外兼容声明的形态：以「上游版本 × 真机重测日期 × 结果」列出真实跑过的组合，替代范围断言；未验证的版本显式标注未验证。
+_Avoid_: 兼容性声明（笼统，易读成 semver 承诺）、支持列表（暗示全部可用）
+
+**上游愿望清单（Upstream wishlist）**:
+写给上游的一组接口期望（视图层复用、原生座位从接管者渲染、正式接管契约与一致性套件、插件脚手架、preview 期契约稳定性），每条附「为什么这对插件作者重要」；对外以官方 Discussions Ideas 帖独立发布供社区 upvote，不含诉求式批评。
+_Avoid_: 需求列表（暗示向官方提要求）、路线图（那是我们自己的计划）

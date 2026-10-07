@@ -2,7 +2,7 @@
 
 > 依据：[ADR-0005](../adr/0005-composer-revival.md)（复活决定与硬化约束）。
 > 共识来源：2026-10-02/03 需求拷问（六问全部定案，见 §2）。
-> 跟踪票：[#18](https://github.com/long6177/dsh-markdown-input/issues/18)。三弹层机制规格（file:line 级）见本地工作笔记 `outputs/native-input-popups-spec.md`。
+> 跟踪票：[#18](https://github.com/long6177/dsh-markdown-input/issues/18)。三弹层机制规格（file:line 级）见 [native-surfaces-rebuild](../design/native-surfaces-rebuild.md)。
 
 ## 1. 背景与决策链
 
@@ -25,7 +25,7 @@
 
 1. **submit 走命令路由**：`inputActions.submit()` 的提交事务经会话 InputTriggerController 裁决（`facade.ts:5-6`）——从接管卡提交 `/compact`、`/goal …` 等命令行文本会被路由执行，不会当普通消息发给模型。alpha.4 的 goal/plan 菜单项 = 插入与原生同款的本地化 claim token 文本，Enter 提交即正确路由。
 2. **chip = 纯文本之上的装饰**：草稿文本即线格式；`scanTextRefs` 对 `@` 与 `/` 触发按热词典精确命中打装饰（`decorations.ts:46-70`），`/技能` 也是 chip。alpha.4 纯文本透传即可保证正确性（提交、草稿镜像、宿主重扫描全链路不坏）。
-3. **三弹层规格**：宿主视图组件一律不导出（须自绘或 vendor），数据层全部可达——命令目录 `remote.commands.list/execute`、权限 `permissions` 投影 + `live.command('/permission <preset>')`、模型 `ctx.modelDirectories` 目录服务。视觉/键盘/locale 全规格见 `outputs/native-input-popups-spec.md`。
+3. **三弹层规格**：宿主视图组件一律不导出（须自绘或 vendor），数据层全部可达——命令目录 `remote.commands.list/execute`、权限 `permissions` 投影 + `live.command('/permission <preset>')`、模型 `ctx.modelDirectories` 目录服务。视觉/键盘/locale 全规格见 [native-surfaces-rebuild](../design/native-surfaces-rebuild.md)。
 4. **v1 面件可整段恢复**：v1 源码完整存在于 `c4daae1^`，恢复后按 rc.2 适配。
 5. **硬化硬指标**：alpha.0 整端崩溃的教训 → error boundary + 逐面能力探测是复活的先决条件（ADR-0005），不是可选项。
 

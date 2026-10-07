@@ -1,0 +1,136 @@
+{
+  "comment": "上游漂移监视白名单（票 #59）。paths 中每一条都会用 GitHub API `commits?path=` 逐条探测（不需要克隆上游）；kind 与 faces 供判定与开票时归类。行号锚点对应上游 tag dsh-v0.2.0-rc.2（commit 639ed01），会随上游前进自然漂移，仅作定位辅助。",
+  "upstreamRepo": "deepseek-ai/deepseek-harness",
+  "contractDocs": [
+    "docs/subsystems/slots.md",
+    "packages/client/ui-conversation/README.md"
+  ],
+  "paths": [
+    {
+      "path": "packages/client/ui-conversation/src/client/contract/slots.ts",
+      "kind": "slot",
+      "reason": "槽位键契约定义：conversation.composer(:187)、conversation.composer.dock(:199) 等全部键的类型代数——键增删或 owner props 变化直接影响接管注册的类型面",
+      "faces": ["composer-takeover", "dock-rows"]
+    },
+    {
+      "path": "packages/client/ui-conversation/src/client/apply.ts",
+      "kind": "slot",
+      "reason": "内置槽注册表：conversation.composer(:315)、conversation.composer.dock(:432)——链序/优先级/scope 变化会改变接管的生效条件",
+      "faces": ["composer-takeover", "dock-rows"]
+    },
+    {
+      "path": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
+      "kind": "slot",
+      "reason": "宿主 composer 结构与 conversation.composer.dock 的唯一挂载点(:501)——dock 行的挂载条件（variant/sessionId 判断）变化会让接管行错位或消失",
+      "faces": ["composer-takeover", "dock-rows"]
+    },
+    {
+      "path": "packages/client/ui-conversation/src/client/skeleton/ConversationContent.tsx",
+      "kind": "slot",
+      "reason": "conversation.composer 槽的渲染位置(:173)——渲染点移动影响接管卡片在会话骨架中的落位",
+      "faces": ["composer-takeover"]
+    },
+    {
+      "path": "packages/client/ui-chat/src/client/contract/slots.ts",
+      "kind": "slot",
+      "reason": "conversation.chat.node keyed 槽（user/steering 键，:290 起）——键集与 keyProps 变化直接影响用户消息 Markdown 化与 steering 气泡的座位替换",
+      "faces": ["user-markdown", "steering-bubbles"]
+    },
+    {
+      "path": "packages/client/ui-renderer/src/client/scoped-slots.tsx",
+      "kind": "slot",
+      "reason": "渲染器 createSlotRenderer 的源码面——本仓可达性测试的 import 目标（@dsh-harness 虚拟模块），结构变化先在 CI 保真面暴露",
+      "faces": ["all"]
+    },
+    {
+      "path": "packages/client/ui-conversation/src/client/contract/input.ts",
+      "kind": "slot",
+      "reason": "输入/提交契约类型（useInput/inputActions 的数据面）——提交管线与附件选择类型变化影响接管编辑面的提交路径",
+      "faces": ["composer-takeover"]
+    },
+    {
+      "path": "packages/api/remotes/src/client/index.ts",
+      "kind": "remote",
+      "reason": "remote 命名空间根组装(:182 起)：goals/agentPresets/commands/permissionPresets/fileReferences/skills 等——命名空间增删或更名让对应面探测失败并降级",
+      "faces": ["remote-verbs", "capability-probes"]
+    },
+    {
+      "path": "packages/api/remotes/src/remote-events.ts",
+      "kind": "event",
+      "reason": "监听中的五个事件定义：goal/activation-changed、permission-presets/catalog-changed、commands/change、agent-preset/selected、connection/reset",
+      "faces": ["event-listeners"]
+    },
+    {
+      "path": "packages/llm/token-meter/src/projection.ts",
+      "kind": "projection",
+      "reason": "contextPressure/contextBreakdown 投影定义——字段/分档变化直接影响上下文量表的取数",
+      "faces": ["context-meter"]
+    },
+    {
+      "path": "packages/llm/token-meter/src/usage-projection.ts",
+      "kind": "projection",
+      "reason": "tokenUsage 投影定义——用量字段变化影响上下文占用的细分展示",
+      "faces": ["context-meter"]
+    },
+    {
+      "path": "packages/session/session-stats/src/index.ts",
+      "kind": "projection",
+      "reason": "sessionStats 投影定义——统计口径变化影响会话统计的数值与标签",
+      "faces": ["stats-pills"]
+    },
+    {
+      "path": "packages/client/ui-theme/src/styles/base.css",
+      "kind": "css",
+      "reason": "--dsw-radius-sm/md/lg/panel 等基础 token(:17-21)——接管卡片/菜单的圆角对齐锚点",
+      "faces": ["css-tokens"]
+    },
+    {
+      "path": "packages/client/ui-theme/src/styles/design-platform.css",
+      "kind": "css",
+      "reason": "菜单/间距 alias（.dsw-design-platform 域）——别名 token 更名或删项会让引用它的接管样式落到 fallback",
+      "faces": ["css-tokens"]
+    },
+    {
+      "path": "packages/client/ui-theme/src/styles/gradient-shadow-text.css",
+      "kind": "css",
+      "reason": "--dsw-menu-backdrop-filter(:20)、--dsw-elevation-prominent(:36)——菜单与悬浮卡的材质 token",
+      "faces": ["css-tokens"]
+    },
+    {
+      "path": "packages/client/ui-theme/src/styles/focus.css",
+      "kind": "css",
+      "reason": "focus ring token（--dsw-focus-ring-width 等）与 pointer 态抑制规则——编辑面焦点样式的对齐锚点",
+      "faces": ["css-tokens", "capability-probes"]
+    },
+    {
+      "path": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
+      "kind": "css",
+      "reason": "宿主类 .dock(:13,22)——dock 行布局与 :empty 折叠规则的 CSS 对齐锚点",
+      "faces": ["dock-rows", "css-tokens"]
+    },
+    {
+      "path": "packages/client/ui-primitives/src/index.ts",
+      "kind": "capability",
+      "reason": "primitives 符号面（MarkdownText/JsonBlock/Tooltip/projectUserText/writeClipboard/…）——能力探测的宿主侧符号表，符号增删改变降级判定",
+      "faces": ["capability-probes", "chat-seats"]
+    },
+    {
+      "path": "docs/subsystems/slots.md",
+      "kind": "contract-doc",
+      "reason": "官方槽位契约文档——契约承诺变化（新键、注册规则、selector 语义）是漂移的前导信号",
+      "faces": ["all"]
+    },
+    {
+      "path": "packages/client/ui-conversation/README.md",
+      "kind": "contract-doc",
+      "reason": "官方接管/注册契约文档（SessionInputShell 与注册示例 :96-139）——链式接管与 selector 约束的权威描述",
+      "faces": ["composer-takeover", "all"]
+    },
+    {
+      "path": "packages/client/locale/src/locales/en.ts",
+      "kind": "locale",
+      "reason": "宿主 en 词典源——本仓入库快照（tests/host-locale/）的对照物；键集变化需要重生成快照（scripts/dev-harness.mjs snapshot）",
+      "faces": ["locale-dicts"]
+    }
+  ]
+}

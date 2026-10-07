@@ -1,0 +1,14 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions about dsh itself
+    url: https://github.com/deepseek-ai/deepseek-harness/discussions/categories/q-a
+    about: Ask in the upstream Q&A — this repository has no Discussions of its own.
+  - name: Ideas for the upstream core
+    url: https://github.com/deepseek-ai/deepseek-harness/discussions/categories/ideas
+    about: Propose or upvote DeepSeek Harness features — upvotes feed the team's prioritization.
+  - name: Show Your Plugins!
+    url: https://github.com/deepseek-ai/deepseek-harness/discussions/categories/show-your-plugins
+    about: The official place to show off something you have built for dsh.
+  - name: DeepSeek Harness Discord
+    url: https://discord.gg/4MrtZUhpxg
+    about: Official community chat.
