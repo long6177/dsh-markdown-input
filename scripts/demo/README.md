@@ -89,6 +89,8 @@ rm -rf "$DSH_HOME/sessions" "$DSH_HOME"/home/storages/session_projcache 2>/dev/n
 
 ## screenshots.json
 
-The repo-root [`screenshots.json`](../../screenshots.json) lists the same
-artifacts for awesome-list style consumption (paths relative to the repo
-root). Keep it in sync with `docs/assets/` when re-recording.
+The repo-root [`screenshots.json`](../../screenshots.json) declares the same
+artifacts to the awesome-list storefronts: a flat array of 1–8 image paths,
+relative to that file (so they stay valid when the repo moves). Keep it in
+sync with `docs/assets/` when re-recording — a renamed asset breaks here
+visibly, which is the point of declaring paths instead of absolute URLs.
