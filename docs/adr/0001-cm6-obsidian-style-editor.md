@@ -2,7 +2,7 @@
 
 > **状态：现行（自 [ADR-0005](0005-composer-revival.md) 起恢复）。** 曾被 [ADR-0003](0003-native-composer-paint-layer.md) 短暂取代；输入区渲染重新由接管卡内的 CM6 编辑器承担。
 
-用户最初以 ChatGPT 桌面端输入框为参照，但调查证实（`outputs/research-chatgpt-desktop-input.md`）：ChatGPT 的标记折叠路线在其自身用户群引发强烈反弹——数学/代码场景大量误伤（openai/codex#33586：斜体主题粘贴的代码被污染为 `int *readPointer*();`）、转义无效、无关闭开关。dsh 的受众以开发者为主，该风险不可接受。我们决定：输入区接管组件内嵌自带打包的 CodeMirror 6（`@codemirror/lang-markdown` + 自定义折叠装饰），光标所在行保留语法标记、移开后折叠（Obsidian Live Preview 式），并提供「渲染模式 / 源码模式」开关——源码模式恰是 ChatGPT 用户反复请求而不可得的能力。
+用户最初以 ChatGPT 桌面端输入框为参照，但调查证实（[prior-art](../design/prior-art.md)）：ChatGPT 的标记折叠路线在其自身用户群引发强烈反弹——数学/代码场景大量误伤（openai/codex#33586：斜体主题粘贴的代码被污染为 `int *readPointer*();`）、转义无效、无关闭开关。dsh 的受众以开发者为主，该风险不可接受。我们决定：输入区接管组件内嵌自带打包的 CodeMirror 6（`@codemirror/lang-markdown` + 自定义折叠装饰），光标所在行保留语法标记、移开后折叠（Obsidian Live Preview 式），并提供「渲染模式 / 源码模式」开关——源码模式恰是 ChatGPT 用户反复请求而不可得的能力。
 
 ## Considered Options
 

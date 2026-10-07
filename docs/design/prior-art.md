@@ -1,7 +1,8 @@
 # 调研：ChatGPT 桌面应用消息输入框（Composer）对 Markdown 的处理行为
 
-- 调研日期：2026-09-06
-- 用途：为开源聊天 UI 插件（dsh-markdown-input）的输入框 Markdown 设计做参考
+- 调研日期：2026-09-06；来源与结论于当日核对原文
+- 作者：dsh-markdown-input 维护者
+- 用途：为 dsh-markdown-input 的输入区 Markdown 设计做主流产品对照。本仓库据此放弃「标记折叠」路线、选择 CodeMirror 6 的「标记保留 + 折叠」实时渲染（见 [ADR-0001](../adr/0001-cm6-obsidian-style-editor.md)）；上游 dsh 的输入区技术面见 [extension-points](extension-points.md)
 - 来源原则：只采信一手来源（OpenAI 帮助中心 help.openai.com、OpenAI 官方发布说明、openai/codex 官方 GitHub 仓库、OpenAI 官方开发者社区 community.openai.com），二手来源（Reddit、快捷键速查表等）仅用于佐证并单独标注。所有引用均为 2026-09-06 访问到的原文，关键句保留英文原文以避免翻译失真。
 
 ## 0. 时间线与来源等级速览
@@ -137,7 +138,7 @@
 
 ## 8. 对插件设计的直接启示（从上述事实推导）
 
-1. ChatGPT 的路线是"input-rule 即时折叠 + 富文本节点 + 发送时序列化回 Markdown"，代价是数学/代码场景大量误伤（`*`、`_`、```），且目前不可关闭——社区已出现强烈的 plain-text composer 诉求（1390698、1390024、1389665 三帖叠加）。**提供"可关闭 / source mode / paste as plain text（Ctrl+Shift+V）"是一个已被 ChatGPT 用户群体验证过的刚需**。
+1. ChatGPT 的路线是"input-rule 即时折叠 + 富文本节点 + 发送时序列化回 Markdown"，代价是数学/代码场景大量误伤（`*`、`_`、```），且目前不可关闭——社区已出现强烈的 plain-text composer 诉求（1390698、1390024、1389665 三帖叠加）。**提供"可关闭 / source mode / paste as plain text（Ctrl+Shift+V）"是一个已被 ChatGPT 用户群体验证过的刚需**——本插件的[渲染模式 / 源码模式开关](../../CONTEXT.md)即由此设立。
 2. 转义是 ChatGPT 没做好的点（`\*` 无效）；插件若做实时渲染必须支持转义，否则重蹈 1390024 的覆辙。
 3. 粘贴是重灾区：富文本（text/html）默认转换样式、大粘贴转附件、IDE 代码被污染。ChatGPT 的"超过阈值转附件 + Show in text field 回退"是值得借鉴的官方方案。
 4. 发送内容为 Markdown 源码、用户气泡按 Markdown 渲染、Enter/Shift+Enter 语义、草稿保存——这四点是 ChatGPT 已固化的用户预期，插件保持一致成本最低。
@@ -153,7 +154,7 @@
 - How to launch the Chat Bar（OpenAI Help Center）: https://help.openai.com/en/articles/9295241-how-to-launch-the-chat-bar
 - openai/codex issue #33586（OpenAI 官方 GitHub 仓库）: https://github.com/openai/codex/issues/33586
 
-官方社区（OpenAI Developer Community，用户发言、非员工，按任务约定作为官方论坛来源）：
+官方社区（OpenAI Developer Community，用户发言、非员工，作为官方论坛一手来源）：
 - Add markdown support to input bar（2023-02~2024-11，含 Community-Moderators 版主 VeitB 发言）: https://community.openai.com/t/add-markdown-support-to-input-bar/70242
 - Feature Request: Basic text formatting (bold and italic) in chat（2025-06）: https://community.openai.com/t/feature-request-basic-text-formatting-bold-and-italic-in-chat/1289717
 - Markdown in the chat window is completely breaking outgoing prompts…（2026-08）: https://community.openai.com/t/markdown-in-the-chat-window-is-completely-breaking-outgoing-prompts-and-making-gpt-completely-unusable-for-basic-tasks/1390024
@@ -164,3 +165,11 @@
 - Reddit r/ChatGPT "ChatGPT finally allows markdown formatting in users' prompts"（2026-08）: https://www.reddit.com/r/ChatGPT/comments/1vjjkit/ （经 https://reddit.sentinel-team.org 快照访问）
 - Coursera: ChatGPT Keyboard Shortcuts（2026-04）: https://www.coursera.org/articles/chatgpt-keyboard-shortcuts
 - AI-Toolbox: ChatGPT Keyboard Shortcuts（2026-01）: https://www.ai-toolbox.co/chatgpt-management-and-productivity/chatgpt-keyboard-shortcuts-guide
+
+---
+
+## 相关文档
+
+- 决策记录：[ADR-0001 输入区编辑器采用 CodeMirror 6](../adr/0001-cm6-obsidian-style-editor.md)（本文 §8 是它的直接依据）
+- 同级深文：[extension-points](extension-points.md)（上游 dsh 输入区扩展点全景） · [native-surfaces-rebuild](native-surfaces-rebuild.md)（工具行弹层重建规格）
+- 术语：[CONTEXT.md 词汇表](../../CONTEXT.md)（渲染模式、源码模式、标记折叠、干净 Markdown）
