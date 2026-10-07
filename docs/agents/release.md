@@ -4,7 +4,7 @@ Policy (remote feedback loop, maintainer-owned OTP, checklist ≤8) lives in [AD
 
 ## Sequence
 
-1. **Release commit.** Raise `version` in `package.json` along the `0.2.0-alpha.x` line, add the acceptance checklist `docs/release/<version>-checklist.md` (≤8 items; the previous checklist is the template, the retest main item on top), commit as `chore: release <version>, <one-line summary>`. Done when the commit carries both the bump and the checklist.
+1. **Release commit.** Raise `version` in `package.json` along the `0.2.0-alpha.x` line, add the acceptance checklist `docs/release/<version>-checklist.md` (≤8 items; the previous checklist is the template, the retest main item on top), commit as `chore: release <version>, <one-line summary>`. Done when the commit carries both the bump and the checklist. Every checklist is indexed at [docs/release/README.md](../release/README.md) — add the new row (version × date × one-line scope) in the same commit.
 2. **Build.** `npm run build`. `lib/` is gitignored, so the tarball packs the local build — a stale `lib/` ships a stale plugin. Done when the log ends `Build complete`.
 3. **Publish — both flags, every time:**
 

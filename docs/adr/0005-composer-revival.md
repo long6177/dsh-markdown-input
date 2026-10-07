@@ -18,7 +18,7 @@ v1 的真机缺陷（alpha.0 整端崩溃、重建面缺陷密集）以两条硬
 ## Consequences
 
 - 恢复 [ADR-0001](0001-cm6-obsidian-style-editor.md) 与 [ADR-0002](0002-composer-chain-takeover.md) 的全部后果：CM6 私有打包、键位语义自担、每个 dsh preview 版本重测重建面对齐。
-- 工具行与弹层视图全部自绘（宿主视图组件不导出），数据层走宿主公开服务面：命令目录 `remote.commands.list/execute`、权限 `permissions` 投影 + `live.command('/permission <preset>')`、模型 `ctx.modelDirectories` 目录服务；规格见 `outputs/native-input-popups-spec.md`。
+- 工具行与弹层视图全部自绘（宿主视图组件不导出），数据层走宿主公开服务面：命令目录 `remote.commands.list/execute`、权限 `permissions` 投影 + `live.command('/permission <preset>')`、模型 `ctx.modelDirectories` 目录服务；规格见 [native-surfaces-rebuild](../design/native-surfaces-rebuild.md)。
 - 绘制层引擎（#15）与 composer 侧 PasteDock 随接管失去宿主编辑器锚点而退役：粘贴转 Markdown 必须在 CM6 编辑器面内重实现（CM6 paste handler）。聊天消息投影（用户消息/steering Markdown 化）与输入区无关，保持不变。
 - chip 复用宿主文本协议（纯文本即线格式）：以 CM6 补全 + 装饰重建引用 chip，宿主 `setDraft`/`restoreDraft` 兼容面继续可用。
 - 词汇表：「接管」恢复为现行概念；「绘制层」退役。
