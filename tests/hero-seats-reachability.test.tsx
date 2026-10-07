@@ -17,24 +17,41 @@
  * dispatches the election. The composer then renders the REAL card, and the
  * row that appears is the end-to-end evidence.
  */
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import type { Context } from '@deepseek-ai/cordis'
+// The renderer types come from the package's published `./client` face (they
+// re-export the scoped-slots types); the VALUE comes from the checkout's
+// source through the `@dsh-harness/renderer-scoped-slots` virtual module
+// (resolved in vitest.config.ts, guarded below — ADR-0007).
 import type {
-  ScopedStandardSourceBinding, SlotRendererHost, SlotScopeAdapter, StandardSourceBinding, StoredEntry,
-} from '@deepseek-ai/dsh-client-ui-renderer/src/client/scoped-slots.tsx'
-// The renderer's SOURCE, not its built entry (see vitest.config.ts): the
-// published bundle is a host module-loader artifact whose uSES import would
-// load a second React.
-import { createSlotRenderer } from '@deepseek-ai/dsh-client-ui-renderer/src/client/scoped-slots.tsx'
-import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
-import { en as conversationEn } from '@deepseek-ai/dsh-client-ui-conversation/src/client/locales.ts'
+  ScopedStandardSourceBinding, SlotRenderer, SlotRendererHost, SlotScopeAdapter, StandardSourceBinding,
+} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import type { StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
+import { resolveDevHarness } from '../scripts/dev-harness.mjs'
+import { commonEn } from './host-locale/common-en.ts'
+import { conversationEn } from './host-locale/conversation-en.ts'
 import { MarkdownComposer, MARKDOWN_TAKEOVER } from '../src/client/MarkdownComposer.tsx'
 import { resetContextLocale, setContextLocale } from '../src/client/context-meter-face.ts'
 import { resetFaces } from '../src/client/face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { en as markdownInputEn } from '../src/client/locales.ts'
 import { resetWorkspaceVerbSource, setWorkspaceVerbSource } from '../src/client/workspace-verb.ts'
+
+/**
+ * The renderer source exists only in an upstream checkout (the npm tarball
+ * ships no `src/`), so this suite needs `DSH_HARNESS_DIR` (default
+ * `../deepseek-harness`). Without it the suite SKIPS — never silently: the
+ * resolved reason is printed once, here and in `node scripts/dev-harness.mjs`.
+ */
+const harness = resolveDevHarness()
+if (harness.unavailableReason !== undefined) {
+  console.warn(`[skip] hero-seats-reachability: ${harness.unavailableReason}`)
+}
+const describeWhenHarness = harness.unavailableReason === undefined ? describe : describe.skip
+
+/** Loaded in `beforeAll` from the checkout source; defined whenever the suite runs. */
+let createSlotRenderer: () => SlotRenderer
 
 const copy: Record<string, string> = { ...commonEn, ...conversationEn }
 
@@ -244,7 +261,14 @@ afterEach(() => {
   resetGoalFace()
 })
 
-describe('conversation.composer chain standard seats (#42 reachability)', () => {
+describeWhenHarness('conversation.composer chain standard seats (#42 reachability)', () => {
+  beforeAll(async () => {
+    // Literal specifier on purpose: a variable specifier is externalized by
+    // the vitest module runner and would bypass the vitest alias resolution.
+    const rendererSource = await import('@dsh-harness/renderer-scoped-slots') as { createSlotRenderer: () => SlotRenderer }
+    createSlotRenderer = rendererSource.createSlotRenderer
+  })
+
   it('delivers useWorkspaces, useSessions and useProjection to the chain entry', () => {
     const seats: ChainSeats[] = []
     installApplySeams()
