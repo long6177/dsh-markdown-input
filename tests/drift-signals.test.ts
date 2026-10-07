@@ -11,6 +11,7 @@ import {
   parseSuiteResult,
   pickTargetVersion,
   readPinnedFace,
+  toCommitSummary,
   urls,
 } from '../scripts/drift-watch.mjs'
 
@@ -131,7 +132,7 @@ describe('collectSignals', () => {
     const signals = await collectSignals({ watchlist: WATCHLIST, pinned: PINNED, fetchJson })
     const hit = signals.whitelist.pathCommits.find(pc => pc.entry.kind === 'slot')
     expect(hit?.commits).toHaveLength(1)
-    const summary = hit && hit.commits[0] && (await import('../scripts/drift-watch.mjs')).toCommitSummary(hit.commits[0])
+    const summary = hit && hit.commits[0] && toCommitSummary(hit.commits[0])
     expect(summary?.url).toBe('https://github.com/deepseek-ai/deepseek-harness/commit/e400349e3a000000000000000000000000000000')
     expect(summary?.date).toBe('2026-09-30T06:54:36Z')
     expect(summary?.message).toBe('feat(client): touch contract')

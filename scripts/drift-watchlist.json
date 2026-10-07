@@ -63,7 +63,7 @@
     {
       "path": "packages/llm/token-meter/src/projection.ts",
       "kind": "projection",
-      "reason": "contextPressure/contextBreakdown 投影定义——字段/分档变化直接影响上下文压力条的取数",
+      "reason": "contextPressure/contextBreakdown 投影定义——字段/分档变化直接影响上下文量表的取数",
       "faces": ["context-meter"]
     },
     {
@@ -75,7 +75,7 @@
     {
       "path": "packages/session/session-stats/src/index.ts",
       "kind": "projection",
-      "reason": "sessionStats 投影定义——统计口径变化影响统计药丸的数值与标签",
+      "reason": "sessionStats 投影定义——统计口径变化影响会话统计的数值与标签",
       "faces": ["stats-pills"]
     },
     {

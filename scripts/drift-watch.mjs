@@ -27,9 +27,13 @@
  *
  * - `node scripts/drift-watch.mjs check [--version <v>] [--dry-run] [--json]
  *   [--create] [--suite-result "typecheck:pass;build:pass;test-published:pass;
- *   test-fidelity:pass"] [--run-url <url>]` — collect live signals, judge,
- *   print; `--create` opens the issue via `gh` (deduped per version by title
- *   match), `--dry-run` prints title/body and never creates anything.
+ *   test-fidelity:pass"] [--run-url <url>] [--watchlist <path>]` — collect
+ *   live signals, judge, print; `--create` opens the issue via `gh` (deduped
+ *   per version by title match), `--dry-run` prints title/body and never
+ *   creates anything. `--watchlist` is a deliberate LOCAL escape hatch: judge
+ *   against a candidate or scratch whitelist file without touching the
+ *   committed one — the workflows always read the committed
+ *   `scripts/drift-watchlist.json` and never pass this flag.
  * - `node scripts/drift-watch.mjs help` — this text.
  *
  * The GitHub Actions workflow (`.github/workflows/upstream-drift.yml`) runs
@@ -343,6 +347,22 @@ export function pickTargetVersion({ signals, explicitVersion, log = () => {} }) 
 export const SUITE_KEYS = ['typecheck', 'build', 'test-published', 'test-fidelity']
 
 /**
+ * One classifier for the suite keys, shared by `judgeSignals` (the risk
+ * reason text) and `renderTitle` (the green count) so the two can never
+ * drift apart: only a provided `pass` key is green — a key that was not
+ * provided is `missing` (未跑) and never counts toward the green numerator.
+ * @param {Record<string, 'pass'|'fail'|'skip'>} results
+ * @returns {{ pass: string[], bad: string[], missing: string[] }}
+ */
+export function classifySuiteKeys(results) {
+  return {
+    pass: SUITE_KEYS.filter(key => results[key] === 'pass'),
+    bad: SUITE_KEYS.filter(key => results[key] && results[key] !== 'pass'),
+    missing: SUITE_KEYS.filter(key => !results[key]),
+  }
+}
+
+/**
  * Parse the `--suite-result "key:pass;build:fail"` argument into a normalized
  * suite map. Unknown keys throw; missing keys stay absent (→ "not provided").
  */
@@ -410,13 +430,11 @@ export function judgeSignals({ signals, watchlist, pinned, targetVersion, suite 
   if (!cordisCheck.tagPresent) {
     reasons.push(`cordis 缺少版本化 dist-tag ${cordisCheck.distTag}`)
   }
-  const suiteValues = Object.values(suite.results)
-  const allPass = suite.provided && SUITE_KEYS.every(key => suite.results[key] === 'pass')
+  const { pass, bad, missing } = classifySuiteKeys(suite.results)
+  const allPass = suite.provided && pass.length === SUITE_KEYS.length
   if (!suite.provided) {
     reasons.push('套件结果未提供（该版本未跑全套测试）')
   } else if (!allPass) {
-    const bad = SUITE_KEYS.filter(key => suite.results[key] && suite.results[key] !== 'pass')
-    const missing = SUITE_KEYS.filter(key => !suite.results[key])
     reasons.push(`套件未全绿：${bad.map(key => `${key}=${suite.results[key]}`).join('、')}${missing.length > 0 ? `（未跑：${missing.join('、')}）` : ''}`)
   }
 
@@ -450,8 +468,10 @@ export function renderTitle(judgment) {
   if (judgment.hits.length > 0) parts.push(`白名单 ${judgment.hits.length} 命中`)
   if (!judgment.suite.provided) parts.push('套件未跑')
   else if (!judgment.suite.allPass) {
-    const bad = SUITE_KEYS.filter(key => judgment.suite.results[key] && judgment.suite.results[key] !== 'pass')
-    parts.push(`套件 ${SUITE_KEYS.length - bad.length}/${SUITE_KEYS.length} 绿`)
+    // Numerator = actually-passing keys only; unrun keys are not green
+    // (same classification `judgeSignals` reasons over).
+    const { pass } = classifySuiteKeys(judgment.suite.results)
+    parts.push(`套件 ${pass.length}/${SUITE_KEYS.length} 绿`)
   } else parts.push('套件全绿')
   const suffix = parts.length > 0 ? ` — ${parts.join(' · ')}` : ''
   return `[drift:${judgment.verdict}] ${titleVersionToken(judgment.semver.version)}${suffix}`
@@ -474,11 +494,11 @@ export function findExistingIssue(issues, version) {
 
 const FACE_LABELS = {
   'composer-takeover': '输入区接管（conversation.composer 链式接管与编辑面）',
-  'dock-rows': 'composer.dock 行（context meter、接管工具行）',
+  'dock-rows': 'composer.dock 行（上下文量表、接管工具行）',
   'user-markdown': '用户消息 Markdown 化（chat.node user 键）',
   'steering-bubbles': '排队 steering 气泡（chat.node steering 键）',
-  'context-meter': '上下文压力/占用投影（contextPressure/breakdown/tokenUsage）',
-  'stats-pills': '会话统计药丸（sessionStats）',
+  'context-meter': '上下文量表取数投影（contextPressure/breakdown/tokenUsage）',
+  'stats-pills': '会话统计（Stats pills；sessionStats 投影）',
   'chat-seats': '消息座位替换（copy/clock chrome）',
   'remote-verbs': 'remote 命名空间调用（goals/commands/skills/…）',
   'event-listeners': '事件监听（5 个 catalog/change/reset 事件）',
@@ -510,7 +530,7 @@ export function renderChecklist(targetVersion) {
     '',
     '- [ ] 渲染模式折叠：`#` 标题折叠/恢复、`- [ ]` 任务项出现复选框',
     '- [ ] 源码/渲染切换，F5 后模式持久化',
-    '- [ ] 键位：Enter 发送、Shift+Enter 换行、``` 围栏内不发送、中文 IME 候选 Enter 不误发',
+    '- [ ] 键位：Enter 恒发送（围栏内也不发送）、Shift+Enter 换行、中文 IME 候选 Enter 不误发',
     '- [ ] 富文本粘贴转干净 Markdown；Ctrl+Shift+V 纯文本直贴',
     '',
     '### C. 附件与发送（retest 阶段 6–8）',
@@ -625,7 +645,7 @@ export function renderBody({ judgment, signals, targetVersion, runUrl }) {
 // ────────────────────────────────────────────────────────────────────────────
 
 /** Build the injected `fetchJson` used by the CLI: npm + GitHub REST with an optional token. */
-export function makeFetchJson({ token, log = () => {} } = {}) {
+function makeFetchJson({ token, log = () => {} } = {}) {
   return async function fetchJson(url) {
     const isGithub = url.startsWith('https://api.github.com/')
     const headers = { 'user-agent': 'dsh-markdown-input-drift-watch' }

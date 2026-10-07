@@ -7,6 +7,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DRIFT_LABELS,
+  SUITE_KEYS,
+  classifySuiteKeys,
   findExistingIssue,
   judgeSignals,
   parseSuiteResult,
@@ -64,6 +66,17 @@ function makeSignals({ hitPaths = [] as string[], cordisTagPresent = true } = {}
 }
 
 const GREEN_SUITE = parseSuiteResult('typecheck:pass;build:pass;test-published:pass;test-fidelity:pass')
+
+describe('classifySuiteKeys', () => {
+  it('classifies each key exactly once: pass / bad / missing', () => {
+    expect(classifySuiteKeys({ typecheck: 'pass', build: 'fail', 'test-published': 'skip' })).toEqual({
+      pass: ['typecheck'],
+      bad: ['build', 'test-published'],
+      missing: ['test-fidelity'],
+    })
+    expect(classifySuiteKeys({})).toEqual({ pass: [], bad: [], missing: SUITE_KEYS })
+  })
+})
 
 describe('judgeSignals', () => {
   it('THE #59 CASE: peer ^0.2.0-rc.2 rejecting 0.2.1-alpha.1 alone forces risk even with zero hits and a green suite', () => {
@@ -170,6 +183,20 @@ describe('renderTitle + per-version dedup', () => {
       suite: GREEN_SUITE,
     })
     expect(renderTitle(judgment)).toBe('[drift:clean] dsh 0.2.1-alpha.1 — 套件全绿')
+  })
+
+  it('partial suites count only actually-passing keys — unrun keys are never green', () => {
+    // Regression (review fix): the numerator used to be `4 - |provided-and-not-pass|`,
+    // which silently counted every unrun key as green.
+    // Only typecheck provided and failing: 0/4 green (was 3/4).
+    expect(renderTitle(judgeSignals({ ...base, suite: parseSuiteResult('typecheck:fail') })))
+      .toBe('[drift:risk] dsh 0.2.1-alpha.1 — peer 拒收 · 套件 0/4 绿')
+    // Only typecheck provided and passing: 1/4 green (was 4/4).
+    expect(renderTitle(judgeSignals({ ...base, suite: parseSuiteResult('typecheck:pass') })))
+      .toBe('[drift:risk] dsh 0.2.1-alpha.1 — peer 拒收 · 套件 1/4 绿')
+    // One pass + one fail, two unrun: 1/4 green (was 3/4).
+    expect(renderTitle(judgeSignals({ ...base, suite: parseSuiteResult('typecheck:pass;test-fidelity:fail') })))
+      .toBe('[drift:risk] dsh 0.2.1-alpha.1 — peer 拒收 · 套件 1/4 绿')
   })
 
   it('dedup regex matches its own title but not other versions (idempotency key)', () => {
