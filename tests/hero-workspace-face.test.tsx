@@ -10,8 +10,12 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
-import { en as conversationEn } from '@deepseek-ai/dsh-client-ui-conversation/src/client/locales.ts'
+// The host copy rides the committed locale snapshots (ADR-0007): the
+// published tarballs carry no `src/` and export no dictionaries. The
+// fidelity contract test (tests/host-locale-fidelity.test.ts) verifies them
+// against the upstream checkout whenever one is available.
+import { commonEn } from './host-locale/common-en.ts'
+import { conversationEn } from './host-locale/conversation-en.ts'
 import {
   MarkdownComposer, MARKDOWN_TAKEOVER,
   type MarkdownComposerProps,

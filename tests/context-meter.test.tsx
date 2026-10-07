@@ -21,8 +21,10 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
-import { en as commonEn } from '@deepseek-ai/dsh-client-locale/src/locales/en.ts'
-import { en as conversationEn } from '@deepseek-ai/dsh-client-ui-conversation/src/client/locales.ts'
+// The host copy rides the committed locale snapshots (ADR-0007): the
+// published tarballs carry no `src/` and export no dictionaries.
+import { commonEn } from './host-locale/common-en.ts'
+import { conversationEn } from './host-locale/conversation-en.ts'
 import { ContextMeterFace, type ContextMeterFaceProps } from '../src/client/ContextMeterFace.tsx'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import type { ContextBreakdownView, ContextPressureView } from '../src/client/context-occupancy.ts'
