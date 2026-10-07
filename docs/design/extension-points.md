@@ -87,7 +87,7 @@ dsh（DeepSeek Harness）的 Web UI 是一套可组合的插件架构：官方�
 
 - `conversation` 根 entry 声明 `conversation.composer`、`conversation.composer.bar`、`conversation.input.dock` 等：`packages/client/ui-conversation/src/client/apply.ts:315-317`
 - `conversation.composer.bar` entry（内置 InputBar）声明 `input.attachments/overlay/permission/left/plan/right/model/activity`、`composer.dock`：`apply.ts:421-432`
-- 渲染点：链在 `skeleton/ConversationContent.tsx:172-176`；`input.dock` 在 `ConversationContent.tsx:168`；各子 slot 在 `InputBar.tsx:383`（overlay）、386（attachments）、443（permission）、444（plan）、448（left）、454（right）、455（model）、458（activity）、501（composer.dock）
+- 渲染点：链在 `skeleton/ConversationContent.tsx:172-176`；`input.dock` 在 `ConversationContent.tsx:167`；各子 slot 在 `InputBar.tsx:383`（overlay）、386（attachments）、443（permission）、444（plan）、448（left）、454（right）、455（model）、458（activity）、501（composer.dock）
 
 ### 2.3 `conversation.composer` 选举链 [源码证实]
 
@@ -108,7 +108,7 @@ const composer = renderSlotChain(
 **控制的是「消息 / 聊天记录渲染」，与输入区无关。**
 
 - 接口：`packages/client/ui-conversation/src/client/contract/conversation.ts:196` 起 —— `kind` / `target?` / `match(event)`（恒等提取器，返回 `{id, role: 'start'|'update'} | null`）/ `start(context, match, reader)` / `update(context, match)` / `publication?` / `buildLocationData?` / `buildViewNode?`。
-- keyed Chat renderer：`conversation.chat.node` 是 `kind:'keyed'` slot，`keyProps` 按 `ChatNodeKind` 供给 `{ node }`（`packages/client/ui-chat/src/client/contract/slots.ts:285-297`）。注册渲染器 = `ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: '<ChatNodeKind>' }, Component))`。
+- keyed Chat renderer：`conversation.chat.node` 是 `kind:'keyed'` slot，`keyProps` 按 `ChatNodeKind` 供给 `{ node }`（`packages/client/ui-chat/src/client/contract/slots.ts:290-297`）。注册渲染器 = `ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({ name: 'conversation.chat.node', key: '<ChatNodeKind>' }, Component))`。
 - 内置 renderer 注册表：`packages/client/ui-chat/src/client/chat/register-node-renderers.ts`（`user` 31 行、`steering` 33 行、`assistant-step` 42 行，另有 `command`、`compaction`、`model-retry`、`turn-error` 等 kind）。
 - 事件来源：`ui-conversation` 把 Client 的 `SessionEventLikeEntry` 窗口（durable `session/event` 历史 + Client-only `assistant/live-chunk` 瞬态）喂给 assembler；**浏览器插件不直接监听 `session/event`，而是通过 Definition 间接消费**。[文档] `docs/subsystems/conversation.md:11`。
 - **`session/event` 的直接监听（宿主半）**：`ctx.on('session/event', (_session, event) => {...})`，官方 cookbook 示例 `docs/cookbook/extension-cookbook.md:79`；官方对照表（同文件 129 行）："Web Client Chat business node → register a `ConversationNodeDefinition` and `conversation.chat.node` keyed renderer"。
