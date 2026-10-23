@@ -82,15 +82,21 @@ function present(value: unknown): boolean {
 
 /**
  * Probe the primitives values the Markdown seat composes with — the Markdown
- * pipeline plus the copy/clock chrome (#33). A host build whose module table
- * dropped any of them disables the seat replacement wholesale: nothing
- * registers and the host's own renderers stay — the user sees the native
- * bubbles (with the native actions row), never a broken seat.
+ * pipeline, the vendored sent-text projection's two presentational pieces,
+ * and the copy/clock chrome (#33). Upstream 0.2.1-rc.2 removed the host
+ * `projectUserText` (reference recognition moved to the host data layer);
+ * probing it here would silently disable the whole user-message feature on
+ * rc.2 — the vendored projection (`user-text-projection.tsx`) needs only the
+ * public `UserTextRun` / `ReferenceChip` components. A host build whose
+ * module table dropped any probed value disables the seat replacement
+ * wholesale: nothing registers and the host's own renderers stay — the user
+ * sees the native bubbles (with the native actions row), never a broken seat.
  * @param surface - the primitives module namespace as the host table resolved it.
  */
 export function userMessageCapability(surface: {
   MarkdownText?: unknown
-  projectUserText?: unknown
+  UserTextRun?: unknown
+  ReferenceChip?: unknown
   FileTypeIcon?: unknown
   fileSizeText?: unknown
   JsonBlock?: unknown
@@ -106,7 +112,8 @@ export function userMessageCapability(surface: {
       && present(surface.Tooltip)
       && present(surface.IconCopyOutlineRegular)
       && present(surface.IconCheckOutlineRegular)
-      && typeof surface.projectUserText === 'function'
+      && present(surface.UserTextRun)
+      && present(surface.ReferenceChip)
       && typeof surface.fileSizeText === 'function'
       && typeof surface.writeClipboard === 'function',
     'primitives Markdown surface incomplete',

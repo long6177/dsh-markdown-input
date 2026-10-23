@@ -1,24 +1,36 @@
 /**
  * Markdown-rendered user messages: the `conversation.chat.node` `user` and
  * `steering` seat replacement. Composes the host baseline Markdown pipeline
- * (`MarkdownText`) with the host user-text projection (`projectUserText`) —
- * reference chips stay chips, the surrounding text renders as Markdown.
- * Known v1 trade-off: a chip inside a running paragraph splits that
- * paragraph into blocks around the chip; boundary chips (the common cases)
- * read seamlessly.
+ * (`MarkdownText`) with the vendored sent-text projection
+ * (`user-text-projection.tsx`) — reference chips stay chips, the surrounding
+ * text renders as Markdown. Known v1 trade-off: a chip inside a running
+ * paragraph splits that paragraph into blocks around the chip; boundary
+ * chips (the common cases) read seamlessly.
+ *
+ * Why a vendored projection instead of the host's `conversation.user.text`
+ * factory: upstream 0.2.1-rc.2 removed `projectUserText` and moved reference
+ * recognition into a host data-layer rule registry that, at rc.2, only knows
+ * session and whitespace rules — adopting the host pipeline would silently
+ * drop the `@file` / `/skill` inline chips. The vendored grammar (rc.0
+ * `projectUserText`) renders over the still-public `UserTextRun` /
+ * `ReferenceChip` primitives; retire it if the host's rules grow file/skill
+ * recognition.
  */
 import { Children, Fragment, isValidElement, memo, useMemo, type ReactNode } from 'react'
 import {
-  FileTypeIcon, fileSizeText, JsonBlock, MarkdownText, projectUserText,
+  FileTypeIcon, fileSizeText, JsonBlock, MarkdownText, ReferenceChip, UserTextRun,
   type MarkdownLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatNodeViewProps, ChatNodeOwnerProps } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type {
+  ChatNodeViewProps, UserContentAttachment, UserMessageNode,
+} from '@deepseek-ai/dsh-client-ui-chat/client'
 import { MessageActions } from './MessageActions.tsx'
 import { hardenSoftBreaks } from './user-markdown.ts'
+import { projectUserText } from './user-text-projection.tsx'
 import css from './UserMessage.module.css'
 
-/** The image payload shape the owner's renderer accepts, derived from it. */
-type ImageSourceList = Parameters<ChatNodeOwnerProps['renderMessageImages']>[0]['images']
+/** Raw image block of a user message, typed as the host's own fold does. */
+type UserImageBlock = Extract<UserMessageNode['content'][number], { type: 'image' }>
 
 /** Chat-node seats this renderer replaces; the host serves both with one view. */
 export type MarkdownSeatKind = 'user' | 'steering'
@@ -33,19 +45,21 @@ function markdownLabels(t: ChatNodeViewProps<MarkdownSeatKind>['t']): MarkdownLa
 
 /** Is this projected piece a reference chip (vs a plain text run)? */
 function isChip(piece: ReactNode): boolean {
-  return isValidElement(piece) && 'data-ref-chip' in piece.props
+  return isValidElement(piece) && piece.type === ReferenceChip
 }
 
-/** Plain-run text sits directly inside the projection's run spans. */
+/** Plain-run text sits directly inside the projection's run elements. */
 function runText(piece: ReactNode): string {
-  return isValidElement(piece) && typeof piece.props.children === 'string' ? piece.props.children : ''
+  return isValidElement(piece) && piece.type === UserTextRun && typeof piece.props.text === 'string'
+    ? piece.props.text
+    : ''
 }
 
 /**
  * Project the message text: chips inline, everything else through the host
- * Markdown pipeline. Chips come from the host projection unchanged; plain
- * runs merge back into Markdown documents per contiguous span. Both paths
- * render through `hardenSoftBreaks` so the lines the author typed stay
+ * Markdown pipeline. Chips come from the vendored projection unchanged;
+ * plain runs merge back into Markdown documents per contiguous span. Both
+ * paths render through `hardenSoftBreaks` so the lines the author typed stay
  * visible in the bubble (GFM would fold a continuation line into a space).
  */
 export function composeUserMarkdown(
@@ -93,18 +107,18 @@ interface ContentPart {
 /** Split content blocks into joined text, images, files, and the rest. */
 export function contentParts(content: readonly unknown[]): {
   text: string
-  images: readonly unknown[]
+  images: readonly UserImageBlock['attachment'][]
   files: readonly ContentPart[]
   rest: readonly unknown[]
 } {
   const texts: string[] = []
-  const images: unknown[] = []
+  const images: UserImageBlock['attachment'][] = []
   const files: ContentPart[] = []
   const rest: unknown[] = []
   for (const block of content) {
     const b = block as ContentPart
     if (b.type === 'text' && typeof b.text === 'string') texts.push(b.text)
-    else if (b.type === 'image') images.push(b.attachment)
+    else if (b.type === 'image' && b.attachment !== undefined) images.push((block as UserImageBlock).attachment)
     else if (b.type === 'file') files.push(b)
     else rest.push(block)
   }
@@ -118,7 +132,7 @@ export function contentParts(content: readonly unknown[]): {
  * @returns the right-aligned bubble with attachments, Markdown text, and chips.
  */
 export const MarkdownUserMessage = memo(function MarkdownUserMessage({
-  node, renderMessageImages, t,
+  node, loadImage, renderFactorySlot, t,
 }: ChatNodeViewProps<MarkdownSeatKind>) {
   const data = node.data
   const { text, images, files, rest } = contentParts(data.content)
@@ -132,7 +146,29 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
       <div className={css.stack}>
         {(images.length > 0 || files.length > 0) && (
           <div className={css.attachmentRow} data-message-attachments>
-            {images.length > 0 && renderMessageImages({ images: images as ImageSourceList, align: 'end' })}
+            {images.length > 0 && renderFactorySlot('conversation.chat.user.content', {
+              // Images-only, text-less payload: the text keeps rendering in
+              // this seat's Markdown bubble, the factory occurrence renders
+              // just the native attachment row and dispatches the shipped
+              // `conversation.chat.user.images` gallery (align 'end') with
+              // this seat's `loadImage`. A `conversation.chat.node` entry
+              // cannot dispatch that slot directly — the host's
+              // `conversation.chat.user.content` factory owns its child
+              // declaration, and chat-node renderers receive no `renderSlot`
+              // seat — so the factory occurrence is the one legal route back
+              // to the native gallery (mirrors ui-chat UserContent.tsx).
+              content: {
+                text: '',
+                extraBlocks: [],
+                attachments: images.map(attachment => ({
+                  type: 'image',
+                  image: { attachment },
+                })) satisfies readonly UserContentAttachment[],
+              },
+              loadImage,
+              facts: {},
+              interactive: true,
+            })}
             {files.map((file, index) => (
               <span key={index} className={css.fileCard} title={file.attachment?.name}>
                 <FileTypeIcon className={css.fileIcon} path={file.attachment?.name ?? ''} />
