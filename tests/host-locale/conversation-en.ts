@@ -4,7 +4,7 @@
  * assert against in published mode, where the npm tarball ships no `src/`.
  *
  * Mirrors: `packages/client/ui-conversation/src/client/locales.ts` in the upstream checkout (default tag:
- * `dsh-v0.2.0-rc.2`). Values are verified against the checkout by the
+ * `dsh-v0.2.1-rc.2`). Values are verified against the checkout by the
  * fidelity contract test (`tests/host-locale-fidelity.test.ts`) on every
  * run with the source available. Regenerate after a verified upstream
  * bump: `node scripts/dev-harness.mjs snapshot` (ADR-0007).
@@ -90,7 +90,7 @@ export const conversationEn: Record<string, string> = {
   "tool.title.createGoal": "Create goal",
   "tool.title.getGoal": "View goal",
   "tool.title.updateGoal": "Update goal",
-  "tool.preparing.content": "Preparing content {kilobytes}KB",
+  "tool.preparing.content": "{kilobytes}KB",
   "tool.title.createSchedule": "Create reminder",
   "tool.title.listSchedules": "List reminders",
   "tool.title.deleteSchedule": "Delete reminder",
@@ -309,9 +309,12 @@ export const conversationEn: Record<string, string> = {
   "row.preparing": "Preparing tool call",
   "row.failed": "Failed",
   "row.stopped": "Stopped",
+  "row.commandArguments": "Command arguments",
   "row.input": "IN",
   "row.output": "OUT",
   "row.inspect": "Inspect",
+  "row.imageSize": "{width}x{height}px, {bytes} bytes",
+  "row.imageSizeDownscaled": "{width}x{height}px (downscaled from {originalWidth}x{originalHeight}px), {bytes} bytes",
   "tool.title.search": "Search",
   "tool.title.read": "Read",
   "tool.title.bash": "Bash",
@@ -370,6 +373,7 @@ export const conversationEn: Record<string, string> = {
   "terminal.signal": "signal {signal}",
   "terminal.exitCode": "exit code {code}",
   "terminal.noExitCode": "no exit code",
+  "terminal.commandLine": "Command line {n}",
   "terminal.running": "Running",
   "terminal.failed": "Failed",
   "terminal.done": "Done",

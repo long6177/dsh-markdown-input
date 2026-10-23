@@ -5,7 +5,7 @@
  * Two test faces:
  *
  * - **Published mode** (default, zero config): the devDependencies are the
- *   exact npm releases matching upstream tag `dsh-v0.2.0-rc.2`; a plain
+ *   exact npm releases matching upstream tag `dsh-v0.2.1-rc.2`; a plain
  *   `pnpm install && pnpm test` works with no upstream checkout. The two
  *   locale-dictionary tests read the committed snapshots under
  *   `tests/host-locale/`, and the #42 reachability test runs only when an
@@ -82,7 +82,7 @@ export const HARNESS_CLIENT_PACKAGES = [
   { pkg: '@deepseek-ai/dsh-client-ui-chat', dir: 'packages/client/ui-chat', subpaths: { '/client': 'src/client/index.ts' } },
   { pkg: '@deepseek-ai/dsh-client-ui-conversation', dir: 'packages/client/ui-conversation', subpaths: { '/client': 'src/client/index.ts' } },
   { pkg: '@deepseek-ai/dsh-client-ui-primitives', dir: 'packages/client/ui-primitives', subpaths: {} },
-  { pkg: '@deepseek-ai/dsh-client-ui-renderer', dir: 'packages/client/ui-renderer', subpaths: { '/client': 'src/client/index.ts', '/invariant': 'src/invariant.ts' } },
+  { pkg: '@deepseek-ai/dsh-client-ui-renderer', dir: 'packages/client/ui-renderer', subpaths: { '/client': 'src/client/index.ts' } },
   { pkg: '@deepseek-ai/dsh-client-ui-slots', dir: 'packages/client/ui-slots', subpaths: {} },
 ]
 
@@ -99,7 +99,6 @@ export const HARNESS_CLIENT_PACKAGES = [
  */
 export const SPARSE_SUPPORT_PATHS = [
   'packages/client/store',
-  'packages/runtime-diagnostics/invariants',
   'packages/util/code-language',
   'packages/util/workspace-path',
   'vendor/cordis',
@@ -202,7 +201,7 @@ async function writeSnapshot(entry, harnessDir) {
     ` * assert against in published mode, where the npm tarball ships no \`src/\`.`,
     ` *`,
     ` * Mirrors: \`${entry.source}\` in the upstream checkout (default tag:`,
-    ` * \`dsh-v0.2.0-rc.2\`). Values are verified against the checkout by the`,
+    ` * \`dsh-v0.2.1-rc.2\`). Values are verified against the checkout by the`,
     ` * fidelity contract test (\`tests/host-locale-fidelity.test.ts\`) on every`,
     ` * run with the source available. Regenerate after a verified upstream`,
     ` * bump: \`node scripts/dev-harness.mjs snapshot\` (ADR-0007).`,
