@@ -3,7 +3,7 @@
 # (ADR-0007 / scripts/dev-harness.mjs).
 #
 # Why this shape: `typecheck`/`build` and most tests run against the exact npm
-# releases matching upstream tag `dsh-v0.2.0-rc.2` (minute-level install — no
+# releases matching upstream tag `dsh-v0.2.1-rc.2` (minute-level install — no
 # upstream clone/install/build, no committed lib/), while the two source-face
 # suites — the #42 slot-reachability proof and the locale fidelity contract —
 # run FOR REAL against a sparse checkout of that same tag. The checkout is
@@ -57,7 +57,7 @@ jobs:
         env:
           COREPACK_ENABLE_DOWNLOAD_PROMPT: '0'
 
-      - name: Sparse-checkout the upstream source face @ dsh-v0.2.0-rc.2
+      - name: Sparse-checkout the upstream source face @ dsh-v0.2.1-rc.2
         # One shared face for both workflows (this file and upstream-drift.yml),
         # printed by `node scripts/dev-harness.mjs sparse-paths`
         # (SPARSE_CHECKOUT_PATHS in scripts/dev-harness.mjs): every
@@ -69,7 +69,7 @@ jobs:
         # workflow's face; in published mode the extra dirs stay inert —
         # the published packages win, the checkout only satisfies the graph.
         run: |
-          git clone --filter=blob:none --depth 1 --branch dsh-v0.2.0-rc.2 --sparse \
+          git clone --filter=blob:none --depth 1 --branch dsh-v0.2.1-rc.2 --sparse \
             https://github.com/deepseek-ai/deepseek-harness.git "$DSH_HARNESS_DIR"
           # Assignment (not inline $()) so a failed `node` aborts this step
           # under the runner's `bash -e` instead of feeding git an empty list.

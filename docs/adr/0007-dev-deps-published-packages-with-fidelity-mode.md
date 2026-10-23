@@ -13,15 +13,15 @@
 ## Decision
 
 - **默认发布包模式**：devDependencies 用与上游 tag 对应的精确版本；干净环境 `pnpm install && pnpm test` 分钟级完成，不需要任何上游检出。版本对应规则见下。
-- **保真模式**：`DSH_FIDELITY=1`（或一条命令 `node scripts/dev-harness.mjs test`）+ `DSH_HARNESS_DIR`（默认 `../deepseek-harness`）。vitest 把六个 client 包（及其 `/client`、`/invariant` 子路径）alias 到 checkout 的 `src/` 树——整套测试跑在**源码面**上；react/react-dom 钉死在本仓副本，别名模块与被测组件共享一个 React。模式解析、别名表、CLI 都集中在 `scripts/dev-harness.mjs`（`resolveDevHarness` 同时被 vitest.config 与测试引用，#58/#59 直接复用：CI 把 `DSH_HARNESS_DIR` 指向仓内稀疏检出即可让可达性测试真跑；漂移监视按上游 ref 换检出目录，机制不硬编码任何版本/路径）。
+- **保真模式**：`DSH_FIDELITY=1`（或一条命令 `node scripts/dev-harness.mjs test`）+ `DSH_HARNESS_DIR`（默认 `../deepseek-harness`）。vitest 把六个 client 包（及其 `/client` 子路径）alias 到 checkout 的 `src/` 树——整套测试跑在**源码面**上；react/react-dom 钉死在本仓副本，别名模块与被测组件共享一个 React。模式解析、别名表、CLI 都集中在 `scripts/dev-harness.mjs`（`resolveDevHarness` 同时被 vitest.config 与测试引用，#58/#59 直接复用：CI 把 `DSH_HARNESS_DIR` 指向仓内稀疏检出即可让可达性测试真跑；漂移监视按上游 ref 换检出目录，机制不硬编码任何版本/路径）。
 - **可达性守卫**：`tests/hero-seats-reachability.test.tsx` 读 `DSH_HARNESS_DIR`；检出或 `packages/client/ui-renderer/src/client/scoped-slots.tsx` 缺失时**跳过并打印一行明确原因**（`[skip] hero-seats-reachability: …`），绝不静默。
-- **locale 词典快照**：`tests/host-locale/common-en.ts`、`tests/host-locale/conversation-en.ts` 入库（`0.2.0-rc.2` 的逐键快照，由 `node scripts/dev-harness.mjs snapshot` 从 checkout 生成）；两个 locale 测试读快照。保真契约测试 `tests/host-locale-fidelity.test.ts` 在检出可用时把快照与 checkout 源词典逐键比对（published 模式也会跑），保证快照不失真；检出缺失时跳过并打印原因。
+- **locale 词典快照**：`tests/host-locale/common-en.ts`、`tests/host-locale/conversation-en.ts` 入库（`0.2.1-rc.2` 的逐键快照，由 `node scripts/dev-harness.mjs snapshot` 从 checkout 生成）；两个 locale 测试读快照。保真契约测试 `tests/host-locale-fidelity.test.ts` 在检出可用时把快照与 checkout 源词典逐键比对（published 模式也会跑），保证快照不失真；检出缺失时跳过并打印原因。
 - **虚拟模块边界**：checkout 源文件一律通过 `@dsh-harness/*` 虚拟模块（vitest.config.ts alias 到 `DSH_HARNESS_DIR` 下的真实文件）访问；检出缺失时 alias 落到 `tests/harness-source-stub.ts`（执行即抛错）——import-analysis 必须能解析这些字面量动态 import，守卫才能以「跳过 + 原因」而不是「解析崩溃」降级。
 
 ## 版本对应规则
 
-- **六个 client 包 + 三个支撑包**（locale、ui-chat、ui-conversation、ui-primitives、ui-renderer、ui-slots；store、util-code-language、util-workspace-path）：精确 `0.2.0-rc.2`。上游按版本 lockstep 整套发布，npm dist-tag `next` 指向它（`latest` 多停在上一个产品线，不能作为对应依据）。
-- **`@deepseek-ai/cordis`**：精确 `4.0.4`。对应依据：上游 checkout 在 tag `dsh-v0.2.0-rc.2` 的 `vendor/cordis/package.json` 即 `4.0.4`。cordis 有 dsh 版本化 dist-tag（如 `dsh-0-2-1-alpha-1` → `4.0.5-alpha.1`），但**没有** `dsh-0-2-0-rc-2` tag，因此规则定为「随上游该 tag 的 vendor 版本」，不猜 dist-tag。
+- **六个 client 包 + 三个支撑包**（locale、ui-chat、ui-conversation、ui-primitives、ui-renderer、ui-slots；store、util-code-language、util-workspace-path）：精确 `0.2.1-rc.2`。上游按版本 lockstep 整套发布，npm dist-tag `next` 指向它（`latest` 多停在上一个产品线，不能作为对应依据）。
+- **`@deepseek-ai/cordis`**：精确 `4.0.5`。对应依据：上游 checkout 在 tag `dsh-v0.2.1-rc.2` 的 `vendor/cordis/package.json` 即 `4.0.5`（发布包自身 peer `~4.0.5` 同证）。cordis 只为部分 release 打 dsh 版本化 dist-tag（alpha 线有 `dsh-0-2-1-alpha-1` → `4.0.5-alpha.1`），**rc 线没有**（`dsh-0-2-0-rc-2`、`dsh-0-2-1-rc-2` 均缺失），因此规则定为「随上游该 tag 的 vendor 版本」，不猜 dist-tag；漂移监视的 cordis 解析走 tag 的 `vendor/cordis/package.json`，dist-tag 只作诊断注记（#71）。
 - **运行时缺口包**（事实 4 的约 23 个）：取上游该 tag 各包 `package.json` 的 devDependency 范围（`simple-icons` 上游钉死 `16.31.0`，照搬精确）；这是「上游构建产物运行时实际需要」的忠实记录，也是漂移监视的复核点之一。
 
 ## 对发布仪式与 CI 的影响

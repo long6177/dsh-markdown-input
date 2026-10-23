@@ -262,7 +262,8 @@ describe('client apply registration', () => {
 describe('userMessageCapability gate', () => {
   const full = {
     MarkdownText: () => null,
-    projectUserText: () => null,
+    UserTextRun: () => null,
+    ReferenceChip: () => null,
     FileTypeIcon: () => null,
     fileSizeText: () => '',
     JsonBlock: () => null,
@@ -278,7 +279,7 @@ describe('userMessageCapability gate', () => {
 
   it('disables when any probed value is missing', () => {
     for (const key of [
-      'MarkdownText', 'projectUserText', 'FileTypeIcon', 'fileSizeText', 'JsonBlock',
+      'MarkdownText', 'UserTextRun', 'ReferenceChip', 'FileTypeIcon', 'fileSizeText', 'JsonBlock',
       'Tooltip', 'writeClipboard', 'IconCopyOutlineRegular', 'IconCheckOutlineRegular',
     ] as const) {
       const { [key]: _, ...surface } = full
