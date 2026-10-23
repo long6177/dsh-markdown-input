@@ -239,8 +239,7 @@ export const urls = {
   // the upstream tag itself pins, independent of npm dist-tags (#71).
   vendorCordisPackage: version =>
     `https://raw.githubusercontent.com/${UPSTREAM_REPO}/dsh-v${version}/vendor/cordis/package.json`,
-  // Fallback transport when the raw host is unreachable: the contents API at
-  // the tag ref (base64 payload; the standard token headers already apply).
+  // Fallback transport: raw.githubusercontent.com is unreachable from this machine, so the contents API at the same ref serves the identical file base64-encoded (审查修复 #71: accepted deviation, kept deliberately).
   githubContents: (path, ref) =>
     `https://api.github.com/repos/${UPSTREAM_REPO}/contents/${path}?ref=${ref}`,
 }
@@ -472,6 +471,9 @@ export function judgeSignals({ signals, watchlist, pinned, targetVersion, suite,
   const cordisCheck = {
     pkg: CORDIS_PACKAGE,
     distTag: cordisTagFor(targetVersion),
+    // The mapped dist-tag version rides on the judgment so the body renderer
+    // never re-derives it from signals (审查修复 #71).
+    distTagVersion: cordisDistTagMapped,
     tagPresent: cordisDistTagMapped !== null,
     version: vendorVersion,
     source: 'vendor/cordis/package.json',
@@ -615,12 +617,14 @@ export function renderChecklist(targetVersion) {
 /**
  * The 版本信号 cordis line: the vendor resolution is the substance; the npm
  * versioned dist-tag, when it exists, stays as a diagnostic note (#71).
+ * Reads only the judgment — `judgeSignals` already stored the mapped
+ * dist-tag version on `cordis.distTagVersion` (审查修复 #71).
  */
-function renderCordisResolution(judgment, signals) {
+function renderCordisResolution(judgment) {
   if (judgment.cordis.version === null) {
     return `无法从上游 tag \`dsh-v${judgment.semver.version}\` 的 \`${judgment.cordis.source}\` 解析版本`
   }
-  const mapped = signals.npm.cordisDistTags?.[judgment.cordis.distTag] ?? null
+  const mapped = judgment.cordis.distTagVersion
   const tagNote = mapped !== null
     ? `（npm dist-tag \`${judgment.cordis.distTag}\` → \`${mapped}\`）`
     : '（npm 无版本化 dist-tag，属预期）'
@@ -650,7 +654,7 @@ export function renderBody({ judgment, signals, targetVersion, runUrl }) {
     .filter(([, tags]) => tags && Object.keys(tags).length > 0)
   const alphaSet = otherTags.filter(([, tags]) => tags.alpha).map(([pkg, tags]) => `${pkg.replace('@deepseek-ai/dsh-', '')}=\`${tags.alpha}\``)
   if (alphaSet.length > 0) lines.push(`- 锁步包 \`alpha\` tag：${alphaSet.join('、')}`)
-  lines.push(`- cordis：${renderCordisResolution(judgment, signals)}`)
+  lines.push(`- cordis：${renderCordisResolution(judgment)}`)
   const release = signals.github.releases.find(r => r.tag === ref)
   lines.push(`- GitHub Release/Tag：${release ? `[${release.tag}](${release.url})` : `tag [\`${ref}\`](${UPSTREAM_HTML}/releases/tag/${ref})`}${signals.github.newerTagVersions.length > 0 ? `（基线后的 tag 版本：${signals.github.newerTagVersions.join('、')}）` : ''}`)
   lines.push('')

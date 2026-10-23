@@ -171,6 +171,20 @@ describe('judgeSignals', () => {
     expect(judgment.reasons.some(r => r.includes('cordis'))).toBe(false)
   })
 
+  it('the mapped dist-tag version rides on judgment.cordis (the body renderer re-derives nothing)', () => {
+    // 审查修复: renderCordisResolution used to re-read signals.npm.cordisDistTags
+    // — judgeSignals already computed the mapping, so it now stores it.
+    const judgment = judgeSignals({
+      signals: makeSignals(),
+      watchlist: WATCHLIST,
+      pinned: PINNED,
+      targetVersion: '0.2.1-alpha.1',
+      suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
+    })
+    expect(judgment.cordis.distTagVersion).toBe('4.0.5-alpha.1')
+  })
+
   it('an unresolvable vendor/cordis package is its own risk reason', () => {
     const judgment = judgeSignals({
       signals: makeSignals(),
@@ -196,6 +210,7 @@ describe('judgeSignals', () => {
     expect(judgment.cordis).toEqual({
       pkg: '@deepseek-ai/cordis',
       distTag: 'dsh-0-2-1-rc-2',
+      distTagVersion: null,
       tagPresent: false,
       version: '4.0.5',
       source: 'vendor/cordis/package.json',
