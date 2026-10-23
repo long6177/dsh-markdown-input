@@ -251,7 +251,7 @@ const composer = renderSlotChain(
 ### 6.4 残留不确定性
 
 - 路径 B（影子替换 `conversation.composer.bar`）在仓库内无插件先例；"子 slot 渲染权不随影子替换转移"如今有文档背书（`slots.md:195`），但影子替换场景下的运行时行为未做专门验证。
-- 上游版本风险：`0.2.0-rc.2` 仍为 developer preview，slot 面虽类型化且自检工具齐全，但 key 集合与 `node.data` 形状可能增删。上游新版本的跟进以逐版真机重测收口（清单索引见 [docs/release/README.md](../release/README.md)），术语见 [CONTEXT.md 词汇表](../../CONTEXT.md)。
+- 上游版本风险：`0.2.1-rc.2` 仍为 developer preview，slot 面虽类型化且自检工具齐全，但 key 集合与 `node.data` 形状可能增删。上游新版本的跟进以逐版真机重测收口（清单索引见 [docs/release/README.md](../release/README.md)），术语见 [CONTEXT.md 词汇表](../../CONTEXT.md)。
 
 ---
 

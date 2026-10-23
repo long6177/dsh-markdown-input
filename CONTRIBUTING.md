@@ -21,14 +21,14 @@ pnpm typecheck
 pnpm test
 ```
 
-No upstream clone, install, or build is needed. The dev dependencies are the exact npm releases matching upstream tag `dsh-v0.2.0-rc.2` — the **published-packages model** described in [ADR-0007](docs/adr/0007-dev-deps-published-packages-with-fidelity-mode.md).
+No upstream clone, install, or build is needed. The dev dependencies are the exact npm releases matching upstream tag `dsh-v0.2.1-rc.2` — the **published-packages model** described in [ADR-0007](docs/adr/0007-dev-deps-published-packages-with-fidelity-mode.md).
 
 Two honest notes about skips, so nothing looks silently broken:
 
 - The `bundle-contract` suite asserts the **built** bundle and skips when `lib/` does not exist yet. Run `pnpm build` first if your change touches the bundle shape (CI always builds before testing).
 - Without an upstream source checkout, 4 more tests skip (slot reachability ×2, locale fidelity contract ×2), each printing a one-line `[skip] …` reason. That is the designed degradation of ADR-0007 — a skip is never silent. `node scripts/dev-harness.mjs status` always shows the resolved mode and which suites run.
 
-**Fidelity mode** — only needed for work that must run against the upstream SOURCE face (for example the slot-reachability proof): point `DSH_HARNESS_DIR` at a local [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) checkout pinned to tag `dsh-v0.2.0-rc.2` (the default location is `../deepseek-harness`), then run `node scripts/dev-harness.mjs test`. Mode resolution and the alias table live in `scripts/dev-harness.mjs`; the full story is in ADR-0007.
+**Fidelity mode** — only needed for work that must run against the upstream SOURCE face (for example the slot-reachability proof): point `DSH_HARNESS_DIR` at a local [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) checkout pinned to tag `dsh-v0.2.1-rc.2` (the default location is `../deepseek-harness`), then run `node scripts/dev-harness.mjs test`. Mode resolution and the alias table live in `scripts/dev-harness.mjs`; the full story is in ADR-0007.
 
 ## 2. What you can do without the dsh desktop app
 
