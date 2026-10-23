@@ -11,7 +11,11 @@
  * The four signal routes (handoff decision ledger, 漂移监视 row):
  * 1. npm — `@deepseek-ai/dsh` packument (versions + publish times + dist-tags)
  *    plus dist-tags for every other pinned `@deepseek-ai/*` package; cordis
- *    exposes a versioned `dsh-<ver>` dist-tag per release.
+ *    exposes a versioned `dsh-<ver>` dist-tag for SOME releases (absent for
+ *    e.g. rc tags — diagnostic only, see `resolveCordisVendor`).
+ * 1b. cordis version — resolved from the upstream tag's
+ *    `vendor/cordis/package.json` (ADR-0007: the tag's vendor checkout is the
+ *    pin's authority; dist-tags are not guessed).
  * 2. GitHub — upstream tags (`dsh-v<version>`) and releases.
  * 3. Whitelist paths — `commits?path=` per entry (no clone needed), since the
  *    pinned base release's publish time.
@@ -231,6 +235,13 @@ export const urls = {
       + `&since=${encodeURIComponent(sinceIso)}&per_page=${perPage}`,
   commitHtml: sha => `${UPSTREAM_HTML}/commit/${sha}`,
   blobHtml: (ref, path) => `${UPSTREAM_HTML}/blob/${ref}/${path}`,
+  // Raw fetch (no API token needed, no base64 round-trip): the cordis version
+  // the upstream tag itself pins, independent of npm dist-tags (#71).
+  vendorCordisPackage: version =>
+    `https://raw.githubusercontent.com/${UPSTREAM_REPO}/dsh-v${version}/vendor/cordis/package.json`,
+  // Fallback transport: raw.githubusercontent.com is unreachable from this machine, so the contents API at the same ref serves the identical file base64-encoded (审查修复 #71: accepted deviation, kept deliberately).
+  githubContents: (path, ref) =>
+    `https://api.github.com/repos/${UPSTREAM_REPO}/contents/${path}?ref=${ref}`,
 }
 
 /** Latest commit fields the whitelist hit list needs, from a REST commit object. */
@@ -344,6 +355,45 @@ export function pickTargetVersion({ signals, explicitVersion, log = () => {} }) 
 // Judgment + rendering (pure).
 // ────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Resolve the cordis version the target upstream tag itself pins, from its
+ * `vendor/cordis/package.json` (ADR-0007: follow the tag's vendor checkout,
+ * never guess dist-tags — the versioned npm dist-tag is absent for some
+ * releases, e.g. `0.2.1-rc.2`, which is expected, not a defect; #71).
+ * @param {object} options
+ * @param {string | null} options.targetVersion - picked target; no target, no fetch.
+ * @param {(url: string) => Promise<any>} options.fetchJson
+ * @returns {Promise<{ version: string, source: 'vendor/cordis/package.json' } | undefined>}
+ *   `undefined` when the tag has no such file or the payload is malformed —
+ *   `judgeSignals` turns that into its own risk reason.
+ */
+export async function resolveCordisVendor({ targetVersion, fetchJson }) {
+  if (!targetVersion) return undefined
+  const version = await vendorCordisVersionAt(targetVersion, fetchJson)
+  return typeof version === 'string'
+    ? { version, source: 'vendor/cordis/package.json' }
+    : undefined
+}
+
+/**
+ * Fetch the tag's vendor/cordis version: the raw transport first; when that
+ * host is unreachable (some networks/proxies), the GitHub contents API at the
+ * same ref serves the identical file base64-encoded.
+ */
+async function vendorCordisVersionAt(version, fetchJson) {
+  const raw = await fetchJson(urls.vendorCordisPackage(version)).catch(() => undefined)
+  if (typeof raw?.version === 'string') return raw.version
+  const contents = await fetchJson(urls.githubContents('vendor/cordis/package.json', `dsh-v${version}`))
+    .catch(() => undefined)
+  if (typeof contents?.content !== 'string') return undefined
+  try {
+    const pkg = JSON.parse(Buffer.from(contents.content, 'base64').toString('utf8'))
+    return typeof pkg?.version === 'string' ? pkg.version : undefined
+  } catch {
+    return undefined
+  }
+}
+
 export const SUITE_KEYS = ['typecheck', 'build', 'test-published', 'test-fidelity']
 
 /**
@@ -387,8 +437,11 @@ export function parseSuiteResult(text) {
  * @param {ReturnType<typeof readPinnedFace>} options.pinned
  * @param {string} options.targetVersion
  * @param {{ provided: boolean, results: Record<string, 'pass'|'fail'|'skip'> }} options.suite
+ * @param {{ version: string, source: string } | undefined} [options.cordisVendor]
+ *   `resolveCordisVendor`'s result for the target tag; absent = unresolvable,
+ *   which is its own risk reason (the suite pin would have nothing to ride).
  */
-export function judgeSignals({ signals, watchlist, pinned, targetVersion, suite }) {
+export function judgeSignals({ signals, watchlist, pinned, targetVersion, suite, cordisVendor }) {
   // Whitelist hits: entries with ≥1 commit since the base release time.
   const hits = signals.whitelist.pathCommits
     .filter(({ commits }) => commits.length > 0)
@@ -409,15 +462,21 @@ export function judgeSignals({ signals, watchlist, pinned, targetVersion, suite 
     version: targetVersion,
     accepts: rangeAccepts(pinned.peerRange, targetVersion),
   }
-  // cordis rides a versioned dist-tag per dsh version (ADR-0007); its peer
-  // range is `*` and pins nothing, so the mechanical check is tag presence
-  // and the mapped cordis version — no semver claim about a dsh version.
-  const cordisMapped = signals.npm.cordisDistTags?.[cordisTagFor(targetVersion)] ?? null
+  // cordis follows the upstream tag's `vendor/cordis` version (ADR-0007, #71);
+  // its peer range is `*` and pins nothing. The npm versioned dist-tag is a
+  // diagnostic only — absent for some releases (rc tags) by upstream's own
+  // publishing habit, so its presence never triggers a risk reason.
+  const vendorVersion = typeof cordisVendor?.version === 'string' ? cordisVendor.version : null
+  const cordisDistTagMapped = signals.npm.cordisDistTags?.[cordisTagFor(targetVersion)] ?? null
   const cordisCheck = {
     pkg: CORDIS_PACKAGE,
     distTag: cordisTagFor(targetVersion),
-    tagPresent: cordisMapped !== null,
-    version: cordisMapped,
+    // The mapped dist-tag version rides on the judgment so the body renderer
+    // never re-derives it from signals (审查修复 #71).
+    distTagVersion: cordisDistTagMapped,
+    tagPresent: cordisDistTagMapped !== null,
+    version: vendorVersion,
+    source: 'vendor/cordis/package.json',
   }
 
   const reasons = []
@@ -427,8 +486,8 @@ export function judgeSignals({ signals, watchlist, pinned, targetVersion, suite 
   if (!semverCheck.accepts) {
     reasons.push(`peer range ${semverCheck.range} 按 semver 拒收 ${targetVersion}（预发布同元组规则）`)
   }
-  if (!cordisCheck.tagPresent) {
-    reasons.push(`cordis 缺少版本化 dist-tag ${cordisCheck.distTag}`)
+  if (vendorVersion === null) {
+    reasons.push(`cordis 无法从上游 tag dsh-v${targetVersion} 的 vendor/cordis/package.json 解析版本`)
   }
   const { pass, bad, missing } = classifySuiteKeys(suite.results)
   const allPass = suite.provided && pass.length === SUITE_KEYS.length
@@ -556,8 +615,25 @@ export function renderChecklist(targetVersion) {
 }
 
 /**
+ * The 版本信号 cordis line: the vendor resolution is the substance; the npm
+ * versioned dist-tag, when it exists, stays as a diagnostic note (#71).
+ * Reads only the judgment — `judgeSignals` already stored the mapped
+ * dist-tag version on `cordis.distTagVersion` (审查修复 #71).
+ */
+function renderCordisResolution(judgment) {
+  if (judgment.cordis.version === null) {
+    return `无法从上游 tag \`dsh-v${judgment.semver.version}\` 的 \`${judgment.cordis.source}\` 解析版本`
+  }
+  const mapped = judgment.cordis.distTagVersion
+  const tagNote = mapped !== null
+    ? `（npm dist-tag \`${judgment.cordis.distTag}\` → \`${mapped}\`）`
+    : '（npm 无版本化 dist-tag，属预期）'
+  return `\`vendor/cordis\` @ tag \`dsh-v${judgment.semver.version}\` → \`${judgment.cordis.version}\`${tagNote}`
+}
+
+/**
  * The full issue body: judgment summary, signals, hit list with upstream
- * links, affected faces, suite results, semver verdict, checklist, repro.
+ * links, affected plugin faces, suite results, semver verdict, checklist, repro.
  */
 export function renderBody({ judgment, signals, targetVersion, runUrl }) {
   const ref = `dsh-v${targetVersion}`
@@ -578,7 +654,7 @@ export function renderBody({ judgment, signals, targetVersion, runUrl }) {
     .filter(([, tags]) => tags && Object.keys(tags).length > 0)
   const alphaSet = otherTags.filter(([, tags]) => tags.alpha).map(([pkg, tags]) => `${pkg.replace('@deepseek-ai/dsh-', '')}=\`${tags.alpha}\``)
   if (alphaSet.length > 0) lines.push(`- 锁步包 \`alpha\` tag：${alphaSet.join('、')}`)
-  lines.push(`- cordis dist-tag \`${judgment.cordis.distTag}\`：${judgment.cordis.tagPresent ? `存在 → \`${judgment.cordis.version}\`` : '**缺失**'}`)
+  lines.push(`- cordis：${renderCordisResolution(judgment)}`)
   const release = signals.github.releases.find(r => r.tag === ref)
   lines.push(`- GitHub Release/Tag：${release ? `[${release.tag}](${release.url})` : `tag [\`${ref}\`](${UPSTREAM_HTML}/releases/tag/${ref})`}${signals.github.newerTagVersions.length > 0 ? `（基线后的 tag 版本：${signals.github.newerTagVersions.join('、')}）` : ''}`)
   lines.push('')
@@ -586,7 +662,7 @@ export function renderBody({ judgment, signals, targetVersion, runUrl }) {
   lines.push('## semver 检查')
   lines.push('')
   lines.push(`- \`${judgment.semver.pkg}\`: peer range \`${judgment.semver.range}\` ${judgment.semver.accepts ? '**接受**' : '**拒收**'} \`${targetVersion}\`` + (judgment.semver.accepts ? '' : '（semver 预发布同元组规则：范围上的预发布下界只接受同 [major,minor,patch] 的预发布版本）'))
-  lines.push(`- \`${judgment.cordis.pkg}\`: dist-tag \`${judgment.cordis.distTag}\` ${judgment.cordis.tagPresent ? `存在 → \`${judgment.cordis.version}\`` : '**缺失**'}（peer \`*\` 不锁 cordis 版本，实际对应关系走版本化 dist-tag，见 ADR-0007）`)
+  lines.push(`- \`${judgment.cordis.pkg}\`: 对应版本 ${judgment.cordis.version !== null ? `\`${judgment.cordis.version}\`` : '**无法解析**'}，取自上游 tag \`dsh-v${targetVersion}\` 的 \`${judgment.cordis.source}\`（peer \`*\` 不锁 cordis 版本，对应关系随上游 tag 的 vendor 版本，见 ADR-0007）`)
   lines.push('')
 
   lines.push('## 套件结果')
@@ -731,7 +807,14 @@ async function cmdCheck(args) {
     return 0
   }
 
-  const judgment = judgeSignals({ signals, watchlist, pinned, targetVersion, suite })
+  const cordisVendor = await resolveCordisVendor({ targetVersion, fetchJson })
+  if (cordisVendor === undefined) {
+    // Not silent: the judgment turns this into a risk reason, and the run log
+    // should say the vendor fetch itself failed (network/404), not that the
+    // tag lacks a pin.
+    log(`note: vendor/cordis/package.json could not be fetched at tag dsh-v${targetVersion} — cordis stays unresolved`)
+  }
+  const judgment = judgeSignals({ signals, watchlist, pinned, targetVersion, suite, cordisVendor })
   const title = renderTitle(judgment)
   const body = renderBody({ judgment, signals, targetVersion, runUrl: typeof args['run-url'] === 'string' ? args['run-url'] : undefined })
 
@@ -752,6 +835,10 @@ async function cmdCheck(args) {
       pinnedVersion: pinned.baseVersion,
       packages: pinned.packages,
       cordisDistTag: judgment.cordis.distTag,
+      // The value the workflow pins cordis to: the upstream tag's vendor
+      // version (ADR-0007). The dist-tag above is a diagnostic only — it is
+      // absent for some releases (e.g. rc tags) and must not gate the pin (#71).
+      cordisVersion: judgment.cordis.version,
     }, null, 2))
   } else {
     console.log(`verdict: ${judgment.verdict}`)

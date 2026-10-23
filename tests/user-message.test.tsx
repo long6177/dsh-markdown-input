@@ -37,7 +37,8 @@ function seatProps(
         ...extra,
       },
     },
-    renderMessageImages: vi.fn(),
+    loadImage: vi.fn(async () => ''),
+    renderFactorySlot: vi.fn(() => null),
     t,
   } as unknown as ChatNodeViewProps<MarkdownSeatKind>
 }
@@ -144,9 +145,10 @@ describe('MarkdownUserMessage', () => {
     expect(container.querySelector('li')).toHaveTextContent('第一项')
   })
 
-  it('renders file attachments as cards and delegates images to the host renderer', () => {
-    const images = <div data-testid="images" />
-    const renderMessageImages = vi.fn(() => images)
+  it('delegates images to the host user-content factory and keeps file cards local', () => {
+    const gallery = <div data-testid="images" />
+    const renderFactorySlot = vi.fn(() => gallery)
+    const loadImage = vi.fn(async () => 'blob:x')
     const view = render(
       <MarkdownUserMessage
         {...{
@@ -155,13 +157,43 @@ describe('MarkdownUserMessage', () => {
             { type: 'image', attachment: { url: 'https://x/y.png' } },
             { type: 'file', attachment: { name: 'spec.md', bytes: 2048 } },
           ]),
-          renderMessageImages,
+          loadImage,
+          renderFactorySlot,
         } as unknown as ChatNodeViewProps<'user'>}
       />,
     )
-    expect(renderMessageImages).toHaveBeenCalledWith(expect.objectContaining({ align: 'end' }))
+    // The images ride the host's own user-content factory (an images-only,
+    // text-less payload): the factory occurrence dispatches the native
+    // `conversation.chat.user.images` gallery with align 'end'. A chat-node
+    // seat cannot dispatch that slot directly — the factory owns the child
+    // declaration — so this is the one legal route back to the shipped
+    // gallery, with the seat's own `loadImage`.
+    expect(renderFactorySlot).toHaveBeenCalledTimes(1)
+    expect(renderFactorySlot).toHaveBeenCalledWith('conversation.chat.user.content', expect.objectContaining({
+      loadImage,
+      interactive: true,
+      content: {
+        text: '',
+        extraBlocks: [],
+        attachments: [{ type: 'image', image: { attachment: { url: 'https://x/y.png' } } }],
+      },
+    }))
     expect(view.getByTestId('images')).toBeInTheDocument()
     expect(view.getByText('spec.md')).toBeInTheDocument()
+  })
+
+  it('does not touch the host factory when the message has no images', () => {
+    const renderFactorySlot = vi.fn(() => null)
+    const view = render(
+      <MarkdownUserMessage
+        {...{
+          ...seatProps('user', [{ type: 'text', text: '纯文字' }, { type: 'file', attachment: { name: 'a.md', bytes: 1 } }]),
+          renderFactorySlot,
+        } as unknown as ChatNodeViewProps<'user'>}
+      />,
+    )
+    expect(renderFactorySlot).not.toHaveBeenCalled()
+    expect(view.getByText('a.md')).toBeInTheDocument()
   })
 
   it('renders an empty message as nothing inside the bubble row', () => {

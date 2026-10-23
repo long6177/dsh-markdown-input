@@ -65,6 +65,9 @@ function makeSignals({ hitPaths = [] as string[], cordisTagPresent = true } = {}
   }
 }
 
+/** The vendor/cordis resolution at the fixture's upstream tag (alpha world). */
+const ALPHA_VENDOR = { version: '4.0.5-alpha.1', source: 'vendor/cordis/package.json' } as const
+
 const GREEN_SUITE = parseSuiteResult('typecheck:pass;build:pass;test-published:pass;test-fidelity:pass')
 
 describe('classifySuiteKeys', () => {
@@ -86,6 +89,7 @@ describe('judgeSignals', () => {
       pinned: PINNED,
       targetVersion: '0.2.1-alpha.1',
       suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
     })
     expect(judgment.verdict).toBe('risk')
     expect(judgment.semver.accepts).toBe(false)
@@ -100,6 +104,7 @@ describe('judgeSignals', () => {
       pinned: PINNED,
       targetVersion: '0.2.1-alpha.1',
       suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
     })
     expect(judgment.verdict).toBe('risk')
     expect(judgment.hits.map(h => h.path)).toContain('docs/subsystems/slots.md')
@@ -110,14 +115,14 @@ describe('judgeSignals', () => {
   })
 
   it('a failed or skipped suite entry forces risk; a missing suite is never clean', () => {
-    const base = { signals: makeSignals(), watchlist: WATCHLIST, pinned: PINNED, targetVersion: '0.2.1-alpha.1' }
+    const base = { signals: makeSignals(), watchlist: WATCHLIST, pinned: PINNED, targetVersion: '0.2.1-alpha.1', cordisVendor: ALPHA_VENDOR }
     expect(judgeSignals({ ...base, suite: parseSuiteResult('typecheck:pass;build:pass;test-published:fail;test-fidelity:pass') }).verdict).toBe('risk')
     expect(judgeSignals({ ...base, suite: parseSuiteResult('typecheck:pass;build:pass;test-published:pass;test-fidelity:skip') }).verdict).toBe('risk')
     expect(judgeSignals({ ...base, suite: { provided: false, results: {} } }).verdict).toBe('risk')
   })
 
   it('the suite risk reason names the failing entries and only claims 未跑 for actually-absent keys', () => {
-    const base = { signals: makeSignals(), watchlist: WATCHLIST, pinned: PINNED, targetVersion: '0.2.1-alpha.1' }
+    const base = { signals: makeSignals(), watchlist: WATCHLIST, pinned: PINNED, targetVersion: '0.2.1-alpha.1', cordisVendor: ALPHA_VENDOR }
     // All four provided, two failing: the passing entries ran too — no 未跑 claim.
     const allProvided = judgeSignals({ ...base, suite: parseSuiteResult('typecheck:pass;build:pass;test-published:fail;test-fidelity:fail') })
     expect(allProvided.reasons).toContain('套件未全绿：test-published=fail、test-fidelity=fail')
@@ -134,6 +139,7 @@ describe('judgeSignals', () => {
       targetVersion: '0.2.1-alpha.1',
       // Hypothetical: a future peer bump accepts the prerelease.
       suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
     })
     expect(judgment.verdict).toBe('risk') // still risk: ^0.2.0-rc.2 rejects the alpha
     const acceptingPinned = { ...PINNED, peerRange: '^0.2.1-alpha.1' }
@@ -143,21 +149,77 @@ describe('judgeSignals', () => {
       pinned: acceptingPinned,
       targetVersion: '0.2.1-alpha.1',
       suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
     })
     expect(clean.verdict).toBe('clean')
     expect(clean.reasons).toEqual(['白名单零命中、peer 接受、四步套件全绿'])
   })
 
-  it('a missing cordis dist-tag for the target version is its own risk reason', () => {
+  it('a missing npm dist-tag is expected at rc tags — the vendor package is the authority (fixes #71)', () => {
+    // The dist-tag is a diagnostic now: absent for rc.2 while vendor/cordis
+    // pins 4.0.5 — the suite pin rides the vendor version, so no risk reason.
     const judgment = judgeSignals({
       signals: makeSignals({ cordisTagPresent: false }),
       watchlist: WATCHLIST,
       pinned: PINNED,
       targetVersion: '0.2.1-alpha.1',
       suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
     })
     expect(judgment.cordis.tagPresent).toBe(false)
+    expect(judgment.cordis.version).toBe('4.0.5-alpha.1')
+    expect(judgment.reasons.some(r => r.includes('cordis'))).toBe(false)
+  })
+
+  it('the mapped dist-tag version rides on judgment.cordis (the body renderer re-derives nothing)', () => {
+    // 审查修复: renderCordisResolution used to re-read signals.npm.cordisDistTags
+    // — judgeSignals already computed the mapping, so it now stores it.
+    const judgment = judgeSignals({
+      signals: makeSignals(),
+      watchlist: WATCHLIST,
+      pinned: PINNED,
+      targetVersion: '0.2.1-alpha.1',
+      suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
+    })
+    expect(judgment.cordis.distTagVersion).toBe('4.0.5-alpha.1')
+  })
+
+  it('an unresolvable vendor/cordis package is its own risk reason', () => {
+    const judgment = judgeSignals({
+      signals: makeSignals(),
+      watchlist: WATCHLIST,
+      pinned: PINNED,
+      targetVersion: '0.2.1-alpha.1',
+      suite: GREEN_SUITE,
+      // cordisVendor absent: fetch failed or malformed payload.
+    })
+    expect(judgment.cordis.version).toBeNull()
     expect(judgment.reasons.some(r => r.includes('cordis'))).toBe(true)
+  })
+
+  it('REGRESSION #71: target 0.2.1-rc.2 — no npm dist-tag, vendor 4.0.5, no cordis risk reason', () => {
+    const judgment = judgeSignals({
+      signals: makeSignals({ cordisTagPresent: false }),
+      watchlist: WATCHLIST,
+      pinned: PINNED,
+      targetVersion: '0.2.1-rc.2',
+      suite: GREEN_SUITE,
+      cordisVendor: { version: '4.0.5', source: 'vendor/cordis/package.json' },
+    })
+    expect(judgment.cordis).toEqual({
+      pkg: '@deepseek-ai/cordis',
+      distTag: 'dsh-0-2-1-rc-2',
+      distTagVersion: null,
+      tagPresent: false,
+      version: '4.0.5',
+      source: 'vendor/cordis/package.json',
+    })
+    // The peer rejection and (absent here) suite results drive the verdict —
+    // cordis itself stays silent.
+    expect(judgment.verdict).toBe('risk')
+    expect(judgment.reasons.some(r => r.includes('cordis'))).toBe(false)
+    expect(judgment.reasons.some(r => r.includes('拒收'))).toBe(true)
   })
 })
 
@@ -181,6 +243,7 @@ describe('renderTitle + per-version dedup', () => {
       pinned: { ...PINNED, peerRange: '^0.2.1-alpha.1' },
       targetVersion: '0.2.1-alpha.1',
       suite: GREEN_SUITE,
+      cordisVendor: ALPHA_VENDOR,
     })
     expect(renderTitle(judgment)).toBe('[drift:clean] dsh 0.2.1-alpha.1 — 套件全绿')
   })
@@ -226,7 +289,13 @@ describe('renderTitle + per-version dedup', () => {
 })
 
 describe('renderBody', () => {
-  const base = { signals: makeSignals({ hitPaths: ['packages/client/ui-conversation/src/client/contract/slots.ts', 'docs/subsystems/slots.md'] }), watchlist: WATCHLIST, pinned: PINNED, targetVersion: '0.2.1-alpha.1' }
+  const base = {
+    signals: makeSignals({ hitPaths: ['packages/client/ui-conversation/src/client/contract/slots.ts', 'docs/subsystems/slots.md'] }),
+    watchlist: WATCHLIST,
+    pinned: PINNED,
+    targetVersion: '0.2.1-alpha.1',
+    cordisVendor: ALPHA_VENDOR,
+  }
 
   it('lists hit files with upstream blob + commit links', () => {
     const judgment = judgeSignals({ ...base, suite: { provided: false, results: {} } })
@@ -241,9 +310,20 @@ describe('renderBody', () => {
     const body = renderBody({ judgment, ...base })
     expect(body).toContain('**[drift:risk]**')
     expect(body).toContain('peer range `^0.2.0-rc.2` **拒收** `0.2.1-alpha.1`')
-    expect(body).toContain('`dsh-0-2-1-alpha-1` 存在 → `4.0.5-alpha.1`')
+    // cordis reports the vendor resolution (the pin's authority); the npm
+    // versioned dist-tag stays as a diagnostic note when it exists.
+    expect(body).toContain('`vendor/cordis` @ tag `dsh-v0.2.1-alpha.1` → `4.0.5-alpha.1`（npm dist-tag `dsh-0-2-1-alpha-1` → `4.0.5-alpha.1`）')
+    expect(body).toContain('取自上游 tag `dsh-v0.2.1-alpha.1` 的 `vendor/cordis/package.json`')
     expect(body).toContain('输入区接管（conversation.composer 链式接管与编辑面）')
     expect(body).toContain('官方槽位契约文档')
+  })
+
+  it('the cordis section states a missing dist-tag is expected, not a defect (#71)', () => {
+    const quiet = { ...base, signals: makeSignals({ cordisTagPresent: false }) }
+    const judgment = judgeSignals({ ...quiet, suite: GREEN_SUITE })
+    const body = renderBody({ judgment, ...quiet })
+    expect(body).toContain('`vendor/cordis` @ tag `dsh-v0.2.1-alpha.1` → `4.0.5-alpha.1`（npm 无版本化 dist-tag，属预期）')
+    expect(body).not.toContain('缺失')
   })
 
   it('renders a directly runnable real-host checklist in the retest-wizard categories', () => {

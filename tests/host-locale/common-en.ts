@@ -4,7 +4,7 @@
  * assert against in published mode, where the npm tarball ships no `src/`.
  *
  * Mirrors: `packages/client/locale/src/locales/en.ts` in the upstream checkout (default tag:
- * `dsh-v0.2.0-rc.2`). Values are verified against the checkout by the
+ * `dsh-v0.2.1-rc.2`). Values are verified against the checkout by the
  * fidelity contract test (`tests/host-locale-fidelity.test.ts`) on every
  * run with the source available. Regenerate after a verified upstream
  * bump: `node scripts/dev-harness.mjs snapshot` (ADR-0007).

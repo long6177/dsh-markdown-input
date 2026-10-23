@@ -11,6 +11,7 @@ import {
   parseSuiteResult,
   pickTargetVersion,
   readPinnedFace,
+  resolveCordisVendor,
   toCommitSummary,
   urls,
 } from '../scripts/drift-watch.mjs'
@@ -87,6 +88,9 @@ function makeFetchJson(options: {
           { tag_name: 'dsh-v0.2.0-rc.2', html_url: 'https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.2', name: 'v0.2.0-rc.2' },
         ]
       }
+      if (url === urls.vendorCordisPackage('0.2.1-alpha.1')) {
+        return { name: '@deepseek-ai/cordis', version: '4.0.5-alpha.1' }
+      }
       const commitMatch = /commits\?path=([^&]+)&since=([^&]+)/.exec(url)
       if (commitMatch) {
         const path = decodeURIComponent(commitMatch[1] as string)
@@ -161,8 +165,50 @@ describe('collectSignals', () => {
   })
 })
 
-describe('pickTargetVersion', () => {
-  function fakeSignals() {
+describe('resolveCordisVendor', () => {
+  it('fetches the upstream tag\'s vendor/cordis package.json at the exact endpoint', async () => {
+    const { fetchJson, calls } = makeFetchJson({})
+    const vendor = await resolveCordisVendor({ targetVersion: '0.2.1-alpha.1', fetchJson })
+    expect(calls).toContain(urls.vendorCordisPackage('0.2.1-alpha.1'))
+    expect(vendor).toEqual({ version: '4.0.5-alpha.1', source: 'vendor/cordis/package.json' })
+  })
+
+  it('degrades to undefined when the tag has no vendor package or a malformed payload', async () => {
+    const failing = async () => {
+      throw new Error('404 Not Found')
+    }
+    await expect(resolveCordisVendor({ targetVersion: '0.2.0-rc.2', fetchJson: failing })).resolves.toBeUndefined()
+    const malformed = async () => ({ name: '@deepseek-ai/cordis' })
+    await expect(resolveCordisVendor({ targetVersion: '0.2.0-rc.2', fetchJson: malformed })).resolves.toBeUndefined()
+  })
+
+  it('falls back to the GitHub contents API (base64) when the raw transport fails', async () => {
+    const calls: string[] = []
+    const fetchJson = async (url: string) => {
+      calls.push(url)
+      if (url === urls.vendorCordisPackage('0.2.1-alpha.1')) throw new Error('fetch failed')
+      if (url === urls.githubContents('vendor/cordis/package.json', 'dsh-v0.2.1-alpha.1')) {
+        return { content: Buffer.from(JSON.stringify({ version: '4.0.5-alpha.1' }), 'utf8').toString('base64') }
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }
+    const vendor = await resolveCordisVendor({ targetVersion: '0.2.1-alpha.1', fetchJson })
+    expect(calls).toContain(urls.githubContents('vendor/cordis/package.json', 'dsh-v0.2.1-alpha.1'))
+    expect(vendor).toEqual({ version: '4.0.5-alpha.1', source: 'vendor/cordis/package.json' })
+  })
+
+  it('skips the fetch entirely without a target version', async () => {
+    let called = 0
+    const fetchJson = async () => {
+      called += 1
+      return {}
+    }
+    await expect(resolveCordisVendor({ targetVersion: null, fetchJson })).resolves.toBeUndefined()
+    expect(called).toBe(0)
+  })
+})
+
+describe('pickTargetVersion', () => {  function fakeSignals() {
     return {
       baseVersion: '0.2.0-rc.2',
       npm: { newerVersions: ['0.2.1-alpha.1'] },
