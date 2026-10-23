@@ -106,11 +106,14 @@ jobs:
       - name: Re-pin the suite to the target version's published packages
         if: steps.detect.outputs.version != ''
         # CI-only workspace change: package.json here is throwaway, the repo's
-        # pins stay as committed. Cordis rides its versioned dist-tag.
+        # pins stay as committed. Cordis follows the target tag's
+        # `vendor/cordis` version (drift.json's `cordisVersion`, ADR-0007);
+        # the versioned npm dist-tag (`cordisDistTag`) is diagnostic only and
+        # does not exist for some releases (e.g. rc tags, #71).
         run: |
           VERSION="${{ steps.detect.outputs.version }}"
           SPECS="$(jq -r '.packages[] | . + "@" + "'"$VERSION"'"' "$GITHUB_WORKSPACE/drift.json" | tr '\n' ' ')"
-          SPECS="$SPECS @deepseek-ai/cordis@$(jq -r '.cordisDistTag' "$GITHUB_WORKSPACE/drift.json")"
+          SPECS="$SPECS @deepseek-ai/cordis@$(jq -r '.cordisVersion' "$GITHUB_WORKSPACE/drift.json")"
           echo "overriding: $SPECS"
           if pnpm add -D $SPECS; then
             echo "SUITE_PIN=pass" >> "$GITHUB_ENV"
