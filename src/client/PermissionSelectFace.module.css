@@ -103,3 +103,37 @@
     display: none;
   }
 }
+
+/* In-place switch failure (issue #80): a compact alert row beside the pill,
+   the model card's in-menu error idiom brought to this face. It never hides
+   the pill — the retry re-runs the same write. */
+.switchError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 320px;
+  margin-top: 2px;
+  color: var(--dsw-alias-state-error-primary, #d64545);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.switchErrorText {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.switchRetry {
+  flex: none;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}

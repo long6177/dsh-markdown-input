@@ -381,6 +381,34 @@ function editableExtensions(editable: boolean): Extension {
 }
 
 /**
+ * The wheel chain (issue #80, the host `installDraftWheel` verbatim): while
+ * the editor's scroller can still scroll in the wheel's direction the event
+ * stays with it; once it is pinned at the top (wheel up) or the bottom (wheel
+ * down), the delta is handed to the conversation scroller that contains the
+ * composer — a long draft can no longer trap the wheel. Without a
+ * `[data-conversation-scroll]` ancestor (a hero mount, a bare test harness)
+ * nothing is taken over.
+ * @param view - the mounted editor.
+ * @returns the listener teardown for the editor's destroy path.
+ */
+function installDraftWheel(view: EditorView): () => void {
+  const onWheel = (event: WheelEvent): void => {
+    if (event.deltaY === 0) return
+    const host = view.scrollDOM.closest('[data-conversation-scroll]')
+    if (!(host instanceof HTMLElement)) return
+    const element = view.scrollDOM
+    const atTop = element.scrollTop <= 0
+    const atEnd = element.scrollTop + element.clientHeight >= element.scrollHeight - 1
+    // The editor can still move in this direction: leave the event alone.
+    if ((event.deltaY < 0 && !atTop) || (event.deltaY > 0 && !atEnd)) return
+    event.preventDefault()
+    host.scrollTop += event.deltaY
+  }
+  view.scrollDOM.addEventListener('wheel', onWheel, { passive: false })
+  return () => { view.scrollDOM.removeEventListener('wheel', onWheel) }
+}
+
+/**
  * Mount the markdown editor and return the component-facing handle.
  * @param options - mount target, initial mode/placeholder, and callbacks.
  */
@@ -559,6 +587,9 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       ],
     }),
   })
+  // The wheel hand-off to the session scroller (issue #80) rides the view's
+  // own scrollDOM and tears down with it.
+  const removeWheel = installDraftWheel(view)
 
   return {
     view,
@@ -640,6 +671,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       // editor must not deliver probes (the listener is already cleared by
       // the component's own teardown, but the seam stays self-contained).
       editorDestroyed = true
+      removeWheel()
       view.destroy()
     },
   }

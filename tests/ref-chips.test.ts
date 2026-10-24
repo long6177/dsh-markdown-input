@@ -26,34 +26,36 @@ describe('scanRefChips — empty and plain text', () => {
   })
 })
 
-describe('scanRefChips — @ file and folder shapes', () => {
-  it('decorates a bare word token as a file', () => {
-    expect(scan('see @notes today')).toEqual(['file 4-10'])
+describe('scanRefChips — @ directory shape only (issue #80)', () => {
+  it('keeps a bare word token plain — no @ lexicon source names it', () => {
+    // The host text-ref decorations only chip an exact `lexicon.get('@')`
+    // hit; the plugin has no such source, so `@notes` stays text.
+    expect(scan('see @notes today')).toEqual([])
   })
 
-  it('decorates a dotted and slashed path as a file', () => {
-    expect(scan('open @src/client/index.ts please')).toEqual(['file 5-25'])
+  it('keeps a dotted file path plain (only the directory form decorates)', () => {
+    expect(scan('open @src/client/index.ts please')).toEqual([])
+  })
+
+  it('never chips an arbitrary CJK name', () => {
+    expect(scan('请问 @张三 在吗')).toEqual([])
   })
 
   it('decorates a trailing-slash token as a folder', () => {
     expect(scan('check @src/ now')).toEqual(['folder 6-11'])
   })
 
-  it('decorates the quoted whitespace form as a file', () => {
-    expect(scan('@"path with spaces" end')).toEqual(['file 0-19'])
+  it('keeps the quoted whitespace file form plain', () => {
+    expect(scan('@"path with spaces" end')).toEqual([])
   })
 
   it('decorates the quoted whitespace form with a trailing slash as a folder', () => {
     expect(scan('@"my folder/" next')).toEqual(['folder 0-13'])
   })
 
-  it('strips trailing sentence punctuation from a bare token', () => {
-    expect(scan('看看 @a.txt。 好')).toEqual(['file 3-9'])
-    expect(scan('ping @server, then')).toEqual(['file 5-12'])
-  })
-
-  it('keeps punctuation inside a quoted token', () => {
-    expect(scan('@"v1.0, final" ok')).toEqual(['file 0-14'])
+  it('strips trailing sentence punctuation before the directory test', () => {
+    expect(scan('看看 @src/。 好')).toEqual(['folder 3-8'])
+    expect(scan('ping @server/, then')).toEqual(['folder 5-13'])
   })
 
   it('never decorates a bare @ alone', () => {
@@ -65,11 +67,22 @@ describe('scanRefChips — @ file and folder shapes', () => {
   })
 
   it('matches at a newline boundary but not mid-word', () => {
-    expect(scan('first\n@a.txt')).toEqual(['file 6-12'])
+    expect(scan('first\n@src/')).toEqual(['folder 6-11'])
+    expect(scan('first\n@a.txt')).toEqual([])
   })
 
-  it('decorates an unclosed quoted prefix as a bare token (live typing)', () => {
-    expect(scan('@"one-word')).toEqual(['file 0-10'])
+  it('keeps an unclosed quoted non-directory prefix plain (live typing)', () => {
+    expect(scan('@"one-word')).toEqual([])
+  })
+
+  it('decorates an unclosed quoted directory prefix as a folder', () => {
+    expect(scan('@"one-folder/')).toEqual(['folder 0-13'])
+  })
+
+  it('accepts an explicit @name dictionary hit (the reserved lexicon arm)', () => {
+    const chips = scanRefChips('see @notes and @src/ now', new Set(), new Set(['notes']))
+    expect(chips.map((chip) => `${chip.kind} ${chip.start}-${chip.end}`))
+      .toEqual(['file 4-10', 'folder 15-20'])
   })
 })
 
@@ -119,14 +132,14 @@ describe('scanRefChips — session wire form', () => {
     expect(scan('@[A B C](dsh-session:x1) end')).toEqual(['session 0-24'])
   })
 
-  it('keeps a malformed wire form to the shape grammar instead', () => {
-    // No closing paren on the session URI: not a session chip; the bare
-    // shape token still decorates (bubble presentation parity).
-    expect(scan('@[label](dsh-session:x more')).toEqual(['file 0-22'])
+  it('keeps a malformed wire form plain in the draft (no shape fallback)', () => {
+    // No closing paren on the session URI: not a session chip, and the bare
+    // shape token no longer decorates in the draft (issue #80's narrowing).
+    expect(scan('@[label](dsh-session:x more')).toEqual([])
   })
 
   it('does not cross a newline inside the label', () => {
-    expect(scan('@[a\nb](dsh-session:x)')).toEqual(['file 0-3'])
+    expect(scan('@[a\nb](dsh-session:x)')).toEqual([])
   })
 })
 
@@ -135,12 +148,12 @@ describe('scanRefChips — precedence and overlap', () => {
     expect(scan('@[label](dsh-session:x)')).toEqual(['session 0-23'])
   })
 
-  it('the quoted token wins over its bare fragments', () => {
-    expect(scan('@"a b" c')).toEqual(['file 0-6'])
+  it('the quoted directory token wins over its bare fragments', () => {
+    expect(scan('@"a b/" c')).toEqual(['folder 0-7'])
   })
 
-  it('keeps a skill hit and a later file token side by side', () => {
-    expect(scan('/plan and @a.txt', ['plan'])).toEqual(['skill 0-5', 'file 10-16'])
+  it('keeps a skill hit and a later directory token side by side', () => {
+    expect(scan('/plan and @a/ here', ['plan'])).toEqual(['skill 0-5', 'folder 10-13'])
   })
 
   it('never returns overlapping ranges', () => {

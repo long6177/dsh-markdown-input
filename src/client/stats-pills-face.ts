@@ -25,7 +25,7 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ObservableSource } from './conversation-face.ts'
+import type { ObservableSource, SessionId } from './conversation-face.ts'
 
 /** The host namespace the pills' copy lives in (ui-chat's locale NS). */
 export const STATS_NS = 'chat'
@@ -150,4 +150,88 @@ export function performanceUsageModeOf(
   snapshot: StatsSettingsSnapshot | undefined,
 ): PerformanceUsageMode {
   return snapshot?.value?.performanceUsage === 'compact' ? 'compact' : DEFAULT_PERFORMANCE_USAGE
+}
+
+/* ------------------------------------------------------------------ */
+/* The chat-snapshot seat (issue #80) — the counts pill's window fold   */
+/* ------------------------------------------------------------------ */
+
+/** The settled-node window of the host chat snapshot (structural subset). */
+export interface ChatSnapshotLike {
+  readonly legacy?: { readonly nodes?: readonly unknown[] } | undefined
+}
+
+/** One session's chat target: a bare snapshot store of the chat view. */
+export type ChatSnapshotSource = ObservableSource<ChatSnapshotLike | undefined>
+
+/**
+ * The host `uiConversation` service face the chat target resolves through
+ * (the native `ui-chat` apply's own read: `ctx.uiConversation.binding(id)
+ * .target('chat')`). Structural: the first subscriber activates the target,
+ * which the card accepts — reading the pills must not require a second
+ * snapshot protocol.
+ */
+interface UiConversationChatFace {
+  binding(sessionId: SessionId): { target?(key: 'chat'): unknown } | undefined
+}
+
+export type ChatSource = () => UiConversationChatFace | undefined
+
+let chatSource: ChatSource = () => undefined
+
+/**
+ * Bind the chat-target source (the client apply does this once; tests bind
+ * fakes through the same seam).
+ * @param resolve - lazy resolver; `undefined` = service absent.
+ */
+export function setChatSource(resolve: ChatSource): void {
+  chatSource = resolve
+}
+
+/**
+ * Install the lazy resolver on the client root context (called once from the
+ * plugin apply). A host build without `uiConversation.binding` keeps the
+ * projection-only behavior — the counts pill hides when no projection
+ * arrives, exactly the pre-#80 face.
+ * @param ctx - client root context.
+ */
+export function installChatSource(ctx: ClientContext): void {
+  setChatSource(() => {
+    try {
+      const conversation = ctx.get('uiConversation') as Partial<UiConversationChatFace> | undefined
+      return conversation !== undefined && conversation !== null
+        && typeof conversation.binding === 'function'
+        ? conversation as UiConversationChatFace
+        : undefined
+    } catch {
+      return undefined
+    }
+  })
+}
+
+/**
+ * One session's chat target store, or undefined while the face is absent or
+ * the binding has not materialized. Every read stays inside try/catch.
+ * @param sessionId - owning session.
+ */
+export function chatSnapshotSource(sessionId: SessionId): ChatSnapshotSource | undefined {
+  try {
+    const conversation = chatSource()
+    if (conversation === undefined) return undefined
+    const target = conversation.binding(sessionId)?.target?.('chat')
+    if (target === undefined || target === null) return undefined
+    const store = target as Partial<ChatSnapshotSource>
+    if (typeof store.getSnapshot !== 'function' || typeof store.subscribe !== 'function') return undefined
+    return store as ChatSnapshotSource
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Test seam: drop the source so a fresh test sees no chat service. Never call
+ * in plugin code — the binding is page-lifetime by design.
+ */
+export function resetChatSource(): void {
+  chatSource = () => undefined
 }

@@ -40,7 +40,7 @@ import {
 import { installFeedbackSource } from './feedback-face.ts'
 import { installGoalSource } from './goal-face.ts'
 import { installPermissionSource } from './permission-face.ts'
-import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
+import { installModelLabelSlots, installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
 import { installSkillSource } from './skill-face.ts'
 import { installFileReferenceSource } from './file-reference-face.ts'
 import { installSessionReferenceSource } from './session-reference-face.ts'
@@ -64,7 +64,7 @@ import {
   installRosterRefreshSource, resetAgentPresetLocale, setAgentPresetLocale,
 } from './agent-preset-face.ts'
 import {
-  STATS_NS, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
+  STATS_NS, installChatSource, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
 } from './stats-pills-face.ts'
 import { installBusyEnterSource } from './submit-policy.ts'
 
@@ -155,6 +155,11 @@ export function apply(ctx: ClientContext): void {
   // the service is deliberately not a declared inject dependency, which
   // would hold the whole plugin pending until it materializes.
   installModelSource(ctx)
+  // The model label slot (issue #80): the card is not a slot outlet, so it
+  // reads the registry's winning `conversation.input.model.label` entry and
+  // renders it itself — the upstream 1017 release badge then rides the pill,
+  // the menu row, and every option row exactly as it does natively.
+  installModelLabelSlots(ctx)
   // The skill lexicon face (T9) reads the host `remote.skills` catalog —
   // the same hot `/` dictionary the native completion source polls — the
   // same lazy way; without it the chip decorations' `/` arm degrades to
@@ -300,6 +305,11 @@ export function apply(ctx: ClientContext): void {
     return resetEchoLocale
   }, 'markdown-input: echo text host copy')
   installStatsSettingsSource(ctx)
+  // The counts pill's window-fold fallback (issue #80) reads the session's
+  // chat snapshot through `uiConversation.binding(id).target('chat')` — the
+  // native ui-chat apply's own read. Without the service the pill keeps the
+  // projection-only behavior.
+  installChatSource(ctx)
   // The submission policy's busy-Enter preference (issue #79) reads the
   // `ui-conversation` settings form through the configForms service the
   // same lazy, capability-detected way: a host build without the service

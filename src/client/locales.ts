@@ -33,6 +33,13 @@ const zh = {
   'image.openOriginal': '查看原图',
   'image.preview': '原图预览',
   'image.closePreview': '关闭原图预览',
+  // Pick-time image-limit rejections (issue #80) — the host `conversation`
+  // namespace's own lines copied verbatim, the fallback for a build whose
+  // dictionary misses them.
+  'image.unsupportedType': '仅支持 PNG、JPG、WebP、GIF 格式的图片',
+  'image.tooMany': '一条消息最多添加 {count} 张图片',
+  'image.fileTooLarge': '单张图片不能超过 {size}',
+  'image.totalTooLarge': '图片总大小超过 {size}，请移除部分图片',
   'composer.notice.dismiss': '关闭提示',
   'composer.fallback.notice': 'Markdown 输入区出现异常，已换回原生输入区；本次会话内不再重试，重启后恢复。',
   'permission.mode': '访问模式，当前：{name}',
@@ -53,6 +60,8 @@ const zh = {
   'permission.auto.confirm.acknowledge': '我已了解这些风险，并愿意继续',
   'permission.auto.confirm.enable': '启用 Auto review',
   'permission.switchFailed': '权限切换失败：{message}',
+  'permission.unmatched': '宿主不提供 /permission 命令',
+  'permission.retry': '重试',
   // `+` command menu (tool row ①). Row faces mirror the host `command`
   // namespace copy verbatim; the trigger title mirrors `conversation.
   // input.commands`.
@@ -123,6 +132,11 @@ const zh = {
   'completion.drill.hint': '进入目录',
   'completion.drill.key': 'Tab',
   'completion.drill.aria': '进入目录',
+  // The drilled-source breadcrumb (issue #80) — the host `ui-input-trigger`
+  // `crumbs.aria` / `ui-reference` `crumb.root` lines under this plugin's own
+  // namespace (that namespace is outside this build's dictionary table).
+  'completion.crumbs.aria': '目录导航',
+  'completion.crumb.root': '工作区',
   'completion.skill.userOnly': '仅用户',
   // `@` session-mention rows (#75). The section titles, the no-cwd marker,
   // and the relative-time words are the host `ui-reference` namespace's own
@@ -254,6 +268,11 @@ const en: Record<ComposerKey, string> = {
   'image.openOriginal': 'View original',
   'image.preview': 'Original image preview',
   'image.closePreview': 'Close original image preview',
+  // Pick-time image-limit rejections (issue #80) — the host lines verbatim.
+  'image.unsupportedType': 'Only PNG, JPG, WebP, and GIF images are supported',
+  'image.tooMany': 'A message can include up to {count} images',
+  'image.fileTooLarge': 'Each image must be smaller than {size}',
+  'image.totalTooLarge': 'Images exceed {size} in total; remove some and try again',
   'composer.notice.dismiss': 'Dismiss notice',
   'composer.fallback.notice': 'The Markdown composer hit an error and fell back to the native input area; it will not retry this session, and resumes after a restart.',
   'permission.mode': 'Access mode, current: {name}',
@@ -274,6 +293,8 @@ const en: Record<ComposerKey, string> = {
   'permission.auto.confirm.acknowledge': 'I understand these risks and want to continue',
   'permission.auto.confirm.enable': 'Enable Auto review',
   'permission.switchFailed': 'Permission switch failed: {message}',
+  'permission.unmatched': 'The host offers no /permission command',
+  'permission.retry': 'Retry',
   'command.menu.open': 'Add files or run commands',
   'command.menu.section.add': 'Add',
   'command.menu.section.commands': 'Commands',
@@ -328,6 +349,9 @@ const en: Record<ComposerKey, string> = {
   'completion.drill.hint': 'Browse folder',
   'completion.drill.key': 'Tab',
   'completion.drill.aria': 'Browse folder',
+  // The drilled-source breadcrumb (issue #80) — the host lines verbatim.
+  'completion.crumbs.aria': 'Folder navigation',
+  'completion.crumb.root': 'Workspace',
   'completion.skill.userOnly': 'user-only',
   // `@` session-mention rows (#75) — the host `ui-reference` lines verbatim
   // (see the zh block above for the fold).

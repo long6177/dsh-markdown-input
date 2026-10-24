@@ -10,12 +10,12 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  billedInputTokens, cacheHitPercent, compactReadings, exactCount, fillTemplate, formatCacheHitPercent,
-  formatDuration, formatExactTokens, formatTokens, formatTokensPerSecond, hasTokenActivity,
-  resolveStatsCopy, statsPillsVisible, statsStepsOf, timeDialogAvailable, tokensPerSecondOf,
-  ttftMeanMs,
+  assistantStepReading, billedInputTokens, cacheHitPercent, compactReadings, deriveStats, exactCount,
+  fillTemplate, formatCacheHitPercent, formatDuration, formatExactTokens, formatTokens,
+  formatTokensPerSecond, hasTokenActivity, resolveStatsCopy, statsPillsVisible, statsStepsOf,
+  timeDialogAvailable, tokensPerSecondOf, ttftMeanMs,
 } from '../src/client/stats-pills-core.ts'
-import type { SessionStatsView, StatsPillsCopy, TokenUsageView } from '../src/client/stats-pills-core.ts'
+import type { SessionStatsView, StatsPillsCopy, TokenUsageView, WindowStatsNode } from '../src/client/stats-pills-core.ts'
 
 function usage(over: Partial<TokenUsageView> = {}): TokenUsageView {
   return {
@@ -341,5 +341,63 @@ describe('timeDialogAvailable (host StatsPills.tsx:162 inverted)', () => {
     expect(timeDialogAvailable(stats())).toBe(false)
     // Counts and tokens alone do not time anything.
     expect(timeDialogAvailable(stats({ turns: 7, steps: 160, decodeTokens: 500 }))).toBe(false)
+  })
+})
+
+describe('deriveStats (issue #80, host StatsPills.tsx window fold)', () => {
+  function assistant(overrides: Record<string, unknown> = {}): WindowStatsNode {
+    return {
+      kind: 'assistant',
+      turn: 1,
+      timing: { stepStartTime: 100, firstTokenTime: 150, completedTime: 350 },
+      usage: { outputTokens: 100 },
+      ...overrides,
+    }
+  }
+
+  it('folds one assistant step into every figure', () => {
+    expect(deriveStats([assistant()])).toEqual({
+      turns: 1, steps: 1, llmMs: 250, toolMs: 0,
+      ttftMs: 50, ttftSteps: 1, decodeMs: 200, decodeTokens: 100,
+    })
+  })
+
+  it('dedupes turns while counting every assistant step', () => {
+    expect(deriveStats([assistant(), assistant()])).toMatchObject({ turns: 1, steps: 2, llmMs: 500 })
+    expect(deriveStats([assistant(), assistant({ turn: 2 })])).toMatchObject({ turns: 2, steps: 2 })
+  })
+
+  it('adds tool-result call→result spans and skips unmatched calls', () => {
+    const stats = deriveStats([
+      { kind: 'tool-result', time: 40, callTime: 10 },
+      { kind: 'tool-result', time: 90, callTime: null },
+      { kind: 'user', time: 5 },
+    ])
+    expect(stats).toEqual({
+      turns: 0, steps: 0, llmMs: 0, toolMs: 30,
+      ttftMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0,
+    })
+  })
+
+  it('clamps elapsed values at zero', () => {
+    const stats = deriveStats([assistant({
+      timing: { stepStartTime: 500, firstTokenTime: 400, completedTime: 300 },
+    })])
+    expect(stats).toMatchObject({ llmMs: 0, ttftMs: 0, decodeMs: 0 })
+  })
+
+  it('leaves the TTFT/decode figures null when the step did not record them', () => {
+    const noTiming = deriveStats([assistant({ timing: undefined })])
+    expect(noTiming).toMatchObject({ llmMs: 0, ttftSteps: 0, decodeMs: 0, decodeTokens: 0 })
+    const noUsage = deriveStats([assistant({ usage: undefined })])
+    expect(noUsage).toMatchObject({ ttftMs: 50, ttftSteps: 1, decodeMs: 0, decodeTokens: 0 })
+  })
+
+  it('assistantStepReading maps each part independently', () => {
+    expect(assistantStepReading(assistant())).toEqual({ ttftMs: 50, decodeMs: 200, outputTokens: 100 })
+    expect(assistantStepReading(assistant({ timing: { stepStartTime: 100, firstTokenTime: null, completedTime: 300 } })))
+      .toEqual({ ttftMs: null, decodeMs: null, outputTokens: 100 })
+    expect(assistantStepReading(assistant({ usage: { outputTokens: -1 } })))
+      .toEqual({ ttftMs: 50, decodeMs: 200, outputTokens: null })
   })
 })

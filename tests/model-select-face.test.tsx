@@ -17,8 +17,8 @@ import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
 import { openChainPopup, resetChainPopups } from '../src/client/chain-open.ts'
 import {
-  modelFaceDefinition, modelSeatFace, MODEL_NS, resetModelFace, setModelLocale,
-  setModelSource, type ModelDirectoryState,
+  modelFaceDefinition, modelSeatFace, MODEL_NS, resetModelFace, setModelLabelSlotSource,
+  setModelLocale, setModelSource, type ModelDirectoryState, type ModelLabelSlotFace,
 } from '../src/client/model-face.ts'
 import { ModelSelectFace } from '../src/client/ModelSelectFace.tsx'
 import { en as modelEn, zh as modelZh } from '../src/client/ModelSelectFace.locales.ts'
@@ -107,6 +107,35 @@ function fakeDirectory(state: ModelDirectoryState) {
     select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
   }
   return directory
+}
+
+/** A label-extension stand-in: marks every rendered placement and reads `t`. */
+function badgeComponent(props: {
+  readonly model: { readonly name: string }
+  readonly placement: string
+  readonly t?: (key: string) => string
+}): ReturnType<typeof createElement> {
+  return createElement('span', { 'data-badge-placement': props.placement },
+    `${props.model.name} ·=${props.t === undefined ? 'no-t' : props.t('badge.label')}=`)
+}
+
+/** Bind a winning label entry for one test. */
+function bindLabelSlot(component: unknown = badgeComponent): void {
+  const face: ModelLabelSlotFace = {
+    winner: () => ({ component, locale: 'deepseek-model-label-1017' }),
+    subscribe: () => () => {},
+    translate: () => () => '1017',
+  }
+  setModelLabelSlotSource(() => face)
+}
+
+/** Bind an empty slot (the fallback arm). */
+function bindEmptyLabelSlot(): void {
+  setModelLabelSlotSource(() => ({
+    winner: () => undefined,
+    subscribe: () => () => {},
+    translate: () => () => '1017',
+  }))
 }
 
 /**
@@ -337,6 +366,79 @@ describe('the two-pane card', () => {
     expect(pendingRow.getAttribute('aria-checked')).toBe('false')
     expect(pendingRow.disabled).toBe(true)
     void directory
+  })
+})
+
+describe('model label slot (issue #80)', () => {
+  it('renders the winning label entry in the trigger, menu row, and option rows', async () => {
+    bindLabelSlot()
+    mountFace()
+    // Trigger: the slot component receives the localized provider identity
+    // and the `t` seat bound to its own declared namespace.
+    expect(trigger().textContent).toContain('DeepSeek-V41-Flash ·=1017=')
+    expect(trigger().querySelector('[data-badge-placement="trigger"]')).not.toBeNull()
+    expect(trigger().querySelector('[data-provider-id="deepseek-account"]')).not.toBeNull()
+
+    fireEvent.click(trigger())
+    await waitFor(() => expect(openCard()).not.toBeNull())
+    const modelCell = menuRows(openCard())[0] as HTMLElement
+    expect(modelCell.querySelector('[data-badge-placement="menu"]')?.textContent)
+      .toContain('DeepSeek-V41-Flash ·=1017=')
+    fireEvent.click(modelCell)
+    await waitFor(() => expect(document.body.querySelectorAll('[role="menuitemradio"]').length).toBe(3))
+    const radios = [...document.body.querySelectorAll('[role="menuitemradio"]')] as HTMLElement[]
+    // Every option row goes through the slot, marked with the placement.
+    expect(radios.every((row) => row.querySelector('[data-badge-placement="option"]') !== null)).toBe(true)
+  })
+
+  it('falls back to the catalog name when the slot has no entry', () => {
+    bindEmptyLabelSlot()
+    mountFace()
+    expect(trigger().textContent).toContain('DeepSeek-V41-Flash')
+    expect(trigger().textContent).not.toContain('1017')
+  })
+
+  it('falls back to the catalog name when the entry throws (a standard-seat dependency)', () => {
+    function Broken(): never {
+      throw new Error('missing standard seat')
+    }
+    // Keep the renderer crash contained: React logs the caught error.
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    bindLabelSlot(Broken)
+    mountFace()
+    expect(trigger().textContent).toContain('DeepSeek-V41-Flash')
+    expect(trigger().textContent).not.toContain('missing standard seat')
+  })
+
+  it('re-places the card when its content resizes (the slot label changes width)', async () => {
+    const callbacks: Array<() => void> = []
+    class RecordingResizeObserver {
+      constructor(callback: () => void) { callbacks.push(callback) }
+      observe(): void {}
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', RecordingResizeObserver)
+    try {
+      const { view } = mountFace()
+      const anchor = trigger()
+      let right = 500
+      anchor.getBoundingClientRect = () => ({
+        right, top: 400, left: right - 120, bottom: 430, width: 120, height: 30, x: right - 120, y: 400,
+        toJSON: () => ({}),
+      }) as DOMRect
+      fireEvent.click(anchor)
+      await waitFor(() => expect(openCard()).not.toBeNull())
+      expect(openCard().style.left).toBe('500px')
+      // The slot label landed and resized the card: the observer re-runs the
+      // measure without any parent state change.
+      right = 320
+      callbacks.at(-1)?.()
+      await waitFor(() => expect(openCard().style.left).toBe('320px'))
+      void view
+    } finally {
+      vi.stubGlobal('ResizeObserver', undefined)
+    }
   })
 })
 

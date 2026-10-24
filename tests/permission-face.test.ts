@@ -34,10 +34,48 @@ interface FakeLiveSession {
  * event listener is captured for manual firing, and sessions answer from
  * `sessions` (an id without a live session binds undefined).
  */
+export interface FakeConnection {
+  readonly generation: {
+    getSnapshot(): { readonly id?: number } | undefined
+    subscribe(listener: () => void): () => void
+  }
+  set(next: number | undefined): void
+}
+
+/** A controllable connection generation (issue #80's fence). */
+function fakeConnection(initial?: number): FakeConnection {
+  let current = initial
+  const listeners = new Set<() => void>()
+  return {
+    generation: {
+      getSnapshot: () => (current === undefined ? undefined : { id: current }),
+      subscribe(listener: () => void) {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+    },
+    set(next) {
+      current = next
+      for (const listener of [...listeners]) listener()
+    },
+  }
+}
+
+/** One manually-settled catalog read. */
+function deferredCatalog(): {
+  promise: Promise<unknown>
+  resolve(value: unknown): void
+} {
+  let resolve: ((value: unknown) => void) | undefined
+  const promise = new Promise<unknown>((settle) => { resolve = settle })
+  return { promise, resolve: (value) => { resolve?.(value) } }
+}
+
 function bindSurfaces(options: {
   catalogResult?: unknown
   reject?: unknown
   sessions?: Map<string, FakeLiveSession>
+  connection?: FakeConnection
 } = {}) {
   const changeListeners: (() => void)[] = []
   const sessions = options.sessions ?? new Map<string, FakeLiveSession>()
@@ -63,6 +101,7 @@ function bindSurfaces(options: {
         return session === undefined ? undefined : { session }
       }),
     },
+    connection: options.connection,
   }
   setPermissionSource(() => surfaces)
   return { surfaces, changeListeners, sessions }
@@ -202,6 +241,60 @@ describe('permissionFace catalog', () => {
   it('is one process-wide instance (the composer and popups share it)', () => {
     bindSurfaces()
     expect(permissionFace()).toBe(permissionFace())
+  })
+
+  it('clears the displayed catalog on a connection generation change and re-reads', async () => {
+    const connection = fakeConnection(1)
+    const { surfaces } = bindSurfaces({ connection })
+    const face = permissionFace()!
+    // The first generation sync starts the read.
+    await vi.waitFor(() => expect(face.catalog.getSnapshot()).toEqual({ value: CATALOG }))
+    const updated: PermissionCatalog = { options: [{ value: 'auto', name: 'auto' }] }
+    surfaces.presets.catalog.mockReturnValue(Promise.resolve({ ok: true, value: updated }))
+    connection.set(2)
+    // A generation change withdraws the old generation's options at once.
+    expect(face.catalog.getSnapshot()).toEqual({ value: null })
+    await vi.waitFor(() => expect(face.catalog.getSnapshot()).toEqual({ value: updated }))
+    expect(surfaces.presets.catalog).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the catalog when the same generation is re-announced', async () => {
+    const connection = fakeConnection(1)
+    const { surfaces } = bindSurfaces({ connection })
+    const face = permissionFace()!
+    await vi.waitFor(() => expect(face.catalog.getSnapshot()).toEqual({ value: CATALOG }))
+    connection.set(1)
+    expect(face.catalog.getSnapshot()).toEqual({ value: CATALOG })
+    expect(surfaces.presets.catalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a stale read issued by the previous generation', async () => {
+    const connection = fakeConnection(1)
+    const stale = deferredCatalog()
+    const fresh: PermissionCatalog = { options: [{ value: 'fresh', name: 'fresh' }] }
+    const { surfaces } = bindSurfaces({ connection })
+    surfaces.presets.catalog
+      .mockReturnValueOnce(stale.promise)
+      .mockReturnValueOnce(Promise.resolve({ ok: true, value: fresh }))
+    const face = permissionFace()!
+    connection.set(2)
+    await vi.waitFor(() => expect(face.catalog.getSnapshot()).toEqual({ value: fresh }))
+    // The old read settles late with its own options: the generation fence
+    // keeps it out.
+    stale.resolve({ ok: true, value: { options: [{ value: 'stale', name: 'stale' }] } })
+    await new Promise((resolve) => { setTimeout(resolve, 10) })
+    expect(face.catalog.getSnapshot()).toEqual({ value: fresh })
+  })
+
+  it('clears the catalog when the connection generation is lost and reads nothing', async () => {
+    const connection = fakeConnection(1)
+    const { surfaces } = bindSurfaces({ connection })
+    const face = permissionFace()!
+    await vi.waitFor(() => expect(face.catalog.getSnapshot()).toEqual({ value: CATALOG }))
+    connection.set(undefined)
+    expect(face.catalog.getSnapshot()).toEqual({ value: null })
+    face.refresh()
+    expect(surfaces.presets.catalog).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -24,6 +24,56 @@
   box-shadow: 0 4px 24px color-mix(in srgb, currentColor 18%, transparent);
 }
 
+/* Breadcrumb header of a drilled source (issue #80, the host MenuView's
+   `.crumbs`): pinned outside .viewport so the descent stays reversible while
+   the candidate list scrolls under it. */
+.crumbs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px 3px 5px;
+  margin-bottom: 2px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l1, color-mix(in srgb, currentColor 10%, transparent));
+}
+
+.crumb {
+  flex: 0 1 auto;
+  max-width: 40%;
+  overflow: hidden;
+  padding: 2px 5px;
+  border: none;
+  border-radius: var(--dsw-radius-sm, 4px);
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary, color-mix(in srgb, currentColor 60%, transparent));
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crumb:hover {
+  background: var(--dsw-alias-interactive-bg-hover, color-mix(in srgb, currentColor 8%, transparent));
+  color: var(--dsw-alias-label-primary, inherit);
+}
+
+/* The step the list is already showing reads as a label, not an action. */
+.crumbCurrent,
+.crumbCurrent:hover {
+  background: transparent;
+  color: var(--dsw-alias-label-primary, inherit);
+  cursor: default;
+}
+
+.crumbSeparator {
+  flex: none;
+  display: inline-flex;
+  color: var(--dsw-alias-menu-icon, color-mix(in srgb, currentColor 45%, transparent));
+}
+
 .viewport {
   display: flex;
   flex-direction: column;

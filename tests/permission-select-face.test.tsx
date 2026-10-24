@@ -44,6 +44,11 @@ function menuRows(): HTMLElement[] {
   return [...document.body.querySelectorAll('[role="menu"] [role="menuitem"]')] as HTMLElement[]
 }
 
+/** The in-place switch failure row (issue #80). */
+function switchError(): HTMLElement | null {
+  return document.querySelector('[data-permission-error]')
+}
+
 /** The pill appears once the mount-time catalog read settles. */
 async function whenPill(): Promise<HTMLElement> {
   return vi.waitFor(() => {
@@ -65,6 +70,7 @@ function mountFace(options: {
   locked?: boolean
   sessions?: Map<string, { command: ReturnType<typeof vi.fn> }>
   catalogResult?: unknown
+  focusEditor?: () => void
 } = {}) {
   const onError = vi.fn()
   // `'selection' in options` keeps an explicit undefined (missing projection
@@ -86,6 +92,7 @@ function mountFace(options: {
     t: fakeT as unknown as PermissionSelectFaceProps['t'],
     locked: options.locked ?? false,
     onError,
+    focusEditor: options.focusEditor,
   } as unknown as PermissionSelectFaceProps
   // Production shape: the body renders inside its FaceGate — the gate owns
   // the probe and the face handle the body degrades through.
@@ -208,38 +215,58 @@ describe('PermissionSelectFace switching', () => {
     expect(pill()).toHaveTextContent('Read Only')
   })
 
-  it('a failed write surfaces the error through the card banner and keeps the pill', async () => {
-    const failing = vi.fn(() => Promise.resolve({
-      ok: false, error: { code: 'permission/unknown', message: 'unknown preset "x"' },
-    }))
-    const { onError } = mountFace({ sessions: new Map([['s1', { command: failing }]]) })
+  it('a failed write reports in place, keeps the pill, and retries the same write', async () => {
+    const failingThenOk = vi.fn()
+      .mockResolvedValueOnce({ ok: false, error: { code: 'permission/unknown', message: 'unknown preset "x"' } })
+      .mockResolvedValueOnce({ ok: true, value: { matched: true } })
+    mountFace({ sessions: new Map([['s1', { command: failingThenOk }]]) })
     await whenPill()
     fireEvent.click(pill())
     fireEvent.click(menuRows()[0] as HTMLElement)
     await waitFor(() => {
-      expect(onError).toHaveBeenCalledWith('Permission switch failed: permission/unknown: unknown preset "x"')
+      expect(switchError()?.textContent).toContain('Permission switch failed: permission/unknown: unknown preset "x"')
     })
+    // The failure is NOT a degrade: the pill stays, enabled, and the popup
+    // stays open over the retry row.
     expect(pill()).not.toBeNull()
     expect(pill()).not.toBeDisabled()
+    expect(document.body.querySelector('[role="menu"]')).not.toBeNull()
+    fireEvent.click(switchError()!.querySelector('[data-permission-retry]') as HTMLElement)
+    await waitFor(() => expect(failingThenOk).toHaveBeenCalledTimes(2))
+    // The admitted retry closes the popup and clears the row.
+    await waitFor(() => expect(switchError()).toBeNull())
   })
 
-  it('an unmatched write hides the face (the command surface is gone)', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('an unmatched write stays retryable instead of hiding the face', async () => {
     const unmatched = vi.fn(() => Promise.resolve({ ok: true, value: { matched: false } }))
     mountFace({ sessions: new Map([['s1', { command: unmatched }]]) })
     await whenPill()
     fireEvent.click(pill())
     fireEvent.click(menuRows()[0] as HTMLElement)
-    await waitFor(() => expect(pill()).toBeNull())
+    await waitFor(() => expect(switchError()?.textContent).toContain('The host offers no /permission command'))
+    expect(pill()).not.toBeNull()
+    expect(pill()).not.toBeDisabled()
+    fireEvent.click(switchError()!.querySelector('[data-permission-retry]') as HTMLElement)
+    await waitFor(() => expect(unmatched).toHaveBeenCalledTimes(2))
   })
 
-  it('a session without a live binding reports the failure instead of crashing', async () => {
-    const { onError } = mountFace({ sessions: new Map() })
+  it('a session without a live binding reports in place instead of crashing', async () => {
+    mountFace({ sessions: new Map() })
     await whenPill()
     fireEvent.click(pill())
     fireEvent.click(menuRows()[0] as HTMLElement)
-    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(switchError()).not.toBeNull())
     expect(pill()).not.toBeDisabled()
+  })
+
+  it('Escape closes the popup and returns focus to the editor', async () => {
+    const focusEditor = vi.fn()
+    mountFace({ focusEditor })
+    await whenPill()
+    fireEvent.click(pill())
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(document.body.querySelector('[role="menu"]')).toBeNull())
+    expect(focusEditor).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -349,30 +376,31 @@ describe('PermissionSelectFace chain settle (#36)', () => {
     const command = vi.fn()
       .mockResolvedValueOnce({ ok: false, error: { code: 'permission/unknown', message: 'no' } })
       .mockResolvedValueOnce({ ok: true, value: { matched: true } })
-    const { onError } = mountFace({ sessions: new Map([['s1', { command }]]) })
+    mountFace({ sessions: new Map([['s1', { command }]]) })
     await whenPill()
     await chainOpenPopup(settle)
     fireEvent.click(menuRows()[0] as HTMLElement)
-    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(switchError()).not.toBeNull())
     // Failure: the token stays in the draft, and the unused hook is dropped —
     // a direct pill pick afterwards must not settle the stale chain.
     expect(settle).not.toHaveBeenCalled()
-    fireEvent.click(pill())
+    // The popup stayed open over the failure row: picking again is a direct
+    // retry, and the dropped hook must still not settle.
     fireEvent.click(menuRows()[0] as HTMLElement)
     await waitFor(() => expect(command).toHaveBeenCalledTimes(2))
     await waitFor(() => expect(pill()).not.toBeDisabled())
     expect(settle).not.toHaveBeenCalled()
   })
 
-  it('an unmatched write latches the face off without settling', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('an unmatched write stays retryable and never settles the chain', async () => {
     const settle = vi.fn()
     const command = vi.fn(() => Promise.resolve({ ok: true, value: { matched: false } }))
     mountFace({ sessions: new Map([['s1', { command }]]) })
     await whenPill()
     await chainOpenPopup(settle)
     fireEvent.click(menuRows()[0] as HTMLElement)
-    await waitFor(() => expect(pill()).toBeNull())
+    await waitFor(() => expect(switchError()).not.toBeNull())
+    expect(pill()).not.toBeNull()
     expect(settle).not.toHaveBeenCalled()
   })
 

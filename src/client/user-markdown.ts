@@ -17,16 +17,35 @@ const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/
 /** Closing fence: the same with nothing but whitespace after it. */
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})\s*$/
 
+/** An indented code block line: four spaces or a tab, CommonMark's rule. */
+const INDENTED_CODE = /^(?: {4}|\t)/
+
+/**
+ * A GFM table row, conservatively the pipe-bounded form (leading and trailing
+ * `|`): header, delimiter, and body rows all match. Outer-pipe-less tables
+ * stay unhandled rather than risk misfiring on ordinary prose (issue #80).
+ */
+const TABLE_ROW = /^\s*\|.*\|\s*$/
+
 /**
  * Turn every soft line break in `text` into a hard one.
+ *
+ * Exceptions where a break is not a hard break at all: fenced code interiors,
+ * indented code blocks (a blank-line boundary followed by four spaces/tab,
+ * per CommonMark — a list item's four-space continuation is NOT one), and
+ * pipe-bounded table rows (a trailing space would ride into the last cell).
  * @param text - the message Markdown about to be rendered.
  * @returns the same text with `  ` appended to each line ending that GFM
- * would otherwise fold into a space (fenced code interiors excluded).
+ * would otherwise fold into a space (the block exceptions excluded).
  */
 export function hardenSoftBreaks(text: string): string {
   const lines = text.split('\n')
   const out: string[] = []
   let fence: { char: string, length: number } | null = null
+  // Whether the previous line was blank (or the document just started) — the
+  // boundary that lets a four-space line open an indented code block.
+  let blankBoundary = true
+  let indented = false
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index]!
     if (fence === null) {
@@ -42,6 +61,30 @@ export function hardenSoftBreaks(text: string): string {
         fence = null
       }
       out.push(line)
+      blankBoundary = line.trim() === ''
+      continue
+    }
+    // Indented code block: every non-blank indented line stays raw; the block
+    // ends at the first non-blank line that is not indented.
+    if (indented) {
+      if (line.trim() === '' || INDENTED_CODE.test(line)) {
+        out.push(line)
+        blankBoundary = line.trim() === ''
+        continue
+      }
+      indented = false
+    }
+    if (blankBoundary && INDENTED_CODE.test(line)) {
+      indented = true
+      out.push(line)
+      blankBoundary = false
+      continue
+    }
+    // Table rows carry no hard-break meaning, and a tail space would pollute
+    // the last cell; the delimiter row above all must stay exact.
+    if (TABLE_ROW.test(line)) {
+      out.push(line)
+      blankBoundary = false
       continue
     }
     // Plain block content: the last line has no ending to harden and a
@@ -51,6 +94,7 @@ export function hardenSoftBreaks(text: string): string {
     } else {
       out.push(line.endsWith('  ') ? line : `${line}  `)
     }
+    blankBoundary = line.trim() === ''
   }
   return out.join('\n')
 }

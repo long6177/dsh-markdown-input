@@ -9,13 +9,22 @@
  *   their bare `@label` occurrences (sent-bubble only — the draft editor has
  *   no recall context and never passes `sessionLabels`);
  * - shape-recognized tokens at a whitespace boundary: the quoted whitespace
- *   form `@"…"`, any bare `@` non-space run (trailing sentence punctuation
+ *   form `@"…"`, a bare `@` non-space run (trailing sentence punctuation
  *   shed), and the `/name` skill gesture — word-ish name, whitespace- or
  *   end-bounded like the host `dsh-tool-skill` discipline, kept plain unless
  *   the caller's skill dictionary names it.
  *
+ * The two consumers intentionally disagree on the `@` arm's breadth (issue
+ * #80): the sent bubble keeps every bare `@` run (the host projection's
+ * shape-only discipline), while the draft editor narrows to the directory
+ * form plus an exact-name dictionary (`atShape: 'folder-only'`) — the host
+ * text-ref decorations' rule, which never chips an arbitrary `@word` such as
+ * `@张三`. `RefScanOptions` carries the switch so the shared grammar stays one
+ * module.
+ *
  * Markdown syntax is deliberately not consulted (the host's projections are
- * text-shape-only too): what the draft chips is what the sent bubble chips.
+ * text-shape-only too): what the draft chips is a subset of what the sent
+ * bubble chips.
  *
  * The scan is pure over (text, options): ranges recompute from the text, and
  * a missing/empty skill dictionary degrades the `/` arm to plain text (the
@@ -61,6 +70,20 @@ export interface RefScanOptions {
   readonly skills?: ReadonlySet<string>
   /** Exact session mention labels (the adjacent-recall input); draft scans pass none. */
   readonly sessionLabels?: readonly string[]
+  /**
+   * The `@` shape arm's breadth (issue #80): `any` (the default, the sent-bubble
+   * projection's contract — every bare `@` run decorates) or `folder-only`
+   * (the draft editor's contract, mirroring the host text-ref decorations:
+   * only the directory form — a shed path ending in `/` — decorates, plus the
+   * exact-name dictionary below).
+   */
+  readonly atShape?: 'any' | 'folder-only'
+  /**
+   * Exact `@name` dictionary hits the `folder-only` arm still decorates (the
+   * host decorations' `lexicon.get('@')` arm). Empty/absent keeps every bare
+   * `@name` plain — the draft has no host `@` lexicon source today.
+   */
+  readonly atNames?: ReadonlySet<string>
 }
 
 /** The wire form a session chip serializes to; label is the display text. */
@@ -130,6 +153,9 @@ export function scanRefTokens(text: string, options: RefScanOptions = {}): RefTo
     const label = raw.startsWith('@"') ? raw : raw.replace(TRAILING_PUNCTUATION_RE, '')
     if (label.length <= 1) continue
     if (label.startsWith('/') && !(options.skills?.has(label.slice(1)) ?? false)) continue
+    if (!label.startsWith('/') && options.atShape === 'folder-only'
+      && !atTokenPath(label).endsWith('/')
+      && !(options.atNames?.has(atTokenPath(label)) ?? false)) continue
     ranges.push({ start, end: start + label.length, kind: label.startsWith('/') ? 'skill' : 'at', label })
   }
 

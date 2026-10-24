@@ -37,6 +37,8 @@ function bindSurfaces(options: {
   /** `null` = the goals namespace service is absent. */
   goals?: ReturnType<typeof goalsRemote> | null
   withEvents?: boolean
+  /** The `sessions` face the open wait reads; absent = the pre-#80 read. */
+  sessions?: unknown
 } = {}) {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>()
   const remoteEvents = {
@@ -53,8 +55,29 @@ function bindSurfaces(options: {
   const goals = options.goals === null ? undefined : (options.goals ?? goalsRemote())
   setGoalSource(() => goals === undefined
     ? undefined
-    : { goals, remoteEvents: options.withEvents === false ? undefined : remoteEvents })
+    : {
+      goals,
+      remoteEvents: options.withEvents === false ? undefined : remoteEvents,
+      sessions: options.sessions as never,
+    })
   return { goals: goals as ReturnType<typeof goalsRemote>, remoteEvents, listeners }
+}
+
+/** A mutable session snapshot store for the open wait. */
+function sessionStore(initial: { openState: string; openError?: unknown }) {
+  let state = initial
+  const listeners = new Set<() => void>()
+  return {
+    set(next: { openState: string; openError?: unknown }) {
+      state = next
+      for (const listener of [...listeners]) listener()
+    },
+    getSnapshot: () => state,
+    subscribe(listener: () => void) {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+  }
 }
 
 afterEach(() => {
@@ -182,6 +205,61 @@ describe('goalFace.readActivation', () => {
     bindSurfaces({ goals: goalsRemote({ get: { ok: false, error: { code: 'x', message: 'not open' } } }) })
     const face = goalFace()!
     await expect(face.readActivation('s1')).resolves.toBeUndefined()
+  })
+
+  it('waits for the session to open through sessions.using before reading', async () => {
+    // `using` is the awaited-open gate: the operation only runs once the
+    // session reports `open`, so the read lands with the real state.
+    const store = sessionStore({ openState: 'open' })
+    const using = vi.fn(async (
+      _id: string,
+      _options: unknown,
+      operation: (reference: unknown) => Promise<unknown>,
+    ) => operation({ binding: { session: store } }))
+    const { goals } = bindSurfaces({
+      goals: goalsRemote({ get: { ok: true, value: { ...REF, activation: 'armed' } } }),
+      sessions: { binding: () => ({ binding: { session: sessionStore({ openState: 'opening' }) } }), using },
+    })
+    const face = goalFace()!
+    await expect(face.readActivation('s1')).resolves.toEqual({ id: 'g1', revision: 3, activation: 'armed' })
+    expect(using).toHaveBeenCalledWith('s1', { source: 'goalActivation' }, expect.any(Function))
+    expect(goals.get).toHaveBeenCalledWith('s1')
+  })
+
+  it('skips the read when using reports the session not open', async () => {
+    const store = sessionStore({ openState: 'error', openError: new Error('session "s1" is not open') })
+    const using = vi.fn(async (
+      _id: string,
+      _options: unknown,
+      operation: (reference: unknown) => Promise<unknown>,
+    ) => operation({ binding: { session: store } }))
+    const { goals } = bindSurfaces({ sessions: { binding: () => ({ binding: { session: store } }), using } })
+    const face = goalFace()!
+    await expect(face.readActivation('s1')).resolves.toBeUndefined()
+    expect(goals.get).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the binding store when using is absent, reading after it opens', async () => {
+    const store = sessionStore({ openState: 'opening' })
+    const { goals } = bindSurfaces({
+      goals: goalsRemote({ get: { ok: true, value: { ...REF, activation: 'disarmed' } } }),
+      sessions: { binding: () => ({ binding: { session: store } }) },
+    })
+    const face = goalFace()!
+    const pending = face.readActivation('s1')
+    await Promise.resolve()
+    expect(goals.get).not.toHaveBeenCalled()
+    store.set({ openState: 'open' })
+    await expect(pending).resolves.toEqual({ id: 'g1', revision: 3, activation: 'disarmed' })
+    expect(goals.get).toHaveBeenCalledWith('s1')
+  })
+
+  it('answers undefined from the fallback when the session open failed', async () => {
+    const store = sessionStore({ openState: 'error', openError: new Error('open failed') })
+    const { goals } = bindSurfaces({ sessions: { binding: () => ({ binding: { session: store } }) } })
+    const face = goalFace()!
+    await expect(face.readActivation('s1')).resolves.toBeUndefined()
+    expect(goals.get).not.toHaveBeenCalled()
   })
 })
 

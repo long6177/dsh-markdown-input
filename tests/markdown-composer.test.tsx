@@ -93,6 +93,7 @@ function chainProps(overrides: {
   claim?: { readonly name: string; readonly token: string; readonly hint?: string }
   goal?: unknown
   plan?: unknown
+  imageLimits?: unknown
   queue?: readonly QueueRow[]
   sessionId?: string
   inputActions?: Partial<Record<'setDraft' | 'submit', ReturnType<typeof vi.fn>>>
@@ -117,10 +118,13 @@ function chainProps(overrides: {
   const projectionValues: Record<string, unknown> = {
     goal: overrides.goal ?? null,
     plan: overrides.plan,
+    imageLimits: overrides.imageLimits,
   }
   return {
     matched: MARKDOWN_TAKEOVER,
-    sessionId: overrides.sessionId ?? 's1',
+    // `'sessionId' in overrides` keeps an explicit undefined (no session)
+    // distinct from the default s1 — the #80 inert arm needs that case.
+    sessionId: 'sessionId' in overrides ? overrides.sessionId : 's1',
     session: overrides.session,
     useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
     inputActions: inputActions as unknown as MarkdownComposerProps['inputActions'],
@@ -687,6 +691,112 @@ describe('MarkdownComposer attachments', () => {
     expect(inputActions.addAttachments).toHaveBeenCalledWith(['d0'])
   })
 
+  describe('image limits (issue #80)', () => {
+    const LIMITS = {
+      maxImageBytes: 4 * 1024 * 1024,
+      maxImagesPerMessage: 2,
+      maxMessageImageBytes: 6 * 1024 * 1024,
+      mediaTypes: ['image/png', 'image/jpeg'],
+    }
+
+    function image(bytes = 8, name = 'a.png', type = 'image/png'): File {
+      return new File([new Uint8Array(bytes)], name, { type })
+    }
+
+    function banner(container: HTMLElement): HTMLElement | null {
+      return container.querySelector('[data-markdown-banner]')
+    }
+
+    it('refuses too many picked images before any draft exists', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(
+        <MarkdownComposer {...chainProps({ imageLimits: LIMITS, inputActions })} />,
+      )
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image(), image()] } })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(inputActions.addAttachments).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('A message can include up to 2 images')
+    })
+
+    it('counts the images already in the rail toward the per-message limit', () => {
+      const conversation = fakeConversation({
+        drafts: [{ kind: 'image', id: 'd0', file: image() }],
+      })
+      setConversationSource(() => conversation)
+      const { container } = render(<MarkdownComposer {...chainProps({
+        imageLimits: LIMITS, attachmentIds: ['d0'],
+      })} />)
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image()] } })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('A message can include up to 2 images')
+    })
+
+    it('refuses an oversized image on drop with the named copy', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const { container } = render(<MarkdownComposer {...chainProps({ imageLimits: LIMITS })} />)
+      fireEvent.drop(container.querySelector('[data-markdown-composer]') as HTMLElement, {
+        dataTransfer: { files: [image(5 * 1024 * 1024)] },
+      })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('Each image must be smaller than 4MB')
+    })
+
+    it('refuses a pasted batch over the total budget', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const { container } = render(<MarkdownComposer {...chainProps({ imageLimits: LIMITS })} />)
+      fireEvent.paste(content(), {
+        clipboardData: {
+          items: [{ kind: 'file' }, { kind: 'file' }],
+          files: [image(3.5 * 1024 * 1024), image(3.5 * 1024 * 1024)],
+          getData: () => '',
+        },
+      })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('Images exceed 6MB in total; remove some and try again')
+    })
+
+    it('admits a batch within every limit', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(
+        <MarkdownComposer {...chainProps({ imageLimits: LIMITS, inputActions })} />,
+      )
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image()] } })
+      expect(conversation.createDrafts).toHaveBeenCalledTimes(1)
+      expect(inputActions.addAttachments).toHaveBeenCalledWith(['d0', 'd1'])
+    })
+
+    it('leaves generic files unrestricted', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(
+        <MarkdownComposer {...chainProps({ imageLimits: LIMITS, inputActions })} />,
+      )
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [new File([new Uint8Array(20 * 1024 * 1024)], 'big.bin')] } })
+      expect(conversation.createDrafts).toHaveBeenCalledTimes(1)
+    })
+
+    it('skips the preflight when the host serves no imageLimits projection', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(<MarkdownComposer {...chainProps({ inputActions })} />)
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image(), image()] } })
+      expect(conversation.createDrafts).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('refuses intake while busy: the drop placeholder never appears', () => {
     const conversation = fakeConversation()
     setConversationSource(() => conversation)
@@ -1225,6 +1335,48 @@ describe('MarkdownComposer — queue strip (issue #30)', () => {
   })
 })
 
+describe('MarkdownComposer — input locking (issue #80)', () => {
+  /** The native `disabled` formula's session arms. */
+  function lockSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { running: false, subagent: null, removed: false, ...overrides }
+  }
+
+  it('locks the text face when the session was removed', async () => {
+    render(<MarkdownComposer {...chainProps({ session: lockSession({ removed: true }) })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('locks the text face while an owner composer block is raised', async () => {
+    setConversationSource(() => fakeConversation({ block: { reason: '等待审批' } }))
+    render(<MarkdownComposer {...chainProps({ session: lockSession() })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('locks the text face when a continuable child\'s parent is offline', async () => {
+    render(<MarkdownComposer {...chainProps({
+      session: lockSession({ subagent: { address: { mode: 'continuable' }, parentAvailable: false } }),
+    })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('keeps the text face editable when the continuable parent is available', async () => {
+    render(<MarkdownComposer {...chainProps({
+      session: lockSession({ subagent: { address: { mode: 'continuable' }, parentAvailable: true } }),
+    })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'true'))
+  })
+
+  it('locks the text face without a session id (the native inert arm)', async () => {
+    render(<MarkdownComposer {...chainProps({ session: lockSession(), sessionId: undefined })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('keeps an ordinary session editable', async () => {
+    render(<MarkdownComposer {...chainProps({ session: lockSession() })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'true'))
+  })
+})
+
 describe('MarkdownComposer — stop actions (issue #32)', () => {
   /** A running-session snapshot; `session` is plain data for the card. */
   function stopSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -1405,8 +1557,50 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
       render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
       fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
       await vi.waitFor(() => {
-        expect(document.querySelector('[role="tooltip"]')?.textContent)
-          .toBe(en['composer.action.stop'])
+        // The label plus the Esc+Esc keycaps (issue #80's shortcut hint).
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip?.textContent).toContain(en['composer.action.stop'])
+        expect(tip).toHaveAttribute('data-has-shortcut')
+      })
+    } finally {
+      vi.stubGlobal('ResizeObserver', undefined)
+    }
+  })
+
+  it('carries the Esc+Esc shortcut on both stop tooltips (issue #80)', async () => {
+    /** jsdom lacks ResizeObserver; the host Tooltip sizes its bubble through one. */
+    class StaticResizeObserver {
+      constructor(private readonly callback: (entries: unknown[]) => void) {}
+      observe(target: Element): void {
+        this.callback([{ target, borderBoxSize: [{ inlineSize: 120, blockSize: 30 }] }])
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', StaticResizeObserver)
+    try {
+      // The primary stop arm on an ordinary running session with no draft.
+      installStopScope(fakeConversation())
+      const primary = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
+      await vi.waitFor(() => {
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip).toHaveAttribute('data-has-shortcut')
+        expect(tip?.textContent).toContain('Esc')
+        expect(tip?.getAttribute('aria-label')?.match(/Esc/gu)).toHaveLength(2)
+      })
+      primary.unmount()
+
+      // The dedicated stop on a running continuable child.
+      installStopScope(fakeConversation())
+      render(<MarkdownComposer {...chainProps({
+        session: stopSession({ subagent: { address: { mode: 'continuable' }, parentAvailable: true } }),
+      })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
+      await vi.waitFor(() => {
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip).toHaveAttribute('data-has-shortcut')
+        expect(tip?.getAttribute('aria-label')?.match(/Esc/gu)).toHaveLength(2)
       })
     } finally {
       vi.stubGlobal('ResizeObserver', undefined)

@@ -507,3 +507,101 @@ export function ttftMeanMs(stats: SessionStatsView): number | null {
 export function timeDialogAvailable(stats: SessionStatsView): boolean {
   return stats.llmMs > 0 || stats.toolMs > 0 || stats.ttftSteps > 0 || stats.decodeMs > 0
 }
+
+/**
+ * One settled chat node as the window fold reads it (host
+ * `ChatSnapshot['legacy']['nodes']` subset, structurally re-declared).
+ */
+export interface WindowStatsNode {
+  readonly kind?: unknown
+  readonly turn?: unknown
+  readonly time?: unknown
+  readonly callTime?: unknown
+  readonly timing?: unknown
+  readonly usage?: unknown
+}
+
+/** One assistant step's derivable latency facts (host `StepReading`). */
+interface StepReading {
+  readonly ttftMs: number | null
+  readonly decodeMs: number | null
+  readonly outputTokens: number | null
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+/**
+ * Read one assistant node's TTFT, decode wall time, and output tokens (host
+ * `contract/turn-metrics.ts`, verbatim semantics: absent or unrecorded parts
+ * are null; elapsed values clamp at zero).
+ * @param node - a settled assistant node.
+ */
+export function assistantStepReading(node: WindowStatsNode): StepReading {
+  const timing = (typeof node.timing === 'object' && node.timing !== null)
+    ? node.timing as Record<string, unknown>
+    : undefined
+  const stepStart = finiteNumber(timing?.stepStartTime)
+  const firstToken = finiteNumber(timing?.firstTokenTime)
+  const completed = finiteNumber(timing?.completedTime)
+  const ttftMs = stepStart !== null && firstToken !== null ? Math.max(0, firstToken - stepStart) : null
+  const decodeMs = firstToken !== null && completed !== null ? Math.max(0, completed - firstToken) : null
+  const usage = (typeof node.usage === 'object' && node.usage !== null)
+    ? node.usage as Record<string, unknown>
+    : undefined
+  const rawOutput = usage?.outputTokens
+  const outputTokens = typeof rawOutput === 'number' && Number.isFinite(rawOutput) && rawOutput >= 0
+    ? rawOutput
+    : null
+  return { ttftMs, decodeMs, outputTokens }
+}
+
+/**
+ * Fold the settled window's assistant and tool-result nodes into the same
+ * shape as the `sessionStats` projection (host `deriveStats`, verbatim):
+ * turns dedupe, steps count assistant nodes, llm/decode/TTFT sum clamped
+ * wall times, and tool results add their call→result span. This is the
+ * FALLBACK for assemblies without the projection — it answers "what is on
+ * screen" over the loaded window only (paging/compaction move it).
+ * @param nodes - the chat snapshot's settled nodes.
+ * @returns window-scoped counts and summed wall times.
+ */
+export function deriveStats(nodes: readonly WindowStatsNode[]): SessionStatsView {
+  const turns = new Set<number>()
+  let steps = 0
+  let llmMs = 0
+  let toolMs = 0
+  let ttftMs = 0
+  let ttftSteps = 0
+  let decodeMs = 0
+  let decodeTokens = 0
+  for (const node of nodes) {
+    if (node.kind === 'tool-result') {
+      const callTime = finiteNumber(node.callTime)
+      const time = finiteNumber(node.time)
+      if (callTime !== null && time !== null) toolMs += Math.max(0, time - callTime)
+      continue
+    }
+    if (node.kind !== 'assistant') continue
+    const turn = finiteNumber(node.turn)
+    if (turn !== null) turns.add(turn)
+    steps += 1
+    const timing = (typeof node.timing === 'object' && node.timing !== null)
+      ? node.timing as Record<string, unknown>
+      : undefined
+    const stepStart = finiteNumber(timing?.stepStartTime)
+    const completed = finiteNumber(timing?.completedTime)
+    if (stepStart !== null && completed !== null) llmMs += Math.max(0, completed - stepStart)
+    const reading = assistantStepReading(node)
+    if (reading.ttftMs !== null) {
+      ttftMs += reading.ttftMs
+      ttftSteps += 1
+    }
+    if (reading.decodeMs !== null && reading.outputTokens !== null) {
+      decodeMs += reading.decodeMs
+      decodeTokens += reading.outputTokens
+    }
+  }
+  return { turns: turns.size, steps, llmMs, toolMs, ttftMs, ttftSteps, decodeMs, decodeTokens }
+}

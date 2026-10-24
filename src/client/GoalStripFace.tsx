@@ -15,7 +15,7 @@
  * actions degrade, visibility never does). Mounts inside its FaceGate — a
  * render exception latches this face off alone, never the card.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   IconCheckOutlineRegular, IconCloseOutlineRegular, IconEditOutlineRegular,
   IconGoalOutlineRegular, IconPauseOutlineRegular, IconPlayOutlineRegular,
@@ -102,6 +102,26 @@ export function GoalStripFace({ useProjection, sessionId, running, t }: GoalStri
   const [activationEdge, setActivationEdge] = useState<GoalActivationEdge>({})
   const [resetEpoch, setResetEpoch] = useState(0)
   const pendingRef = useRef(false)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
+
+  // Auto-fit the multi-line objective editor (the host InlineEditor's
+  // `useLayoutEffect` + ResizeObserver): the box grows to the content up to
+  // the stylesheet's cap, and re-fits on a width change too. jsdom has no
+  // layout, so the effect is a harmless no-op there.
+  useLayoutEffect(() => {
+    if (!editing) return undefined
+    const node = inputRef.current
+    if (node === null) return undefined
+    const fit = (): void => {
+      node.style.height = 'auto'
+      node.style.height = `${node.scrollHeight + node.offsetHeight - node.clientHeight}px`
+    }
+    fit()
+    if (typeof ResizeObserver === 'undefined') return undefined
+    const observer = new ResizeObserver(fit)
+    observer.observe(node)
+    return () => { observer.disconnect() }
+  }, [editing, draft])
 
   // The goal face resolves per call: its verbs and subscriptions shed
   // alone (capability detection), the strip's visibility never rides them.
@@ -193,19 +213,30 @@ export function GoalStripFace({ useProjection, sessionId, running, t }: GoalStri
     return (
       <div className={css.goal} data-markdown-goal>
         <div className={css.goalBar} data-markdown-goal-bar>
-          <input
+          {/* A textarea, not an input (the host InlineEditor's rule): HTML
+              strips newlines from single-line input values, so a multi-line
+              objective could not survive. Enter saves, Shift+Enter inserts a
+              newline, an IME-confirming Enter (isComposing / legacy keyCode
+              229) does not, and Escape cancels. */}
+          <textarea
+            ref={inputRef}
             className={css.goalInput}
-            type="text"
+            rows={1}
             data-markdown-goal-input
             aria-label={t('goal.objective.aria')}
             value={draft}
             onChange={(event) => { setDraft(event.currentTarget.value) }}
             onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
-                event.preventDefault()
-                handleEdit()
+              if (event.key === 'Escape') {
+                setEditing(false)
+                return
               }
-              if (event.key === 'Escape') setEditing(false)
+              if (event.key !== 'Enter' || event.shiftKey) return
+              const composing = event.nativeEvent.isComposing
+                || (Reflect.get(event.nativeEvent, 'keyCode') as unknown) === 229
+              if (composing) return
+              event.preventDefault()
+              handleEdit()
             }}
             autoFocus
           />
