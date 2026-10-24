@@ -174,6 +174,47 @@ function enterCommand(submit: () => void): (view: EditorView) => boolean {
   }
 }
 
+/**
+ * The Enter key-lifecycle guard (issue #74): the arms the keymap's own
+ * `run(view)` cannot see because they live on the raw keydown event. The
+ * keymap facet runs its bindings from a `Prec.default` domEventHandlers
+ * keydown listener (@codemirror/view handleKeyEvents), so this guard at
+ * Prec.highest always sees the event first; returning true consumes it
+ * before any binding — the send command and the menu combobox alike —
+ * can act.
+ *
+ * Held-down Enter is consumed without submitting: keyboard auto-repeat
+ * must not machine-gun sends (the upstream keymap's `event.repeat` guard).
+ * The IME arms mirror the upstream keymap's three signals: `isComposing`
+ * covers most engines, `keyCode 229` is the legacy signal on engines that
+ * never raise it, and the composition hold window covers the closing
+ * keystrokes some engines deliver after compositionend — by then CM6's own
+ * observer has dropped `view.composing`, and its Safari-only suppression
+ * eats exactly one such keydown, so the window is the signal left.
+ */
+const COMPOSITION_HOLD_MS = 10
+
+/**
+ * Mount the Enter key-lifecycle guard against the shared composition hold
+ * stamp (read by the menu combobox guard too).
+ * @param compositionHold - box holding the timestamp the guard holds sends
+ *   until (0 when no composition recently ended).
+ */
+function enterKeyLifecycleGuard(compositionHold: { until: number }): Extension {
+  return Prec.highest(EditorView.domEventHandlers({
+    compositionend() {
+      compositionHold.until = Date.now() + COMPOSITION_HOLD_MS
+      return false
+    },
+    keydown(event) {
+      if (event.key !== 'Enter') return false
+      if (event.repeat === true) return true
+      return event.isComposing === true || event.keyCode === 229
+        || Date.now() < compositionHold.until
+    },
+  }))
+}
+
 export interface MarkdownEditorOptions {
   /** Element the editor mounts into. */
   parent: HTMLElement
@@ -198,8 +239,15 @@ export interface MarkdownEditorHandle {
   setMode(mode: EditMode, placeholder: string): void
   /** Toggle the editable face; a read-only surface keeps the draft visible. */
   setEditable(editable: boolean): void
-  /** Replace the whole document and park the caret at its end; no-op when equal. */
-  setText(text: string): void
+  /**
+   * Replace the whole document and park the caret at its end; no-op when
+   * equal. The caret is scrolled into view (a long restored draft must show
+   * its caret end). `cutHistory` discards the whole undo/redo stack in the
+   * same transaction — the submit path's commit point (the accepted send's
+   * clear, a failure's draft restore), so Ctrl+Z cannot resurrect sent
+   * content; plain seeds never cut, keeping ordinary undo alive.
+   */
+  setText(text: string, options?: { cutHistory?: boolean }): void
   getText(): string
   focus(): void
   /**
@@ -332,6 +380,12 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
   const renderCompartment = new Compartment()
   const placeholderCompartment = new Compartment()
   const editableCompartment = new Compartment()
+  // The undo history sits behind a compartment so the submit path can cut
+  // it (#74, the upstream CLEAR_HISTORY_COMMAND parity): reconfiguring a
+  // fresh history() retires the field's state — the whole undo/redo stack
+  // dies with it. The compartment is touched by nothing else, so the
+  // mode-switch promise (undo history survives render/source flips) holds.
+  const historyCompartment = new Compartment()
   // The open `+` menu installs its key handler here; the keymap consults it
   // ahead of the editor's own commands and falls through while it is null.
   const menuHandler: { current: MenuKeyHandler | null } = { current: null }
@@ -340,10 +394,15 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
   // typed text closes the menu — so the chain is unambiguous), then the
   // `+` menu's, then declines so the editor's own commands carry on.
   const completionHandler: { current: MenuKeyHandler | null } = { current: null }
+  // The composition hold stamp the Enter guard arms (issue #74): the menu
+  // combobox keys stay consumed through the same window (a candidate-
+  // confirming keystroke never drives the menus past the composition end).
+  const compositionHold = { until: 0 }
   const runMenu = (intent: MenuKeyIntent) => (view: EditorView): boolean => {
     // IME composition: a candidate-confirming keystroke never drives the
-    // menus (defense in depth behind the editor's own composition gating).
-    if (view.composing) return true
+    // menus (defense in depth behind the editor's own composition gating),
+    // through the post-compositionend hold window as well.
+    if (view.composing || Date.now() < compositionHold.until) return true
     const completion = completionHandler.current
     if (completion !== null && completion(intent)) return true
     const menu = menuHandler.current
@@ -397,7 +456,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
   })
 
   const baseExtensions: Extension[] = [
-    history(),
+    historyCompartment.of(history()),
     // markdownLanguage is the GFM-extended base (task lists included);
     // markdown()'s plain default is CommonMark only.
     markdown({ base: markdownLanguage }),
@@ -455,6 +514,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       if (update.docChanged || update.selectionSet) emitProbe(update.state)
     }),
     pasteHandler(options.onFiles),
+    enterKeyLifecycleGuard(compositionHold),
     compositionEndProbe,
     refChipDecorations,
   ]
@@ -488,15 +548,34 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
         effects: [editableCompartment.reconfigure(editableExtensions(editable))],
       })
     },
-    setText(text) {
+    setText(text, options) {
       if (view.state.doc.toString() === text) return
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: text },
         selection: { anchor: text.length },
+        scrollIntoView: true,
+        ...(options?.cutHistory === true
+          ? { effects: historyCompartment.reconfigure([]) }
+          : {}),
       })
+      if (options?.cutHistory === true) {
+        // The history cut (#74, the upstream CLEAR_HISTORY_COMMAND parity):
+        // @codemirror/commands' history field is a module singleton, so a
+        // compartment swap to a fresh history() carries the old stack over.
+        // Unmounting the whole extension retires the field WITH its state;
+        // the follow-up dispatch remounts it, re-initialized empty — one
+        // later transaction re-records nothing in between (same tick).
+        view.dispatch({ effects: historyCompartment.reconfigure(history()) })
+      }
     },
     getText: () => view.state.doc.toString(),
-    focus: () => view.focus(),
+    focus: () => {
+      view.focus()
+      // Reveal the selection (the session-switch/restore beat's scroll): the
+      // caret must be visible in a long draft, and an empty transaction with
+      // scrollIntoView measures and scrolls without touching history.
+      view.dispatch({ scrollIntoView: true })
+    },
     setMenuKeyHandler(handler) {
       menuHandler.current = handler
     },

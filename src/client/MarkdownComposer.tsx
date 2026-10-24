@@ -109,6 +109,26 @@ export interface MarkdownTakeover {
   readonly kind: 'markdown'
 }
 
+/**
+ * The failure-restore merge (issue #74): a failed send's draft comes back
+ * while the user kept typing during the flight. Nothing may be lost:
+ *
+ * - a pure in-flight append (the editor text starts with the restored
+ *   draft) survives whole — the upstream `retainSuffixOf` parity, the
+ *   append is the user's continuation of the sent text;
+ * - diverged text joins AFTER the restored draft with the submission-order
+ *   separator (the upstream failed-draft rebuild joins with `'\n\n'`) —
+ *   the restored text was submitted first;
+ * - an emptied editor just takes the restore; an equal or empty restore
+ *   never touches the editor text.
+ */
+export function mergeRestoredDraft(restored: string, editorText: string): string {
+  if (restored === '' || editorText === restored) return editorText
+  if (editorText === '') return restored
+  if (editorText.startsWith(restored)) return editorText
+  return `${restored}\n\n${editorText}`
+}
+
 /** The one non-null marker this chain entry elects with. */
 export const MARKDOWN_TAKEOVER: MarkdownTakeover = { kind: 'markdown' }
 
@@ -304,6 +324,18 @@ export function MarkdownComposer({
   const touchedRef = useRef(false)
   const seedingRef = useRef(false)
   const draftSyncTimerRef = useRef<number | undefined>(undefined)
+  /**
+   * The send-flight gate (issue #74): a submit's window spans the setDraft →
+   * host submit hop and the frames before the host's settled state (the
+   * cleared draft) reaches the seed — the machine detaches back to 'plain'
+   * at send time, so the phase guard alone lets a second Enter or a second
+   * click through and the still-present editor text re-enters the machine.
+   * 'pending' = the setDraft/submit hop is scheduled; 'sent' = the host
+   * submit fired, the flight awaits its settle (the seed effect releases
+   * it); false = idle. The seed effect also reads the 'sent' state as the
+   * commit point where the undo history is cut (issue #74).
+   */
+  const flightRef = useRef<false | 'pending' | 'sent'>(false)
   // Refs mirroring the mutable faces so the editor (mounted once) always
   // reads the freshest session state without remounting.
   const inputRef = useRef(input)
@@ -448,12 +480,20 @@ export function MarkdownComposer({
   }, [attachments, previewImage])
 
   function submit(): void {
+    // One send at a time (#74): the machine detaches back to plain at send
+    // time, so only this gate covers the whole pipeline window.
+    if (flightRef.current !== false) return
     const editor = editorRef.current
     if (editor === null || inputRef.current.phase !== 'plain') return
+    // The machine's own empty-draft no-op (the upstream `trimmed === ''`
+    // guard): never arm the flight for a send the host would refuse — the
+    // gate would latch with nothing to release it.
+    if (editor.getText().trim() === '' && inputRef.current.attachmentIds.length === 0) return
     if (uploadsPendingRef.current) {
       showBanner(tRef.current('composer.file.stillUploading'))
       return
     }
+    flightRef.current = 'pending'
     // Cancel a pending draft mirror: firing after the machine clears the
     // sent draft would resurrect the sent text into the input.
     window.clearTimeout(draftSyncTimerRef.current)
@@ -463,7 +503,16 @@ export function MarkdownComposer({
     // its projection; the phase re-checks at fire time in case the machine
     // left 'plain' in between.
     window.setTimeout(() => {
-      if (inputRef.current.phase === 'plain') inputActionsRef.current.submit()
+      if (inputRef.current.phase === 'plain') {
+        inputActionsRef.current.submit()
+        // The flight is now the host's: the seed effect releases the gate
+        // when the settled state (cleared or restored draft) arrives.
+        flightRef.current = 'sent'
+      } else {
+        // The machine went busy before our hop landed: the host never took
+        // this draft — release the gate instead of latching.
+        flightRef.current = false
+      }
     }, 0)
   }
 
@@ -531,15 +580,67 @@ export function MarkdownComposer({
     }
   }, [])
 
+  // A session switch retires the editing window (issue #74): typed text
+  // from the previous session must not suppress the new session's draft
+  // seed, a pending mirror must not write the old session's text into the
+  // new one, and a flight still open on the old session can never settle.
+  // Declared ahead of the seed effect so the reset lands before the new
+  // session's draft is applied.
+  const flightSessionRef = useRef(sessionId)
+  useEffect(() => {
+    if (flightSessionRef.current === sessionId) return
+    flightSessionRef.current = sessionId
+    window.clearTimeout(draftSyncTimerRef.current)
+    touchedRef.current = false
+    flightRef.current = false
+  }, [sessionId])
+
   // Seed from the persisted draft until the user edits locally; after a
   // settled submit the machine clears the draft and this clears the surface.
+  // The send flight settles through this same public state (issue #74): the
+  // first post-submit change — the cleared draft (accepted), a restored
+  // draft or returned attachments or the Session promptError (failed) —
+  // releases the flight gate; the accepted clear is the commit point where
+  // the seed cuts the undo history so Ctrl+Z cannot resurrect sent text.
+  // A host-side draft rewrite arriving over user-typed text (touched, the
+  // mirror lagging or already fired) is a failure restore, not a seed: it
+  // merges with what the user typed instead of being dropped — the old
+  // drop-then-remirror path lost the restored draft to the stale mirror.
+  const seededDraftRef = useRef<string | undefined>(undefined)
   useEffect(() => {
+    const editor = editorRef.current
+    if (editor === null) return
+    const draftChanged = seededDraftRef.current !== input.draft
+    seededDraftRef.current = input.draft
+    const flightSettled = flightRef.current === 'sent'
+    if (flightSettled) flightRef.current = false
+    const editorText = editor.getText()
+    if (touchedRef.current && draftChanged && input.draft !== '' && editorText !== input.draft) {
+      const merged = mergeRestoredDraft(input.draft, editorText)
+      // A pending mirror captured the pre-merge text; it must never land
+      // after the merge and put the truncated snapshot back.
+      window.clearTimeout(draftSyncTimerRef.current)
+      if (merged !== editorText) {
+        // The upstream restore shape: restoreDraft + clearHistory — the
+        // merged content starts a fresh undo history.
+        seedingRef.current = true
+        editor.setText(merged, { cutHistory: true })
+        seedingRef.current = false
+        setHasText(merged.trim().length > 0)
+      }
+      // The editor text is the truth now (kept append or merged): push it
+      // before any other writer can read the restored snapshot back.
+      inputActionsRef.current.setDraft(merged)
+      return
+    }
+    const commitClear = flightSettled
+      && input.draft === '' && input.attachmentIds.length === 0
     if (touchedRef.current) return
     seedingRef.current = true
-    editorRef.current?.setText(input.draft)
+    editor.setText(input.draft, commitClear ? { cutHistory: true } : undefined)
     seedingRef.current = false
     setHasText(input.draft.trim().length > 0)
-  }, [input.draft])
+  }, [input.draft, input.attachmentIds, session?.promptError])
 
   // Chip decorations (T9). Warm the skill lexicon once per session and push
   // the live roll into the editor — the RPC resolves after mount, so the
@@ -743,6 +844,18 @@ export function MarkdownComposer({
     editorRef.current?.setEditable(!machineBusy && !triggerPosture)
   }, [machineBusy, triggerPosture])
 
+  // The session-switch/unlock focus (issue #74, the native bar's unlock
+  // effect with sessionId in its deps): a session change or the machine
+  // leaving a busy phase puts the caret back in the text face — the
+  // handle's focus restores the selection and scrolls it into view, so a
+  // long restored draft lands with its caret visible. A busy phase or the
+  // workspace trigger posture is not an editor surface: nothing is pulled
+  // into it.
+  useEffect(() => {
+    if (machineBusy || triggerPosture) return
+    editorRef.current?.focus()
+  }, [machineBusy, triggerPosture, sessionId, editorHandle])
+
   // Mode and placeholder live in compartments, so a switch keeps undo
   // history and scroll; the choice persists across page loads.
   function toggleMode(): void {
@@ -867,6 +980,25 @@ export function MarkdownComposer({
    * picker. This is the explicit guard the ticket asked for against breaking
    * the #41 hit area on the way in.
    */
+  /**
+   * The tool row's keep-focus arm (issue #74, the native keepDraftFocus): a
+   * mousedown on a row button is consumed — focus never lands on the button
+   * — and the editor takes it back, so typing continues after sending,
+   * toggling the mode, or opening a picker without re-clicking the text
+   * face. The click itself still fires (preventDefault on mousedown cancels
+   * no click). Popup items and containers portal outside this row and keep
+   * their own focus behavior; the row's gaps fall through to the card hit
+   * area (issue #41), which focuses without cancelling.
+   */
+  function onToolRowMouseDown(event: MouseEvent<HTMLDivElement>): void {
+    if (triggerPosture) return
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (target.closest('button') === null) return
+    event.preventDefault()
+    editorRef.current?.focus()
+  }
+
   function onCardMouseDown(event: MouseEvent<HTMLDivElement>): void {
     if (triggerPosture) return
     if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
@@ -1152,7 +1284,7 @@ export function MarkdownComposer({
           />
         )}
         <div className={css.surface} data-markdown-surface ref={surfaceRef} />
-        <div className={css.toolRow} ref={toolRowRef}>
+        <div className={css.toolRow} ref={toolRowRef} onMouseDown={onToolRowMouseDown}>
           {/* The native row's two-group shape (issue #39, alpha.13 inversion):
               the seats ride in a leading and a trailing cluster, each ONE
               non-shrinking flex item (`flex: none`) — the layout premise the

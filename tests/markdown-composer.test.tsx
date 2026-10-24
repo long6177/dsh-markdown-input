@@ -8,7 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
-import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
+import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, mergeRestoredDraft, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { installConversationSource, resetImageLightbox, setConversationSource, setImageLightbox } from '../src/client/conversation-face.ts'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
@@ -90,6 +90,7 @@ function chainProps(overrides: {
   goal?: unknown
   plan?: unknown
   queue?: readonly QueueRow[]
+  sessionId?: string
   inputActions?: Partial<Record<'setDraft' | 'submit', ReturnType<typeof vi.fn>>>
 } = {}): MarkdownComposerProps {
   const inputActions = {
@@ -115,7 +116,7 @@ function chainProps(overrides: {
   }
   return {
     matched: MARKDOWN_TAKEOVER,
-    sessionId: 's1',
+    sessionId: overrides.sessionId ?? 's1',
     session: overrides.session,
     useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
     inputActions: inputActions as unknown as MarkdownComposerProps['inputActions'],
@@ -153,6 +154,13 @@ function modeToggleCopy(mode: 'render' | 'source'): string {
 function pasteHtml(html: string): void {
   fireEvent.paste(content(), {
     clipboardData: { getData: (type: string) => type === 'text/html' ? html : '' },
+  })
+}
+
+/** Paste plain text at the caret (the default paste path, CM6's own). */
+function pastePlain(text: string): void {
+  fireEvent.paste(content(), {
+    clipboardData: { getData: (type: string) => type === 'text/plain' ? text : '' },
   })
 }
 
@@ -313,6 +321,25 @@ describe('MarkdownComposer', () => {
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
   })
 
+  it('sends one message when Enter lands twice before the host settles (#74)', async () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const view = render(<MarkdownComposer {...chainProps({ draft: '一发', inputActions })} />)
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      // A second physical press inside the send pipeline's window (the
+      // machine detaches back to plain in a blink, so the phase guard alone
+      // passes it): the in-flight gate holds it — one setDraft, one submit.
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+      expect(inputActions.submit).toHaveBeenCalledTimes(1)
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the icon-only seats localized: the copy follows the active language', () => {
     const zhT = ((key: keyof typeof zh, params?: Record<string, string>) =>
       zh[key].replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`)
@@ -397,6 +424,128 @@ describe('MarkdownComposer', () => {
     fireEvent.click(seatNamed(en['composer.action.submit']))
     await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith('- a'))
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('cuts the undo history at the accepted send so Ctrl+Z cannot resurrect sent text (#74)', async () => {
+    // The mount seed and the accepted send's clear are adjacent same-range
+    // dispatches; only clock separation keeps them in separate undo groups
+    // (the production gap is real seconds). Date alone is faked — the
+    // submit hop and waitFor keep their real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const view = render(<MarkdownComposer {...chainProps({ draft: '已发送的话', inputActions })} />)
+      expect(content().textContent).toContain('已发送的话')
+      vi.advanceTimersByTime(600)
+      fireEvent.click(seatNamed(en['composer.action.submit']))
+      await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+      // The host accepted the send and cleared the machine draft; the seed
+      // applies the clear and the commit point cuts the whole undo stack.
+      view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+      await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+      fireEvent.keyDown(content(), { key: 'z', ctrlKey: true })
+      // The placeholder alone: the sent text did not come back.
+      expect(content().textContent).toBe(en['composer.placeholder.render'])
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('merges a failure-restored draft with the text typed during the flight (#74)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const view = render(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    expect(content().textContent).toContain('第一句')
+    fireEvent.click(seatNamed(en['composer.action.submit']))
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    // Accepted: the machine cleared the draft, the surface follows.
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+    await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+    // The user keeps typing while the flight is out.
+    pastePlain('第二句')
+    expect(content().textContent).toBe('第二句')
+    // The send fails: the failed draft comes back over the typed text —
+    // merged, never overwritten, and the merged text IS the draft now.
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenLastCalledWith('第一句\n\n第二句'))
+    expect(content().textContent).toContain('第一句')
+    expect(content().textContent).toContain('第二句')
+    view.unmount()
+  })
+
+  it('keeps a pure in-flight append whole when the failed draft comes back (#74)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const view = render(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    fireEvent.click(seatNamed(en['composer.action.submit']))
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+    await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+    // The retyped text happens to start with the failed draft (the pure
+    // append shape the upstream retainSuffixOf retains): it survives whole.
+    pastePlain('第一句')
+    pastePlain('第二句')
+    expect(content().textContent).toBe('第一句第二句')
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenLastCalledWith('第一句第二句'))
+    expect(content().textContent).toBe('第一句第二句')
+    view.unmount()
+  })
+
+  it('a session switch retires the editing window: the new session draft seeds (#74)', () => {
+    const view = render(<MarkdownComposer {...chainProps({ draft: '' })} />)
+    pastePlain('旧会话的话')
+    expect(content().textContent).toBe('旧会话的话')
+    // Switching sessions retires touched/mirror state — the new session's
+    // draft seeds fresh instead of being dropped as user edits (and the
+    // old text must not merge into it).
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '新会话的草稿', sessionId: 's2' })} />)
+    expect(content().textContent).toBe('新会话的草稿')
+  })
+
+  it('focuses the editor on session switches and when the machine unlocks (#74)', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      const view = render(<MarkdownComposer {...chainProps()} />)
+      // The mount beat: the card lands with the text face live.
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+      focus.mockClear()
+      // A busy phase is not an editor surface: no focus is pulled into it.
+      view.rerender(<MarkdownComposer {...chainProps({ phase: 'adjudicating' })} />)
+      focus.mockClear()
+      // The unlock beat (a send settled, the machine left the busy phase):
+      // the editor takes the focus back, like the native bar's unlock
+      // effect.
+      view.rerender(<MarkdownComposer {...chainProps()} />)
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+      focus.mockClear()
+      // The session-switch beat: a new session's card focuses its editor.
+      view.rerender(<MarkdownComposer {...chainProps({ sessionId: 's2' })} />)
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+})
+
+describe('mergeRestoredDraft (#74 failure restore over in-flight edits)', () => {
+  it('keeps a pure in-flight append whole (the retainSuffixOf parity)', () => {
+    expect(mergeRestoredDraft('第一句', '第一句第二句')).toBe('第一句第二句')
+  })
+
+  it('joins diverged text after the restored draft (the submission-order separator)', () => {
+    expect(mergeRestoredDraft('第一句', '第二句')).toBe('第一句\n\n第二句')
+  })
+
+  it('fills an emptied editor with the restored draft', () => {
+    expect(mergeRestoredDraft('第一句', '')).toBe('第一句')
+  })
+
+  it('returns the editor text when it already equals the restore', () => {
+    expect(mergeRestoredDraft('第一句', '第一句')).toBe('第一句')
+  })
+
+  it('an empty restore never touches the editor text', () => {
+    expect(mergeRestoredDraft('', '第二句')).toBe('第二句')
   })
 })
 
@@ -1404,36 +1553,68 @@ describe('MarkdownComposer — hit area (issue #41)', () => {
     expect(document.activeElement).toBe(content())
   })
 
-  it('does not steal focus from a tool-row button on mousedown', () => {
-    render(<MarkdownComposer {...chainProps()} />)
-    const before = document.activeElement
-    const submit = seatNamed(en['composer.action.submit'])
+  it('keeps the text face live across a tool-row button press (native keepDraftFocus, #74)', () => {
+    render(<MarkdownComposer {...chainProps({ draft: 'text' })} />)
     const focus = spyOnFocus()
-    fireEvent.mouseDown(submit)
-    expect(focus).not.toHaveBeenCalled()
-    // jsdom does not focus a button on mousedown; what matters is that the
-    // card did not move focus to the editor behind the button's back.
-    expect(document.activeElement).toBe(before)
-    expect(document.activeElement).not.toBe(content())
+    const submit = seatNamed(en['composer.action.submit'])
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    submit.dispatchEvent(press)
+    // The native keepDraftFocus shape: the mousedown is consumed so focus
+    // never lands on the button, and the editor takes it back — typing
+    // continues without re-clicking the text face.
+    expect(press.defaultPrevented).toBe(true)
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(focus.mock.instances[0]).toBe(content())
+    expect(document.activeElement).toBe(content())
+    // The same arm carries the other seats: the mode toggle.
+    const mode = seatNamed(modeToggleCopy('source'))
+    const modePress = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    mode.dispatchEvent(modePress)
+    expect(modePress.defaultPrevented).toBe(true)
   })
 
-  it('excludes interactive-element targets, and the button click still fires', async () => {
-    // The exclusion walks ancestors: the tool row's mousedowns always land on
-    // an interactive element nested in the card, so no arm of the handler may
-    // claim them. The click that follows is untouched — the guard never
-    // preventDefaults.
+  it('keeps the editor focus on a tool-row button press without blocking the click (#74)', async () => {
     const inputActions = { submit: vi.fn() }
     render(<MarkdownComposer {...chainProps({ draft: 'text', inputActions })} />)
     const submit = seatNamed(en['composer.action.submit'])
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    submit.dispatchEvent(press)
+    // The keep-focus arm consumes the mousedown (defaultPrevented), but the
+    // click that follows still submits.
+    expect(press.defaultPrevented).toBe(true)
+    fireEvent.click(submit)
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('leaves tool-row gaps to the card hit area and the mousedown uncancelled (#74)', () => {
+    render(<MarkdownComposer {...chainProps()} />)
     const focus = spyOnFocus()
+    const row = document.querySelector('[class*="toolRow"]') as HTMLElement
+    const gapPress = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    row.dispatchEvent(gapPress)
+    // The keep-focus arm claims button targets only; a gap mousedown falls
+    // through to the card hit area (which focuses without cancelling).
+    expect(gapPress.defaultPrevented).toBe(false)
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('excludes interactive-element targets, and the button click still fires', async () => {
+    // The exclusion walks ancestors: the tool row's mousedowns always land
+    // on an interactive element nested in the card, so no arm of the CARD
+    // handler may claim them (the keep-focus arm lives on the tool row, the
+    // card handler stays preventDefault-free). The click that follows is
+    // untouched.
+    const inputActions = { submit: vi.fn() }
+    render(<MarkdownComposer {...chainProps({ draft: 'text', inputActions })} />)
+    const submit = seatNamed(en['composer.action.submit'])
     // A real event object (not the testing-library return value) so
-    // `defaultPrevented` can be read back: the guard must not cancel the
-    // native gesture.
+    // `defaultPrevented` can be read back.
     const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
     submit.dispatchEvent(press)
     fireEvent.click(submit)
-    expect(focus).not.toHaveBeenCalled()
-    expect(press.defaultPrevented).toBe(false)
+    // The tool row's keep-focus arm ran (issue #74) — the CARD handler
+    // itself still never prevents here (the unit predicate test pins that).
+    expect(press.defaultPrevented).toBe(true)
     // Submit rides a 0ms window after setDraft (submit reads the host's
     // projection), so the click's landing is observed on the timer.
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
