@@ -68,7 +68,7 @@ import { ContextMeterFace, contextMeterFaceDefinition, type ContextMeterFaceProp
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
-  attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, imageLightbox, noticesOf,
+  attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, imageLightbox, imageUrlOf, noticesOf,
   queueUpdateOf, stopOf, useObservable,
   type AttachmentFace,
 } from './conversation-face.ts'
@@ -363,6 +363,10 @@ export function MarkdownComposer({
   // session-scoped conversation verb, capability-detected per call —
   // without it the strip keeps rendering, minus its action buttons.
   const queueUpdate = sessionId === undefined ? undefined : queueUpdateOf(sessionId)
+  // The queue strip's durable-image loader (#77): the native dock's
+  // `loadImage` inject (`uiConversation.imageUrl`), capability-detected per
+  // call — without the face the strip's thumbnails degrade to placeholders.
+  const queueImageLoad = sessionId === undefined ? undefined : imageUrlOf(sessionId)
   const queueRows = useMemo(
     () => queueViewRows(input.queue, session?.pendingSubmissions ?? []),
     [input.queue, session?.pendingSubmissions],
@@ -1123,6 +1127,7 @@ export function MarkdownComposer({
           mutable={queueMutable}
           running={session?.running ?? false}
           updateQueue={queueUpdate}
+          loadImage={queueImageLoad}
           t={t}
           onError={showBanner}
         />

@@ -992,6 +992,83 @@ describe('MarkdownComposer — queue strip (issue #30)', () => {
     expect(getByText('排队补充')).toBeInTheDocument()
     expect(queryByRole('button', { name: en['queue.remove'] })).toBeNull()
   })
+
+  it('renders the durable row’s thumbnails and file chips beside the preview (#77)', async () => {
+    const conversation = fakeConversation()
+    const imageUrl = vi.fn(async () => 'blob:queued')
+    // installScope plus the uiConversation face the queue thumbs resolve
+    // through (the native dock's loadImage inject path).
+    installConversationSource({
+      get: (name: string) => name === 'sessions'
+        ? { scope: () => ({ get: (n: string) => n === 'conversation' ? conversation : undefined }) }
+        : name === 'uiConversation' ? { imageUrl } : undefined,
+    } as never)
+    const { container, findByAltText, getByText } = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [{
+        id: 'm1',
+        content: [
+          { type: 'text', text: '看 @notes/file.md 这张' },
+          { type: 'image', attachment: { attachmentId: 'att-1' } },
+          { type: 'file', attachment: { attachmentId: 'f1', name: 'spec.md', bytes: 2048 } },
+        ],
+        source: { kind: 'user', rpcId: 'r1' },
+      }],
+    })} />)
+    // The durable image resolves through the session-authorized loader and
+    // renders as a 1:1 thumbnail with the native alt label.
+    expect(await findByAltText(en['queue.image'])).toHaveAttribute('src', 'blob:queued')
+    expect(imageUrl).toHaveBeenCalledWith('s1', { attachmentId: 'att-1' })
+    // The file chip: icon + name + size (the native QueueFile shape).
+    const strip = document.querySelector('[data-markdown-queue]') as HTMLElement
+    expect(getByText('spec.md')).toBeInTheDocument()
+    expect(strip.textContent).toContain('2.0KB')
+    // The reference chip rides the preview (the vendored projection), and
+    // the text blocks no longer carry `[type]` markers.
+    expect(strip.querySelector('[data-ref-chip="file"]')).not.toBeNull()
+    expect(strip.textContent).not.toContain('[image]')
+  })
+
+  it('degrades the durable thumbnails to placeholders without the image face (#77)', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { container } = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [{
+        id: 'm1',
+        content: [{ type: 'text', text: '带图' }, { type: 'image', attachment: { attachmentId: 'att-1' } }],
+        source: { kind: 'user', rpcId: 'r1' },
+      }],
+    })} />)
+    const strip = container.querySelector('[data-markdown-queue]') as HTMLElement
+    // The row stays, the thumbnail slot stays, only the bytes do not load.
+    expect(strip.querySelector('img')).toBeNull()
+    expect(strip.querySelector('span[aria-hidden]')).not.toBeNull()
+  })
+
+  it('renders the sending echo’s attachments straight from the preview URLs (#77)', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { getByAltText, getByText } = render(<MarkdownComposer {...chainProps({
+      session: queueSession({
+        pendingSubmissions: [{
+          requestId: 'r9',
+          placement: 'queued',
+          time: 0,
+          text: '还在路上',
+          attachments: [
+            { type: 'image', value: { previewUrl: 'blob:echo' } },
+            { type: 'file', value: { attachmentId: 'f1', name: 'a.txt', bytes: 8 } },
+          ],
+        }],
+      }),
+    })} />)
+    // The echo's local preview URL is the submitter's — rendered directly,
+    // no loader round-trip (native pendingQueue parity).
+    expect(getByAltText(en['queue.image'])).toHaveAttribute('src', 'blob:echo')
+    expect(getByText('a.txt')).toBeInTheDocument()
+    expect(getByText(en['queue.sending'])).toBeInTheDocument()
+  })
 })
 
 describe('MarkdownComposer — stop actions (issue #32)', () => {

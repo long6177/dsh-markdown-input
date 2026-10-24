@@ -134,6 +134,10 @@ const zh = {
   'queue.editFailed': '编辑失败：这条消息可能已经开始发送。',
   'queue.removeFailed': '删除失败：这条消息可能已经开始发送。',
   'queue.steerFailed': '插话发送失败，请重试。',
+  // Queue strip attachments (#77) — the native `conversation` namespace's
+  // own keys copied verbatim (`queue.image` / `queue.file`).
+  'queue.image': '排队消息图片',
+  'queue.file': '排队文件 {name}',
   // Todo panel (issue #38). The native TodoDock renders inside the composer
   // chain's fallback bar, which the takeover hides whole, so the card
   // rebuilds it; keys mirror the host `conversation` namespace copy verbatim
@@ -301,6 +305,10 @@ const en: Record<ComposerKey, string> = {
   'queue.editFailed': 'Edit failed: this message may have already started sending.',
   'queue.removeFailed': 'Removal failed: this message may have already started sending.',
   'queue.steerFailed': 'Steering failed. Try again.',
+  // Queue strip attachments (#77) — the host `conversation` namespace's
+  // lines copied verbatim (see the zh block above for the fold).
+  'queue.image': 'Queued message image',
+  'queue.file': 'Queued file {name}',
   'todo.title': 'To-dos',
   'todo.progress.done': '{done} completed',
   'todo.progress.active': '{active} in progress',

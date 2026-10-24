@@ -8,8 +8,8 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  contentText, previewText, queueMutableOf, queueViewRows,
-  type QueueContentBlock, type QueueRow, type QueueSubmissionEcho,
+  contentText, previewText, queueAttachments, queueMutableOf, queueViewRows,
+  type QueueContentBlock, type QueueEchoAttachment, type QueueRow, type QueueSubmissionEcho,
 } from '../src/client/queue-core.ts'
 
 function row(id: string, text: string, rpcId?: string): QueueRow {
@@ -20,8 +20,13 @@ function row(id: string, text: string, rpcId?: string): QueueRow {
   }
 }
 
-function echo(requestId: string, placement: string, text = `echo ${requestId}`): QueueSubmissionEcho {
-  return { requestId, placement, text }
+function echo(
+  requestId: string,
+  placement: string,
+  text = `echo ${requestId}`,
+  attachments?: readonly QueueEchoAttachment[],
+): QueueSubmissionEcho {
+  return { requestId, placement, text, ...(attachments === undefined ? {} : { attachments }) }
 }
 
 describe('queueViewRows', () => {
@@ -36,7 +41,18 @@ describe('queueViewRows', () => {
     )
     expect(view).toEqual([
       { kind: 'queued', id: 'm1', content: [{ type: 'text', text: 'first' }] },
-      { kind: 'sending', id: 'r1', text: 'echo r1' },
+      { kind: 'sending', id: 'r1', text: 'echo r1', attachments: [] },
+    ])
+  })
+
+  it('carries the echo attachments onto the sending row in wire order (#77)', () => {
+    const attachments: readonly QueueEchoAttachment[] = [
+      { type: 'image', value: { previewUrl: 'blob:echo' } },
+      { type: 'file', value: { attachmentId: 'f1', name: 'a.txt', bytes: 12 } },
+    ]
+    const view = queueViewRows([], [echo('r1', 'queued', 'echo r1', attachments)])
+    expect(view).toEqual([
+      { kind: 'sending', id: 'r1', text: 'echo r1', attachments },
     ])
   })
 
@@ -81,14 +97,17 @@ describe('queueViewRows', () => {
 })
 
 describe('previewText', () => {
-  it('joins text blocks and marks non-text ones', () => {
+  it('joins text blocks and leaves non-text blocks to the attachment chips (#77)', () => {
     const content: QueueContentBlock[] = [
       { type: 'text', text: 'check ' },
       { type: 'image' },
       { type: 'text', text: 'this' },
       { type: 'file' },
     ]
-    expect(previewText(content)).toBe('check [image] this [file]')
+    // The `[type]` markers are gone: presence is carried by the rendered
+    // thumbnails and file chips now (the native preview drops image/file
+    // blocks from its text the same way).
+    expect(previewText(content)).toBe('check this')
   })
 
   it('collapses whitespace runs', () => {
@@ -100,6 +119,33 @@ describe('previewText', () => {
     const preview = previewText([{ type: 'text', text: long }])
     expect(Array.from(preview)).toHaveLength(201)
     expect(preview.endsWith('…')).toBe(true)
+  })
+})
+
+describe('queueAttachments (#77)', () => {
+  it('extracts image and file references in wire block order', () => {
+    const imageRef = { attachmentId: 'att-1' }
+    const fileRef = { attachmentId: 'file-1', name: 'spec.md', bytes: 2048 }
+    const content: QueueContentBlock[] = [
+      { type: 'text', text: '看' },
+      { type: 'image', attachment: imageRef },
+      { type: 'file', attachment: fileRef },
+      { type: 'image', attachment: { attachmentId: 'att-2' } },
+    ]
+    expect(queueAttachments(content)).toEqual([
+      { type: 'image', attachment: imageRef },
+      { type: 'file', attachment: fileRef },
+      { type: 'image', attachment: { attachmentId: 'att-2' } },
+    ])
+  })
+
+  it('skips typed blocks whose wire reference is missing — wire data is untrusted', () => {
+    const content: QueueContentBlock[] = [
+      { type: 'image' },
+      { type: 'text', text: 'only words' },
+      { type: 'file' },
+    ]
+    expect(queueAttachments(content)).toEqual([])
   })
 })
 
