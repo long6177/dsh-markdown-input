@@ -22,10 +22,26 @@
  * the whole plugin pending, taking the text face down with it.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-/** Narrow face of the host `uiWorkspace` service: the New Session verb. */
+/**
+ * Narrow face of the host `uiWorkspace` service: the New Session verbs.
+ *
+ * `startSession` is the void form the ticket's first cut shipped (the
+ * upstream `navigation.ts:88` contract — its failures are its own, console +
+ * the host notice). `openWorkspace` (#78) is the rejectable form the native
+ * hero's `selectWorkspace` wraps (`navigation.ts:280-286`, "@throws on
+ * failure"): the pick awaits it and rolls the pending label back when it
+ * refuses. The card prefers the rejectable verb whenever the host exposes
+ * it and falls back to the void one otherwise.
+ */
 export interface UiWorkspaceVerbFace {
   /** Connect and open a blank Session in the selected Workspace, reusing one when it exists. */
   startSession(workspaceId?: string): void
+  /**
+   * Open the named Workspace (creating its blank Session when needed),
+   * rejecting on failure — the native pick's own verb
+   * (`ui-workspace/src/client/navigation.ts:55`).
+   */
+  openWorkspace?(workspaceId: string): Promise<void>
 }
 
 export type UiWorkspaceVerbSource = () => UiWorkspaceVerbFace | undefined
@@ -65,7 +81,17 @@ export function installWorkspaceVerbSource(ctx: ClientContext): void {
   setWorkspaceVerbSource(() => {
     try {
       const service = ctx.get('uiWorkspace') as Partial<UiWorkspaceVerbFace> | undefined
-      return typeof service?.startSession === 'function' ? service as UiWorkspaceVerbFace : undefined
+      if (service === undefined || typeof service.startSession !== 'function') return undefined
+      // The rejectable verb rides along whenever the host exposes it (#78),
+      // wrapped so the host object itself is never touched; a build without
+      // it keeps the service verbatim and the pick loses the rollback arm,
+      // never the pick itself.
+      const { startSession, openWorkspace } = service
+      if (openWorkspace === undefined) return service as UiWorkspaceVerbFace
+      return {
+        startSession: (workspaceId?: string) => startSession.call(service, workspaceId),
+        openWorkspace: (workspaceId: string) => openWorkspace.call(service, workspaceId),
+      }
     } catch {
       return undefined
     }

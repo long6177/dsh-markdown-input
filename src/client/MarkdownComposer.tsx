@@ -57,7 +57,9 @@ import type {
 import type { PropsLocale, PropsRuntime, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
 import { AgentPresetFace, agentPresetFaceDefinition } from './AgentPresetFace.tsx'
-import { agentPresetLocale, agentPresetsRemoteFace } from './agent-preset-face.ts'
+import {
+  agentPresetLocale, agentPresetRefreshSubscribe, agentPresetsRemoteFace, developerToolsStore,
+} from './agent-preset-face.ts'
 import { resolveAgentPresetCopy } from './agent-preset-core.ts'
 import { CommandMenuFace } from './CommandMenuFace.tsx'
 import { commandFaceDefinition } from './command-face.ts'
@@ -906,10 +908,26 @@ export function MarkdownComposer({
   // Native pick semantics: the card's blank session IS the session being moved,
   // so the reuse-or-create flow is the whole verb — no draft transfer (that is
   // `selectWorkspace`'s job for a non-blank session with something to carry).
+  // #78: the rejectable `openWorkspace` verb, the native `selectWorkspace`'s
+  // own navigation, is preferred when the host exposes it — its refusal rolls
+  // the pending pick back (conditional on the pick still being the latest
+  // one, `ConversationContent.tsx:119-131`), so a failed switch never leaves
+  // the chip naming a workspace the session never reached. The void
+  // `startSession` stays as the fallback for a host without it; its own
+  // failures are its own (console + the host notice), so only an immediate
+  // throw is catchable there.
   const pickWorkspace = useCallback((workspaceId: string) => {
     setPickerOpen(false)
     setPendingWorkspaceId(workspaceId)
     if (workspaceVerb === undefined) return
+    const opened = workspaceVerb.openWorkspace?.(workspaceId)
+    if (opened !== undefined) {
+      void opened.catch((error: unknown) => {
+        setPendingWorkspaceId(current => current === workspaceId ? undefined : current)
+        showBanner(error instanceof Error ? error.message : String(error))
+      })
+      return
+    }
     try {
       workspaceVerb.startSession(workspaceId)
     } catch (error: unknown) {
@@ -1292,6 +1310,21 @@ export function MarkdownComposer({
     switchRefused: t('agentPreset.switchRefused'),
   })
   const agentPresetsRemote = agentPresetsRemoteFace()
+  // The preset seat's Developer-tools signal (#78): the host `ui-settings`
+  // form, read per render like the roster verbs — an absent service leaves
+  // the gate off (the native observable face's own default).
+  const presetDeveloperTools = developerToolsStore()
+  // The preset seat's roster-refresh subscription (#78): bound once by apply,
+  // so the identity read here is stable across renders and the face's effect
+  // never resubscribes.
+  const presetRefresh = agentPresetRefreshSubscribe()
+  // #78: the preset seat judges its OWN availability — the roster verbs and
+  // the projection hook, the same two facts its FaceGate probes. The
+  // workspace row's capability verdict no longer takes it down: the native
+  // hero's two seats are independent slot occupants, and a workspace-less
+  // chain entry still offers the preset switch when ITS data plane is there.
+  const presetSeatPossible = agentPresetsRemote !== undefined
+    && typeof useProjection === 'function'
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
   // the binding (registerFace latches per id, so a first render before apply's
@@ -1380,14 +1413,14 @@ export function MarkdownComposer({
             top, the native `heroWorkspaceRow` mirrored — the workspace
             chip+menu and the preset seat are siblings of the same row
             container (gap 2px, align-items center), not two stacked card
-            children. The row mounts whenever the row's capability verdict
-            holds; a face whose gate is absent (roster service, projection
-            key) leaves the line to the other seat instead of dangling. The
-            row's two halves are still independent faces: the workspace chip
-            (and the trigger posture it owns) hides whole when the list hook,
-            the copy, or the reuse-or-create verb is missing, the preset seat
-            when the roster or the projection is. */}
-        {rowSupported && (
+            children. #78: the line mounts when EITHER seat is available —
+            each judges its own data plane, the native slot shape — and a
+            face whose gate is absent leaves the line to the other seat
+            instead of dangling. The workspace chip (and the trigger posture
+            it owns) hides whole when the list hook, the copy, or the
+            reuse-or-create verb is missing; the preset seat when the roster
+            or the projection is. */}
+        {(rowSupported || presetSeatPossible) && (
           <div className={css.heroRow} data-markdown-hero-row="">
             {rowSupported && workspaceCopy !== undefined && (
               <WorkspaceRowFace
@@ -1413,6 +1446,8 @@ export function MarkdownComposer({
                 translate={agentPresetT}
                 copy={agentPresetCopy}
                 onError={showBanner}
+                developerTools={presetDeveloperTools}
+                subscribeRefresh={presetRefresh}
               />
             </FaceGate>
           </div>
