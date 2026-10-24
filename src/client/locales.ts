@@ -20,6 +20,13 @@ const zh = {
   'composer.file.uploadFailed': '上传失败',
   'composer.file.retry': '重试上传',
   'composer.file.rejected': '附件被拒绝',
+  // Draft-image preview (#77). The host `conversation` namespace's own keys
+  // copied verbatim (`image.openOriginal` / `image.preview` /
+  // `image.closePreview`) — the lightbox chrome reads them through the card's
+  // plugin namespace so the fallback ships with the plugin.
+  'image.openOriginal': '查看原图',
+  'image.preview': '原图预览',
+  'image.closePreview': '关闭原图预览',
   'composer.notice.dismiss': '关闭提示',
   'composer.fallback.notice': 'Markdown 输入区出现异常，已换回原生输入区；本次会话内不再重试，重启后恢复。',
   'permission.mode': '访问模式，当前：{name}',
@@ -202,6 +209,11 @@ const en: Record<ComposerKey, string> = {
   'composer.file.uploadFailed': 'Upload failed',
   'composer.file.retry': 'Retry upload',
   'composer.file.rejected': 'Attachment rejected',
+  // Draft-image preview (#77) — the host `conversation` namespace's lines
+  // copied verbatim (see the zh block above for the fold).
+  'image.openOriginal': 'View original',
+  'image.preview': 'Original image preview',
+  'image.closePreview': 'Close original image preview',
   'composer.notice.dismiss': 'Dismiss notice',
   'composer.fallback.notice': 'The Markdown composer hit an error and fell back to the native input area; it will not retry this session, and resumes after a restart.',
   'permission.mode': 'Access mode, current: {name}',

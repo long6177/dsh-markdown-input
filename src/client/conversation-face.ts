@@ -14,7 +14,7 @@
  * devDependencies pin the upstream master sources, and the slot/service
  * faces are per-version retest contract points (ADR-0002).
  */
-import { useMemo, useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore, type ReactNode } from 'react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ComposerChainProps, ConversationController } from '@deepseek-ai/dsh-client-ui-conversation/client'
 
@@ -39,6 +39,17 @@ type InputHubFace = ConversationController['input'] & {
   shell(sessionId: SessionId): { readonly notices: ObservableSource<ComposerNotice | null> }
 }
 
+/**
+ * Upload lifecycle of one picked file draft (the native `DraftFileUpload`
+ * shape, consumed structurally): files upload on pick, not on send. The wire
+ * already carries loaded/total — the plugin's earlier `{ status }`-only face
+ * just never read them (#77).
+ */
+export type DraftUploadState =
+  | { readonly status: 'uploading'; readonly loaded: number; readonly total?: number }
+  | { readonly status: 'ready'; readonly receiptId?: unknown; readonly file?: unknown }
+  | { readonly status: 'error'; readonly message?: string }
+
 /** The draft-attachment operations the taken-over composer consumes. */
 export interface AttachmentFace {
   createDrafts(sessionId: SessionId, files: readonly File[]): readonly unknown[]
@@ -46,7 +57,7 @@ export interface AttachmentFace {
   releaseDraftAttachment(id: string): void
   releaseDraftAttachments(attachments: readonly unknown[]): void
   retryFileUpload(sessionId: SessionId, id: string): void
-  readonly fileUploads?: ObservableSource<Readonly<Record<string, { readonly status: string }>>>
+  readonly fileUploads?: ObservableSource<Readonly<Record<string, DraftUploadState>>>
 }
 
 /** The conversation service face the taken-over composer consumes. */
@@ -233,4 +244,64 @@ export function composerBlockOf(
   } catch {
     return undefined
   }
+}
+
+/**
+ * The session-scoped durable-image URL resolver (the native queue dock's
+ * `loadImage` inject: `uiConversation.imageUrl(sessionId, attachment)`),
+ * capability-detected per call off the client root context. Undefined
+ * sheds the queue strip's thumbnails to the native failure placeholder —
+ * the rows, chips, and preview text stay.
+ * @param sessionId - owning session (the resolution's authorization scope).
+ */
+export function imageUrlOf(
+  sessionId: SessionId,
+): ((attachment: unknown) => Promise<string>) | undefined {
+  try {
+    const uiConversation = rootContext?.get('uiConversation') as
+      | { imageUrl?(id: SessionId, attachment: unknown): Promise<string> }
+      | undefined
+    if (typeof uiConversation?.imageUrl !== 'function') return undefined
+    return (attachment) => uiConversation.imageUrl!(sessionId, attachment)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The primitives `ImageLightbox` component as the draft-thumbnail preview
+ * consumes it, bound once from the client apply's primitives probe
+ * (present-value check — memo/forwardRef wrappers break typeof checks).
+ * Undefined on a host build whose primitives lack the lightbox: the
+ * thumbnail degrades to a plain image, never a dead button.
+ */
+export type ImageLightboxComponent = (props: {
+  src: string
+  alt: string
+  labels: { readonly dialog: string; readonly close: string }
+  onClose: () => void
+}) => ReactNode
+
+let imageLightboxComponent: ImageLightboxComponent | undefined
+
+/**
+ * Bind the lightbox component (the client apply does this once, from the
+ * primitives probe).
+ * @param component - the probed component, or undefined when absent.
+ */
+export function setImageLightbox(component: ImageLightboxComponent | undefined): void {
+  imageLightboxComponent = component
+}
+
+/** The bound lightbox component, or undefined when the host build lacks it. */
+export function imageLightbox(): ImageLightboxComponent | undefined {
+  return imageLightboxComponent
+}
+
+/**
+ * Test seam: drop the binding so a fresh test sees an absent face. Never call
+ * in plugin code — the binding is page-lifetime by design.
+ */
+export function resetImageLightbox(): void {
+  imageLightboxComponent = undefined
 }

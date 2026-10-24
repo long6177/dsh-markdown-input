@@ -7,8 +7,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
-import { installConversationSource, setConversationSource } from '../src/client/conversation-face.ts'
+import { installConversationSource, resetImageLightbox, setConversationSource, setImageLightbox } from '../src/client/conversation-face.ts'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
@@ -29,10 +30,11 @@ interface FakeDraft {
   kind: 'file' | 'image'
   id: string
   file: File
+  previewUrl?: string
 }
 
 function fakeConversation(options: {
-  uploads?: Record<string, { status: string, loaded?: number }>
+  uploads?: Record<string, { status: string, loaded?: number, total?: number }>
   notice?: { level: 'info' | 'error'; text: string; seq: number } | null
   drafts?: readonly FakeDraft[]
   block?: { reason: string }
@@ -161,6 +163,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   setConversationSource(() => undefined)
+  resetImageLightbox()
   resetSkillFace()
   resetCommandFace()
   resetModelFace()
@@ -547,6 +550,82 @@ describe('MarkdownComposer attachments', () => {
     expect(container.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false')
     const plain = render(<MarkdownComposer {...chainProps()} />)
     expect(plain.container.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('true')
+  })
+
+  it('shows the upload progress fraction while a file uploads with a known total (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File(['x'.repeat(100)], 'a.txt') }],
+      uploads: { d0: { status: 'uploading', loaded: 50, total: 100 } },
+    })
+    setConversationSource(() => conversation)
+    const { container, getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    expect(getByText(en['composer.file.uploading'])).toBeInTheDocument()
+    const bar = container.querySelector<HTMLElement>('[data-markdown-upload-progress]')
+    expect(bar).not.toBeNull()
+    expect(bar?.style.width).toBe('50%')
+  })
+
+  it('keeps the upload state text-only while the total is unknown (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File(['x'], 'a.txt') }],
+      uploads: { d0: { status: 'uploading', loaded: 4 } },
+    })
+    setConversationSource(() => conversation)
+    const { container, getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    expect(getByText(en['composer.file.uploading'])).toBeInTheDocument()
+    expect(container.querySelector('[data-markdown-upload-progress]')).toBeNull()
+  })
+
+  it('shows the extension badge and size on a ready file chip (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File([new Uint8Array(2048)], 'a.txt') }],
+      uploads: { d0: { status: 'ready' } },
+    })
+    setConversationSource(() => conversation)
+    const { getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    // Native FileCard ready meta: extension badge + size ("TXT 2.0KB").
+    expect(getByText('TXT 2.0KB')).toBeInTheDocument()
+  })
+
+  it('opens the original-image preview from a draft thumbnail and closes it (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'image', id: 'd0', file: new File(['x'], 'pic.png'), previewUrl: 'blob:pic' }],
+    })
+    setConversationSource(() => conversation)
+    setImageLightbox(ImageLightbox)
+    const { container, getByRole } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    const thumb = container.querySelector('[data-markdown-attachments] img') as HTMLElement
+    const opener = thumb.closest('button')
+    expect(opener).not.toBeNull()
+    expect(opener).toHaveAttribute('title', en['image.openOriginal'])
+    fireEvent.click(opener as HTMLElement)
+    const dialog = getByRole('dialog')
+    expect(dialog).toHaveAttribute('aria-label', en['image.preview'])
+    expect(dialog.querySelector('img')).toHaveAttribute('src', 'blob:pic')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('keeps the draft thumbnail display-only while the lightbox face is absent (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'image', id: 'd0', file: new File(['x'], 'pic.png'), previewUrl: 'blob:pic' }],
+    })
+    setConversationSource(() => conversation)
+    const { container } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    const thumb = container.querySelector('[data-markdown-attachments] img')
+    expect(thumb).not.toBeNull()
+    // No lightbox capability: the chip degrades to a plain image, no button.
+    expect(thumb?.closest('button')).toBeNull()
   })
 })
 

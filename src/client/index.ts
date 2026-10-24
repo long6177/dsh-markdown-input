@@ -33,7 +33,10 @@ import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
 import { installCommandSource } from './command-face.ts'
-import { installConversationSource } from './conversation-face.ts'
+import {
+  installConversationSource, setImageLightbox,
+  type ImageLightboxComponent,
+} from './conversation-face.ts'
 import { installFeedbackSource } from './feedback-face.ts'
 import { installGoalSource } from './goal-face.ts'
 import { installPermissionSource } from './permission-face.ts'
@@ -129,6 +132,12 @@ export function apply(ctx: ClientContext): void {
   // The taken-over card reads the conversation service for its attachment
   // and notice faces (lazy per call — boot order stays free).
   installConversationSource(ctx)
+  // The draft-image preview's lightbox (#77): the primitives probe binds the
+  // component the card composes with — a host build without it keeps the
+  // attachment thumbnails display-only, the rest of the card unaffected.
+  setImageLightbox(present(primitives.ImageLightbox)
+    ? primitives.ImageLightbox as unknown as ImageLightboxComponent
+    : undefined)
   // The permission face reads the `remote.permissionPresets` catalog, the
   // forwarded invalidation event, and the live session's command face the
   // same lazy way; the capability detection lives in the installer.

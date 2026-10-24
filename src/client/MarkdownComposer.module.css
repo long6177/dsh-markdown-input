@@ -638,6 +638,17 @@
   border-radius: 5px;
 }
 
+/* Draft-image preview (#77): the clickable thumbnail opener mirrors the
+   native `css.thumbnail` button — transparent chrome, the img is the face. */
+.thumbButton {
+  border: none;
+  background: transparent;
+  padding: 0;
+  cursor: zoom-in;
+  display: inline-flex;
+  line-height: 0;
+}
+
 .fileChip {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   opacity: 0.7;
@@ -652,6 +663,27 @@
 
 .uploadState {
   color: color-mix(in srgb, currentColor 55%, transparent);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Upload progress (#77): the native FileCard's track-and-bar pair, scaled
+   to the chip — the bar width is the loaded/total fraction inline style. */
+.progressTrack {
+  width: 3.5em;
+  height: 3px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  display: inline-block;
+}
+
+.progressBar {
+  height: 100%;
+  display: block;
+  background: currentColor;
+  border-radius: 2px;
 }
 
 .uploadError {

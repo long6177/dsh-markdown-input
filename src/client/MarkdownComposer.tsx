@@ -48,7 +48,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, DragEvent, MouseEvent, ReactNode } from 'react'
 import {
-  IconCloseOutlineMedium, IconCodeOutlineRegular, IconPaperclipOutlineMedium,
+  fileExtension, fileSizeText, IconCloseOutlineMedium, IconCodeOutlineRegular, IconPaperclipOutlineMedium,
   IconWarningOutlineMedium, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
@@ -68,7 +68,7 @@ import { ContextMeterFace, contextMeterFaceDefinition, type ContextMeterFaceProp
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
-  attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, noticesOf,
+  attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, imageLightbox, noticesOf,
   queueUpdateOf, stopOf, useObservable,
   type AttachmentFace,
 } from './conversation-face.ts'
@@ -267,6 +267,10 @@ export function MarkdownComposer({
     action?: { label: string; run: () => void } | undefined
   } | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
+  // The original-image preview (#77): one lightbox at the card level, opened
+  // from a draft image chip's thumbnail; the opener auto-dismisses when its
+  // attachment leaves the draft (the native ComposerAttachments rule).
+  const [previewImage, setPreviewImage] = useState<ComposerAttachment | null>(null)
   // The editor handle as state: the tool-row faces need it in their effects
   // (the menu key seam binds on arrival), and child effects run before this
   // component's mount effect, so a ref alone would leave them unbound.
@@ -430,6 +434,14 @@ export function MarkdownComposer({
       inputActions.pruneAttachments(attachments.map((attachment) => attachment.id))
     }
   }, [attachmentFace, attachments, input.attachmentIds, inputActions])
+
+  // An open preview whose attachment left the draft closes itself (the
+  // native ComposerAttachments rule — the lightbox would show a dead URL).
+  useEffect(() => {
+    if (previewImage !== null && !attachments.some((attachment) => attachment.id === previewImage.id)) {
+      setPreviewImage(null)
+    }
+  }, [attachments, previewImage])
 
   function submit(): void {
     const editor = editorRef.current
@@ -870,6 +882,13 @@ export function MarkdownComposer({
     attachmentFace.retryFileUpload(sessionId, id)
   }
 
+  /** Native FileCard ready meta: extension badge + size, e.g. "TXT 2.0KB". */
+  function readyMeta(attachment: ComposerAttachment): string {
+    if (attachment.kind !== 'file') return ''
+    const extension = fileExtension(attachment.file.name).toUpperCase().slice(0, 8)
+    return [extension, fileSizeText(attachment.file.size)].filter((part) => part !== '').join(' ')
+  }
+
   function uploadState(id: DraftAttachmentId): ReactNode {
     const upload = uploads?.[id]
     if (upload === undefined || upload.status === 'ready') return null
@@ -883,17 +902,44 @@ export function MarkdownComposer({
         </span>
       )
     }
-    return <span className={css.uploadState}>{t('composer.file.uploading')}</span>
+    // Native FileCard parity (#77): the fraction renders only when the wire
+    // reports a total; an unknown total keeps the text-only state.
+    const progress = upload.status === 'uploading' && typeof upload.total === 'number' && upload.total > 0
+      ? Math.min(1, Math.max(0, upload.loaded / upload.total))
+      : undefined
+    return (
+      <span className={css.uploadState}>
+        {t('composer.file.uploading')}
+        {progress !== undefined && (
+          <span className={css.progressTrack} aria-hidden>
+            <span className={css.progressBar} data-markdown-upload-progress
+              style={{ width: `${String(progress * 100)}%` }} />
+          </span>
+        )}
+      </span>
+    )
   }
 
   function attachmentChip(attachment: ComposerAttachment): ReactNode {
+    // Original-image preview (#77): capability-detected — a host build
+    // without the primitives lightbox keeps the chip display-only.
+    const Lightbox = imageLightbox()
     return (
       <li key={attachment.id} className={css.attachment}>
         {attachment.kind === 'image'
-          ? <img className={css.thumb} src={attachment.previewUrl} alt="" />
+          ? Lightbox === undefined
+            ? <img className={css.thumb} src={attachment.previewUrl} alt="" />
+            : (
+              <button type="button" className={css.thumbButton} title={t('image.openOriginal')}
+                onClick={() => { setPreviewImage(attachment) }}>
+                <img className={css.thumb} src={attachment.previewUrl} alt="" />
+              </button>
+            )
           : <span className={css.fileChip} aria-hidden>⌗</span>}
         <span className={css.attachmentName}>{attachment.file.name}</span>
-        {attachment.kind === 'file' ? uploadState(attachment.id) : null}
+        {attachment.kind === 'file'
+          ? (uploadState(attachment.id) ?? <span className={css.uploadState}>{readyMeta(attachment)}</span>)
+          : null}
         <button type="button" className={css.removeButton} aria-label={t('composer.attachment.remove')}
           title={t('composer.attachment.remove')} disabled={machineBusy}
           onClick={() => { onRemoveAttachment(attachment.id) }}>
@@ -904,6 +950,9 @@ export function MarkdownComposer({
   }
 
   const otherMode: EditMode = mode === 'render' ? 'source' : 'render'
+  // The original-image preview's component (#77): read per render beside the
+  // other capability faces — an unbound face keeps the lightbox unmounted.
+  const Lightbox = imageLightbox()
   // The agent-preset seat's copy (issue #42, alpha.12 feedback): the HOST
   // `settings.agentPreset` dictionary owns the shipped presets' words AND the
   // seat's three strings, so the bound seat is read per render here and the
@@ -1084,6 +1133,18 @@ export function MarkdownComposer({
           <ul className={css.attachmentBar} data-markdown-attachments>
             {attachments.map(attachmentChip)}
           </ul>
+        )}
+        {/* Original-image preview (#77): the native lightbox portal —
+            Escape, backdrop press, or the close control dismisses it. The
+            component rides the capability binding; absent, the thumbnails
+            above stay display-only and nothing mounts here. */}
+        {Lightbox !== undefined && previewImage !== null && previewImage.kind === 'image' && (
+          <Lightbox
+            src={previewImage.previewUrl}
+            alt={previewImage.file.name}
+            labels={{ dialog: t('image.preview'), close: t('image.closePreview') }}
+            onClose={() => { setPreviewImage(null) }}
+          />
         )}
         <div className={css.surface} data-markdown-surface ref={surfaceRef} />
         <div className={css.toolRow} ref={toolRowRef}>

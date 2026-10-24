@@ -31,6 +31,8 @@ import css from './UserMessage.module.css'
 
 /** Raw image block of a user message, typed as the host's own fold does. */
 type UserImageBlock = Extract<UserMessageNode['content'][number], { type: 'image' }>
+/** Raw file block of a user message, typed the same way. */
+type UserFileBlock = Extract<UserMessageNode['content'][number], { type: 'file' }>
 
 /** Chat-node seats this renderer replaces; the host serves both with one view. */
 export type MarkdownSeatKind = 'user' | 'steering'
@@ -139,7 +141,7 @@ export function contentParts(content: readonly unknown[]): {
     else if (b.type === 'image' && b.attachment !== undefined) {
       attachments.push({ type: 'image', image: { attachment: (block as UserImageBlock).attachment } })
     } else if (b.type === 'file' && b.attachment !== undefined) {
-      attachments.push({ type: 'file', file: b.attachment })
+      attachments.push({ type: 'file', file: (block as UserFileBlock).attachment })
     } else rest.push(block)
   }
   return { text: texts.join(''), attachments, rest }
