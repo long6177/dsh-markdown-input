@@ -52,6 +52,37 @@ interface RemoteEventFace {
   $on(event: 'goal/activation-changed' | 'connection/reset', listener: (...args: unknown[]) => void): () => void
 }
 
+/** The snapshot fields the open wait reads (host SessionSnapshot subset). */
+interface SessionOpenState {
+  readonly openState?: unknown
+  readonly openError?: unknown
+}
+
+/** One session binding's snapshot store as the open wait reads it. */
+interface SessionOpenStore {
+  getSnapshot?(): SessionOpenState | undefined
+  subscribe?(listener: () => void): () => void
+}
+
+/** One held session reference (`sessions.using` hands this to the operation). */
+interface GoalSessionReference {
+  readonly binding?: { readonly session?: SessionOpenStore } | undefined
+}
+
+/**
+ * Narrow face of the host `sessions` service (the native goal read's
+ * session-open wait): `using` retains the session, awaits its open promise,
+ * then runs the operation; `binding` is the fallback when `using` is absent.
+ */
+interface GoalSessionsFace {
+  binding(sessionId: SessionId): GoalSessionReference | undefined
+  using?<T>(
+    sessionId: SessionId,
+    options: { readonly source: string },
+    operation: (reference: GoalSessionReference) => Promise<T>,
+  ): Promise<T>
+}
+
 /** The goal face the strip consumes. */
 export interface GoalFace {
   /**
@@ -85,6 +116,12 @@ export interface GoalSurfaces {
   readonly goals: GoalsRemoteFace
   /** Present when the `remote` service exposes forwarded events; live edges shed without it. */
   readonly remoteEvents: RemoteEventFace | undefined
+  /**
+   * Present when the host `sessions` service exposes `binding`; the
+   * activation read then waits for the session to finish opening (issue #80)
+   * instead of failing early on a slow session.
+   */
+  readonly sessions: GoalSessionsFace | undefined
 }
 
 export type GoalSource = () => GoalSurfaces | undefined
@@ -120,7 +157,14 @@ export function installGoalSource(ctx: ClientContext): void {
       }
       const remote = ctx.get('remote') as Partial<RemoteEventFace> | undefined
       const remoteEvents = typeof remote?.$on === 'function' ? (remote as RemoteEventFace) : undefined
-      return { goals: goals as GoalsRemoteFace, remoteEvents }
+      // The session-open wait (issue #80) is optional: without `using` the
+      // read keeps the immediate behavior (or the binding-store fallback),
+      // and without the service at all it is skipped.
+      const sessions = ctx.get('sessions') as Partial<GoalSessionsFace> | undefined
+      const sessionsFace = typeof sessions?.binding === 'function'
+        ? sessions as GoalSessionsFace
+        : undefined
+      return { goals: goals as GoalsRemoteFace, remoteEvents, sessions: sessionsFace }
     } catch {
       return undefined
     }
@@ -168,13 +212,75 @@ function createFace(surfaces: GoalSurfaces): GoalFace {
       }
     }
   }
+  /** One immediate activation read (the wire view's mapping). */
+  async function readLive(sessionId: SessionId): Promise<GoalActivationEdge | undefined> {
+    const result = await surfaces.goals.get(sessionId)
+    if (!result.ok || result.value === undefined || result.value === null) return undefined
+    const view = result.value
+    return { id: view.id, revision: view.revision, activation: view.activation }
+  }
+
+  /**
+   * Wait for one binding's session to finish opening (the fallback when
+   * `using` is unavailable): resolves on `open`, rejects on `error`/`closed`,
+   * and answers immediately for an absent store.
+   */
+  function waitForOpen(sessions: GoalSessionsFace, sessionId: SessionId): Promise<void> | undefined {
+    const store = sessions.binding(sessionId)?.binding?.session
+    if (store === undefined) return undefined
+    // Already open (or no snapshot face at all): nothing to wait for.
+    const state = store.getSnapshot?.()
+    if (state === undefined || state.openState === 'open') return Promise.resolve()
+    if (state.openState === 'error' || state.openState === 'closed') {
+      return Promise.reject(state.openError instanceof Error
+        ? state.openError
+        : new Error(`session "${sessionId}" is not open`))
+    }
+    if (typeof store.subscribe !== 'function') return undefined
+    return new Promise<void>((resolve, reject) => {
+      const unsubscribe = store.subscribe!(() => {
+        try {
+          const next = store.getSnapshot?.()
+          if (next === undefined || next.openState === 'open') {
+            unsubscribe?.()
+            resolve()
+          } else if (next.openState === 'error' || next.openState === 'closed') {
+            unsubscribe?.()
+            reject(next.openError instanceof Error
+              ? next.openError
+              : new Error(`session "${sessionId}" is not open`))
+          }
+        } catch (error: unknown) {
+          unsubscribe?.()
+          reject(error)
+        }
+      })
+    })
+  }
+
   return {
     async readActivation(sessionId) {
       try {
-        const result = await surfaces.goals.get(sessionId)
-        if (!result.ok || result.value === undefined || result.value === null) return undefined
-        const view = result.value
-        return { id: view.id, revision: view.revision, activation: view.activation }
+        // The native goal read's wait (ui-goal/src/client/index.ts:110-123):
+        // retain the session, await its open promise, then verify openState
+        // and read. A slow session therefore arms its activation edge instead
+        // of failing the first read and leaving the pause button missing.
+        const sessions = surfaces.sessions
+        if (sessions !== undefined && typeof sessions.using === 'function') {
+          return await sessions.using(sessionId, { source: 'goalActivation' }, async (reference) => {
+            const state = reference?.binding?.session?.getSnapshot?.()
+            if (state !== undefined && state.openState !== 'open') {
+              throw state.openError instanceof Error
+                ? state.openError
+                : new Error(`session "${sessionId}" is not open`)
+            }
+            return readLive(sessionId)
+          })
+        }
+        // Without `using`: subscribe the binding store until it opens. An
+        // absent session face keeps the immediate read (the pre-#80 path).
+        if (sessions !== undefined) await waitForOpen(sessions, sessionId)
+        return await readLive(sessionId)
       } catch {
         return undefined
       }

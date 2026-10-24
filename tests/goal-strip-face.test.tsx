@@ -36,8 +36,8 @@ function stripError(): HTMLElement | null {
   return document.querySelector('[data-markdown-goal-error]')
 }
 
-function objectiveInput(): HTMLInputElement | null {
-  return document.querySelector('input[data-markdown-goal-input]')
+function objectiveInput(): HTMLTextAreaElement | null {
+  return document.querySelector('textarea[data-markdown-goal-input]')
 }
 
 /** A complete goals remote: verbs recorded, per-test answers. */
@@ -311,6 +311,37 @@ describe('GoalStripFace mutations', () => {
       expect(stripError()).not.toBeNull()
     })
     expect(stripError()!.textContent).toBe('stale ref (revision-conflict)')
+    expect(objectiveInput()).not.toBeNull()
+  })
+
+  it('edits a multi-line objective: Shift+Enter does not save, plain Enter does', async () => {
+    const harness = bindGoals()
+    mountStrip(goalProjection())
+    fireEvent.click(labeled(fakeT('goal.action.edit'))!)
+    const input = objectiveInput()!
+    // The native InlineEditor shape: a one-row textarea that grows.
+    expect(input.tagName).toBe('TEXTAREA')
+    expect(input.getAttribute('rows')).toBe('1')
+    fireEvent.change(input, { target: { value: 'first line\nsecond line' } })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(harness.goals.edit).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    await waitFor(() => {
+      expect(harness.goals.edit).toHaveBeenCalledWith(
+        's1', { id: 'g1', revision: 3 }, { objective: 'first line\nsecond line' },
+      )
+    })
+  })
+
+  it('does not save on an IME-confirming Enter (isComposing or keyCode 229)', () => {
+    const harness = bindGoals()
+    mountStrip(goalProjection())
+    fireEvent.click(labeled(fakeT('goal.action.edit'))!)
+    const input = objectiveInput()!
+    fireEvent.change(input, { target: { value: '组合中的目标' } })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    fireEvent.keyDown(input, { key: 'Enter', keyCode: 229 })
+    expect(harness.goals.edit).not.toHaveBeenCalled()
     expect(objectiveInput()).not.toBeNull()
   })
 
