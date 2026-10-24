@@ -1557,8 +1557,10 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
       render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
       fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
       await vi.waitFor(() => {
-        expect(document.querySelector('[role="tooltip"]')?.textContent)
-          .toBe(en['composer.action.stop'])
+        // The label plus the Esc+Esc keycaps (issue #80's shortcut hint).
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip?.textContent).toContain(en['composer.action.stop'])
+        expect(tip).toHaveAttribute('data-has-shortcut')
       })
     } finally {
       vi.stubGlobal('ResizeObserver', undefined)
