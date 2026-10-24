@@ -94,20 +94,43 @@ describe('skillFace', () => {
     expect(surfaces.remote.skills.list).toHaveBeenCalledOnce()
   })
 
-  it('keeps the session uncached on a failed result (a later ensure retries)', async () => {
+  it('publishes an empty roll on a failed result (the popup removes the group) and retries later', async () => {
     const { surfaces } = bindSurfaces({ listResult: { ok: false, error: { code: 'x', message: 'boom' } } })
     const face = skillFace()!
     face.ensure('s1')
     await vi.waitFor(() => expect(surfaces.remote.skills.list).toHaveBeenCalledOnce())
-    expect(face.lexicons.getSnapshot().value.has('s1')).toBe(false)
+    // The failed session publishes an EMPTY roll — the native source-failed
+    // shape: the `/` popup removes the skill group instead of pending forever
+    // (#76 AC1), and the failure is never a poisoned key: a later ensure
+    // retries the read.
+    expect(face.lexicons.getSnapshot().value.get('s1')).toEqual([])
+    face.ensure('s1')
+    await vi.waitFor(() => expect(surfaces.remote.skills.list).toHaveBeenCalledTimes(2))
   })
 
-  it('keeps the session uncached on a rejected call', async () => {
+  it('publishes an empty roll on a rejected call and retries later', async () => {
     const { surfaces } = bindSurfaces({ reject: new Error('offline') })
     const face = skillFace()!
     face.ensure('s1')
     await vi.waitFor(() => expect(surfaces.remote.skills.list).toHaveBeenCalledOnce())
-    expect(face.lexicons.getSnapshot().value.has('s1')).toBe(false)
+    expect(face.lexicons.getSnapshot().value.get('s1')).toEqual([])
+    face.ensure('s1')
+    await vi.waitFor(() => expect(surfaces.remote.skills.list).toHaveBeenCalledTimes(2))
+  })
+
+  it('replaces the failed empty roll when a retry lands', async () => {
+    const { surfaces } = bindSurfaces({ listResult: { ok: false, error: { code: 'x', message: 'boom' } } })
+    const face = skillFace()!
+    face.ensure('s1')
+    await vi.waitFor(() => expect(face.lexicons.getSnapshot().value.get('s1')).toEqual([]))
+    surfaces.remote.skills.list.mockReturnValue(
+      Promise.resolve({ ok: true, value: { skills: [{ name: 'plan', description: '', modelInvocable: true }] } }))
+    face.ensure('s1')
+    await vi.waitFor(() => {
+      expect(face.lexicons.getSnapshot().value.get('s1')).toEqual([
+        { name: 'plan', description: '', modelInvocable: true },
+      ])
+    })
   })
 
   it('drops one session on agent-preset/selected and all on connection/reset', async () => {

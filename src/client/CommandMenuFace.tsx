@@ -33,6 +33,7 @@ import { hasChainPopup, openChainPopup } from './chain-open.ts'
 import { commandFace } from './command-face.ts'
 import { assembleCommandRows, reportExecute } from './command-rows.ts'
 import { feedbackUiSupported, openFeedbackSession } from './feedback-face.ts'
+import type { SubagentShare } from './model-face.ts'
 import { NS } from './locales.ts'
 import type { MarkdownEditorHandle, MenuKeyHandler } from './markdown-editor.ts'
 import css from './CommandMenuFace.module.css'
@@ -85,6 +86,13 @@ export interface CommandMenuFaceProps {
    * typed-slash adjudication delivers it on Enter, the pre-#79 behavior.
    */
   readonly beginClaim?: (claim: ShellClaim, headEnd: number) => void
+  /**
+   * The session snapshot's subagent share (wire data; null = ordinary
+   * session). A non-null address short-circuits the native catalog fetch to
+   * an empty roster before any RPC (#76 AC4): the menu assembles no rows and
+   * the launcher never opens it — a subagent session has no `+` candidates.
+   */
+  readonly subagent?: SubagentShare
 }
 
 /**
@@ -93,7 +101,7 @@ export interface CommandMenuFaceProps {
  * @returns the trigger (with the portaled menu), or nothing while locked.
  */
 export function CommandMenuFace({
-  sessionId, t, editor, container, canPickFiles, onPickFiles, onError, registerClose, onOpen, beginClaim,
+  sessionId, t, editor, container, canPickFiles, onPickFiles, onError, registerClose, onOpen, beginClaim, subagent,
 }: CommandMenuFaceProps): ReactNode {
   const [open, setOpen] = useState(false)
   const [leading, setLeading] = useState(true)
@@ -109,20 +117,32 @@ export function CommandMenuFace({
   const openRef = useRef(open)
   openRef.current = open
 
-  const descriptors = sessionId === undefined || catalogs === undefined
-    ? null
-    : catalogs.value.get(sessionId) ?? null
+  // The subagent catalog short-circuit (#76 AC4) outranks the static
+  // fallback: a subagent session's roster is empty (the client contributions
+  // drop out through their own availability flags), the native menu's
+  // all-ready-empty close.
+  const descriptors = subagent != null
+    ? []
+    : sessionId === undefined || catalogs === undefined
+      ? null
+      : catalogs.value.get(sessionId) ?? null
   const rows = useMemo(
     // hasChainPopup is a live registry read, not reactive state: the `open`
     // dep re-runs the assembly on every open so the chainable rows resolve
     // fresh. feedbackUiSupported is the same kind of read (issue #35): the
     // feedback row upgrades to the native action the moment the decoration
-    // owner has activated.
+    // owner has activated. The client contributions carry the native
+    // availability rules (#76 AC4): a subagent session picks no files and
+    // gets no model row — the catalog above is short-circuited to an empty
+    // roster.
     () => assembleCommandRows({
-      descriptors, canPickFiles, canChainPermission: hasChainPopup('permission'),
-      canChainModel: hasChainPopup('model'), canOpenFeedback: feedbackUiSupported(), leading, t,
+      descriptors,
+      canPickFiles: subagent == null && canPickFiles,
+      canChainPermission: hasChainPopup('permission'),
+      canChainModel: subagent == null && hasChainPopup('model'),
+      canOpenFeedback: feedbackUiSupported(), leading, t,
     }),
-    [descriptors, canPickFiles, leading, t, open],
+    [descriptors, canPickFiles, subagent, leading, t, open],
   )
   const rowsRef = useRef(rows)
   rowsRef.current = rows
@@ -157,12 +177,17 @@ export function CommandMenuFace({
     return () => { registerClose(null) }
   }, [close, registerClose])
 
-  // Mount-time warm-up: the catalog read starts before the first open.
+  // Mount-time warm-up: the catalog read starts before the first open. A
+  // subagent session short-circuits before any RPC (#76 AC4).
   useEffect(() => {
-    if (face !== undefined && sessionId !== undefined) face.ensure(sessionId)
-  }, [face, sessionId])
+    if (face !== undefined && sessionId !== undefined && subagent == null) face.ensure(sessionId)
+  }, [face, sessionId, subagent])
 
   const openMenu = useCallback((): void => {
+    // The native empty-candidate close (#76 AC4): a subagent session's roster
+    // is short-circuited to nothing, so the launcher never floats an empty
+    // menu (the key seam declines rowless surfaces the same way).
+    if (rowsRef.current.length === 0) return
     // Combobox contract: the editor owns focus before the menu renders; the
     // trigger position (leading vs inline) freezes at open like the host's.
     editor?.focus()

@@ -1517,6 +1517,7 @@ export function MarkdownComposer({
                 registerClose={registerMenuClose}
                 onOpen={handleMenuOpen}
                 beginClaim={beginClaim}
+                subagent={session?.subagent ?? null}
               />
             </FaceGate>
             {/* Completion popups (typed triggers, T10): the `/` command+skill
@@ -1537,6 +1538,7 @@ export function MarkdownComposer({
                 onError={showBanner}
                 registerClose={registerCompletionClose}
                 onOpen={closeCommandMenu}
+                subagent={session?.subagent ?? null}
               />
             </FaceGate>
             {attachmentFace !== undefined && (

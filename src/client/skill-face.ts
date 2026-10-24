@@ -17,7 +17,10 @@
  * Caching and invalidation mirror the host source: one list per session,
  * dropped by the forwarded `agent-preset/selected` (a preset switch
  * recomposes which skill providers its agent reads) and `connection/reset`.
- * A failed read leaves the session uncached so a later ensure retries.
+ * A failed read is never a poisoned key: the session publishes an EMPTY roll
+ * (the native source-failed shape — the `/` popup removes the skill group
+ * instead of pending forever) while the failure marker itself makes the next
+ * ensure retry the read.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { RemoteResult } from './command-face.ts'
@@ -118,6 +121,10 @@ export function skillFace(): SkillFace | undefined {
 function createFace(surfaces: SkillSurfaces): SkillFace {
   let snapshot: SkillLexiconState = { value: new Map() }
   const inFlight = new Set<SessionId>()
+  // Sessions whose latest read failed: the published roll is empty (the
+  // popup's failed-group removal) and the marker lets a later ensure retry —
+  // never a poisoned key.
+  const failed = new Set<SessionId>()
   const listeners = new Set<() => void>()
   const store: ObservableSource<SkillLexiconState> = {
     subscribe(listener: () => void): () => void {
@@ -132,28 +139,51 @@ function createFace(surfaces: SkillSurfaces): SkillFace {
     snapshot = next
     for (const listener of [...listeners]) listener()
   }
+  function publishFailure(sessionId: SessionId): void {
+    failed.add(sessionId)
+    // Publish only on a change: an already-empty roll stays put (a failing
+    // retry must not loop the invalidation subscribers).
+    if (snapshot.value.get(sessionId)?.length !== 0) {
+      publish({ value: new Map(snapshot.value).set(sessionId, []) })
+    }
+  }
   function ensure(sessionId: SessionId): void {
-    if (snapshot.value.has(sessionId) || inFlight.has(sessionId)) return
+    if (inFlight.has(sessionId)) return
+    if (snapshot.value.has(sessionId) && !failed.has(sessionId)) return
     inFlight.add(sessionId)
     void (async () => {
+      let result: Awaited<ReturnType<SkillsRemoteFace['list']>> | 'rejected'
       try {
-        const result = await surfaces.skills.list({ sessionId })
-        inFlight.delete(sessionId)
-        if (!result.ok) return // uncached: the `/` arm stays plain, a later ensure retries
-        publish({ value: new Map(snapshot.value).set(sessionId, result.value.skills) })
+        const answered = await surfaces.skills.list({ sessionId })
+        // A malformed answer (an undefined or non-RemoteResult body from a
+        // degraded bridge) reads as a failed pull, never a crash into the
+        // card — the shape check keeps the old silent-tolerance contract.
+        result = answered !== null && typeof answered === 'object'
+          && typeof (answered as { ok?: unknown }).ok === 'boolean'
+          ? answered as Awaited<ReturnType<SkillsRemoteFace['list']>>
+          : 'rejected'
       } catch {
-        inFlight.delete(sessionId)
+        result = 'rejected'
       }
+      inFlight.delete(sessionId)
+      if (result === 'rejected' || !result.ok) {
+        publishFailure(sessionId)
+        return
+      }
+      failed.delete(sessionId)
+      publish({ value: new Map(snapshot.value).set(sessionId, result.value.skills) })
     })()
   }
   function dropSession(sessionId: SessionId): void {
-    if (!snapshot.value.has(sessionId)) return
+    if (!snapshot.value.has(sessionId) && !failed.has(sessionId)) return
     const next = new Map(snapshot.value)
     next.delete(sessionId)
+    failed.delete(sessionId)
     publish({ value: next })
   }
   function dropAll(): void {
-    if (snapshot.value.size === 0) return
+    if (snapshot.value.size === 0 && failed.size === 0) return
+    failed.clear()
     publish({ value: new Map() })
   }
   // The forwarded events mirror the host source's invalidation channels;
