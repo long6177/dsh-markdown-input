@@ -952,6 +952,25 @@ export function MarkdownComposer({
    * picker. This is the explicit guard the ticket asked for against breaking
    * the #41 hit area on the way in.
    */
+  /**
+   * The tool row's keep-focus arm (issue #74, the native keepDraftFocus): a
+   * mousedown on a row button is consumed — focus never lands on the button
+   * — and the editor takes it back, so typing continues after sending,
+   * toggling the mode, or opening a picker without re-clicking the text
+   * face. The click itself still fires (preventDefault on mousedown cancels
+   * no click). Popup items and containers portal outside this row and keep
+   * their own focus behavior; the row's gaps fall through to the card hit
+   * area (issue #41), which focuses without cancelling.
+   */
+  function onToolRowMouseDown(event: MouseEvent<HTMLDivElement>): void {
+    if (triggerPosture) return
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (target.closest('button') === null) return
+    event.preventDefault()
+    editorRef.current?.focus()
+  }
+
   function onCardMouseDown(event: MouseEvent<HTMLDivElement>): void {
     if (triggerPosture) return
     if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
@@ -1187,7 +1206,7 @@ export function MarkdownComposer({
           </ul>
         )}
         <div className={css.surface} data-markdown-surface ref={surfaceRef} />
-        <div className={css.toolRow} ref={toolRowRef}>
+        <div className={css.toolRow} ref={toolRowRef} onMouseDown={onToolRowMouseDown}>
           {/* The native row's two-group shape (issue #39, alpha.13 inversion):
               the seats ride in a leading and a trailing cluster, each ONE
               non-shrinking flex item (`flex: none`) — the layout premise the
