@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent } from '@testing-library/react'
-import { undo } from '@codemirror/commands'
+import { redo, undo } from '@codemirror/commands'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from '../src/client/markdown-editor.ts'
 
 const mounted: MarkdownEditorHandle[] = []
@@ -108,6 +108,62 @@ describe('createMarkdownEditor', () => {
     fireEvent.keyDown(content(), { key: 'Enter' })
     expect(onSubmit).toHaveBeenCalledTimes(1)
     expect(handle.getText()).toBe('- alpha\nbeta')
+  })
+
+  it('never sends a held-down Enter — keyboard auto-repeat must not machine-gun sends (#74)', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('hello')
+    const surface = content()
+    // The OS repeats the keydown while the key is held; each repeat is
+    // consumed before any binding sees it (the upstream keymap's repeat
+    // guard), so one hold is one send at most.
+    fireEvent.keyDown(surface, { key: 'Enter', repeat: true })
+    fireEvent.keyDown(surface, { key: 'Enter', repeat: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('hello')
+    // A fresh physical press still sends.
+    fireEvent.keyDown(surface, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(handle.getText()).toBe('hello')
+  })
+
+  it('holds the send through the brief post-compositionend window (Safari late close, #74)', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const { handle, onSubmit } = mount()
+      handle.setText('nihao')
+      const surface = content()
+      // Some engines deliver the composition-closing Enter AFTER the
+      // compositionend event, when CM6's `view.composing` has already
+      // dropped (its observer runs ahead of every dom handler). CM6's own
+      // Safari-only suppression eats exactly one such keydown; the closing
+      // gesture often arrives as the next one — without the hold window
+      // this second press submits (probed against the real chain).
+      fireEvent.compositionEnd(surface)
+      surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      expect(onSubmit).not.toHaveBeenCalled()
+      expect(handle.getText()).toBe('nihao')
+      // Past the hold window (an order of magnitude under CM6's own Safari
+      // window) the key is an ordinary Enter again.
+      vi.advanceTimersByTime(30)
+      fireEvent.keyDown(surface, { key: 'Enter' })
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('consumes an Enter carrying keyCode 229 (engines without isComposing, #74)', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('nihao')
+    // keyCode 229 is the legacy "IME owns this key" signal on engines that
+    // never raise isComposing on keydown.
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'keyCode', { value: 229 })
+    content().dispatchEvent(event)
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('nihao')
   })
 
   it('never sends while IME composition is active (editor-level gating)', () => {
@@ -294,6 +350,53 @@ describe('createMarkdownEditor', () => {
     handle.setMode('render', 'render ph')
     expect(host.querySelectorAll('.cm-md-h1').length).toBeGreaterThan(0)
     expect(handle.getText()).toBe('# Head')
+  })
+
+  describe('submit-clear history cut (#74; the CLEAR_HISTORY_COMMAND parity)', () => {
+    it('a history-cutting setText leaves undo nothing to resurrect', () => {
+      const { handle } = mount()
+      handle.setText('已发送的话')
+      handle.setText('', { cutHistory: true })
+      expect(handle.getText()).toBe('')
+      // The whole stack is gone — the upstream commit-draft effect's "cut
+      // undo history" contract: sent content cannot come back.
+      expect(undo(handle.view)).toBe(false)
+      expect(handle.getText()).toBe('')
+    })
+
+    it('an ordinary setText stays undoable (the mode-switch undo promise holds)', () => {
+      // The seed and the clear are adjacent same-range dispatches, so the
+      // history's newGroupDelay would join them into one undo group when
+      // they share a clock tick — separate them past the 500ms default.
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const { handle } = mount()
+        handle.setText('seeded')
+        vi.advanceTimersByTime(600)
+        handle.setText('')
+        expect(undo(handle.view)).toBe(true)
+        expect(handle.getText()).toBe('seeded')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('the cut starts a fresh history: post-commit typing undoes to the commit point', () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const { handle } = mount()
+        handle.setText('sent')
+        vi.advanceTimersByTime(600)
+        handle.setText('', { cutHistory: true })
+        handle.setText('typed after')
+        expect(undo(handle.view)).toBe(true)
+        expect(handle.getText()).toBe('')
+        expect(redo(handle.view)).toBe(true)
+        expect(handle.getText()).toBe('typed after')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 })
 
