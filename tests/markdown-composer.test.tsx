@@ -498,6 +498,30 @@ describe('MarkdownComposer', () => {
     view.rerender(<MarkdownComposer {...chainProps({ draft: '新会话的草稿', sessionId: 's2' })} />)
     expect(content().textContent).toBe('新会话的草稿')
   })
+
+  it('focuses the editor on session switches and when the machine unlocks (#74)', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      const view = render(<MarkdownComposer {...chainProps()} />)
+      // The mount beat: the card lands with the text face live.
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+      focus.mockClear()
+      // A busy phase is not an editor surface: no focus is pulled into it.
+      view.rerender(<MarkdownComposer {...chainProps({ phase: 'adjudicating' })} />)
+      focus.mockClear()
+      // The unlock beat (a send settled, the machine left the busy phase):
+      // the editor takes the focus back, like the native bar's unlock
+      // effect.
+      view.rerender(<MarkdownComposer {...chainProps()} />)
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+      focus.mockClear()
+      // The session-switch beat: a new session's card focuses its editor.
+      view.rerender(<MarkdownComposer {...chainProps({ sessionId: 's2' })} />)
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
 })
 
 describe('mergeRestoredDraft (#74 failure restore over in-flight edits)', () => {

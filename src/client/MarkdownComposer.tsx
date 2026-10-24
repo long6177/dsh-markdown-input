@@ -828,6 +828,18 @@ export function MarkdownComposer({
     editorRef.current?.setEditable(!machineBusy && !triggerPosture)
   }, [machineBusy, triggerPosture])
 
+  // The session-switch/unlock focus (issue #74, the native bar's unlock
+  // effect with sessionId in its deps): a session change or the machine
+  // leaving a busy phase puts the caret back in the text face — the
+  // handle's focus restores the selection and scrolls it into view, so a
+  // long restored draft lands with its caret visible. A busy phase or the
+  // workspace trigger posture is not an editor surface: nothing is pulled
+  // into it.
+  useEffect(() => {
+    if (machineBusy || triggerPosture) return
+    editorRef.current?.focus()
+  }, [machineBusy, triggerPosture, sessionId, editorHandle])
+
   // Mode and placeholder live in compartments, so a switch keeps undo
   // history and scroll; the choice persists across page loads.
   function toggleMode(): void {
