@@ -69,8 +69,8 @@ import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
   attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, imageLightbox, imageUrlOf, noticesOf,
-  queueUpdateOf, stopOf, useObservable,
-  type AttachmentFace,
+  queueUpdateOf, sessionShellOf, stopOf, useObservable,
+  type AttachmentFace, type SessionShellFace, type ShellClaim,
 } from './conversation-face.ts'
 import { registerFace } from './face.ts'
 import { FaceGate } from './FaceGate.tsx'
@@ -94,6 +94,11 @@ import {
 } from './stats-pills-face.ts'
 import { StatsPillsFace, statsPillsFaceDefinition, type StatsPillsFaceProps } from './StatsPillsFace.tsx'
 import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
+import {
+  busyEnterOf, busyEnterStore, canSteerQueueOf, primarySubmitLabelOf,
+  resolveSubmitMode, steeringAvailableOf,
+  type SubmitGesture,
+} from './submit-policy.ts'
 import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
 import {
   addWorkspaceEntry, addWorkspaceIsOnlyEntry, resolveAddWorkspaceCopy,
@@ -277,6 +282,20 @@ export function MarkdownComposer({
 
   const input = useInput((state) => state)
   const conversation = conversationFace()
+  // The runtime submit plane (issue #79): the full shell behind the public
+  // inputActions face — the mode-aware submit (the busy-Enter preference
+  // carrier), the whole-queue steer, and the command-claim application —
+  // capability-detected per render. Absent (or partial) on hosts without
+  // it: the card keeps the queue-only public face, the exact pre-#79
+  // behavior.
+  const shell = conversation !== undefined && sessionId !== undefined
+    ? sessionShellOf(conversation, sessionId)
+    : undefined
+  // The busy-Enter preference (issue #79): the host `ui-conversation`
+  // settings form's field through the configForms service (the stats-pills
+  // settings precedent); a missing service reads the native default
+  // (queue — the pre-#79 behavior).
+  const busyEnter = busyEnterOf(useObservable(busyEnterStore()))
   const [mode, setMode] = useState<EditMode>(storedMode)
   const [hasText, setHasText] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -344,6 +363,23 @@ export function MarkdownComposer({
   inputActionsRef.current = inputActions
   const tRef = useRef(t)
   tRef.current = t
+  const shellRef = useRef<SessionShellFace | undefined>(shell)
+  shellRef.current = shell
+  // The submission policy's live inputs (issue #79): mirrored per render so
+  // the mounted-once editor's submit closure reads the freshest preference,
+  // session signals, and queue rows at gesture time. The initializer runs
+  // once with the early-render dummies; the real snapshot is assigned below,
+  // after the queue rows are computed.
+  const submitPolicyRef = useRef({
+    busyEnter,
+    running: false,
+    steeringAvailable: true,
+    sessionBound: sessionId !== undefined,
+    menuOpen,
+    hasQueuedRows: false,
+    queueRows: [] as ReturnType<typeof queueViewRows>,
+    queueUpdate: undefined as ReturnType<typeof queueUpdateOf>,
+  })
   // The mounted-once editor reads the paste intake through this ref: the
   // intakeFiles closure is re-created every render, the editor's onFiles
   // seam is installed once (the same reason submit reads mirrored faces).
@@ -404,6 +440,16 @@ export function MarkdownComposer({
     [input.queue, session?.pendingSubmissions],
   )
   const queueMutable = queueMutableOf(session?.subagent)
+  submitPolicyRef.current = {
+    busyEnter,
+    running: sessionId !== undefined && (session?.running ?? false),
+    steeringAvailable: steeringAvailableOf(session?.subagent),
+    sessionBound: sessionId !== undefined,
+    menuOpen,
+    hasQueuedRows: input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued'),
+    queueRows,
+    queueUpdate,
+  }
 
   // Stop arms (issue #32): the native bar's send/stop semantics over the
   // card's planes. The cancel verb rides the session-scoped conversation
@@ -421,9 +467,13 @@ export function MarkdownComposer({
   )
   const composerBlock = useObservable(blockSource)
   const draftEmpty = !hasText && input.attachmentIds.length === 0
+  // The session's busy and steerability signals (issue #79): the submission
+  // policy's real wire reads, shared by the stop arms and the submit mode.
+  const running = sessionId !== undefined && (session?.running ?? false)
+  const steeringAvailable = steeringAvailableOf(session?.subagent)
   const stopConditions = {
     // No session id, no session-scoped verb: the arms stay off entirely.
-    running: sessionId !== undefined && (session?.running ?? false),
+    running,
     subagent: session?.subagent,
     empty: draftEmpty,
     blocked: composerBlock !== undefined,
@@ -479,20 +529,75 @@ export function MarkdownComposer({
     }
   }, [attachments, previewImage])
 
-  function submit(): void {
+  /**
+   * The whole-queue steer (issue #79 AC3): the empty-draft accelerated
+   * gesture's delivery. The runtime shell's own verb when it resolves (the
+   * upstream hub choreography: FIFO per-row steer, silent convergence on
+   * the two expected refusals, one notice on a genuine failure); otherwise
+   * per-row through the session verb, best-effort — the direct steer is
+   * intentionally best-effort upstream (a closed delivery window lands the
+   * message as the next waking queue item), and a failed row simply stays
+   * queued where the user can see it.
+   */
+  function steerAllQueued(): void {
+    const shell = shellRef.current
+    if (shell !== undefined) {
+      shell.steerQueue()
+      return
+    }
+    const update = submitPolicyRef.current.queueUpdate
+    if (update === undefined) return
+    for (const row of submitPolicyRef.current.queueRows) {
+      if (row.kind !== 'queued') continue
+      void update(row.id, { kind: 'steer' }).catch(() => {})
+    }
+  }
+
+  function submit(gesture: SubmitGesture): void {
     // One send at a time (#74): the machine detaches back to plain at send
     // time, so only this gate covers the whole pipeline window.
     if (flightRef.current !== false) return
     const editor = editorRef.current
-    if (editor === null || inputRef.current.phase !== 'plain') return
+    if (editor === null) return
+    // Claimed is a live editing phase (issue #79 AC6): the claim args are
+    // ordinary text and Enter submits — only the busy admission phases stay
+    // shut (the pre-#79 plain-only gate deadlocked the claim).
+    const input = inputRef.current
+    if (input.phase !== 'plain' && input.phase !== 'claimed') return
     // The machine's own empty-draft no-op (the upstream `trimmed === ''`
     // guard): never arm the flight for a send the host would refuse — the
-    // gate would latch with nothing to release it.
-    if (editor.getText().trim() === '' && inputRef.current.attachmentIds.length === 0) return
+    // gate would latch with nothing to release it. The accelerated chord
+    // acts on the queue instead of the (empty) draft (the upstream
+    // view-binding's canSteerQueue arm): steer every still-pending queued
+    // message into the running turn.
+    const empty = editor.getText().trim() === '' && inputRef.current.attachmentIds.length === 0
+    if (empty) {
+      if (gesture === 'accelerated') {
+        const policy = submitPolicyRef.current
+        if (canSteerQueueOf({
+          sessionBound: policy.sessionBound,
+          phase: inputRef.current.phase,
+          draftEmpty: true,
+          running: policy.running,
+          steeringAvailable: policy.steeringAvailable,
+          menuOpen: policy.menuOpen,
+          hasQueuedRows: policy.hasQueuedRows,
+        })) {
+          steerAllQueued()
+        }
+      }
+      return
+    }
     if (uploadsPendingRef.current) {
       showBanner(tRef.current('composer.file.stillUploading'))
       return
     }
+    // The delivery mode (issue #79 AC1): the busy-Enter preference resolved
+    // against the session's busy and steerability signals — plain Enter and
+    // the Send button share the `enter` gesture, the accelerated chord
+    // takes the opposite of the preference.
+    const policy = submitPolicyRef.current
+    const mode = resolveSubmitMode(policy.busyEnter, policy.running, gesture, policy.steeringAvailable)
     flightRef.current = 'pending'
     // Cancel a pending draft mirror: firing after the machine clears the
     // sent draft would resurrect the sent text into the input.
@@ -503,8 +608,14 @@ export function MarkdownComposer({
     // its projection; the phase re-checks at fire time in case the machine
     // left 'plain' in between.
     window.setTimeout(() => {
-      if (inputRef.current.phase === 'plain') {
-        inputActionsRef.current.submit()
+      const phase = inputRef.current.phase
+      if (phase === 'plain' || phase === 'claimed') {
+        // The mode-aware shell verb when the runtime face resolves it; the
+        // public face stays the queue-only fallback (its signature takes
+        // no mode).
+        const shell = shellRef.current
+        if (shell !== undefined) shell.submit(mode, 'enter')
+        else inputActionsRef.current.submit()
         // The flight is now the host's: the seed effect releases the gate
         // when the settled state (cleared or restored draft) arrives.
         flightRef.current = 'sent'
@@ -522,6 +633,40 @@ export function MarkdownComposer({
     stop?.()
   }
 
+  /**
+   * The `+` menu's claim application (issue #79 AC5): the visible token text
+   * has landed through claimSelection; the machine's claim is applied here
+   * through the shell's `beginCommand` — the chip replaces the head span at
+   * the machine's own revision, the machine enters claimed, and the ghost
+   * hint lives while the args stay blank. Without the shell face the token
+   * text stands alone (the typed-slash adjudication delivers it on Enter,
+   * the pre-#79 behavior).
+   */
+  const beginClaim = useCallback((claim: ShellClaim, headEnd: number): void => {
+    const editor = editorRef.current
+    const shell = shellRef.current
+    if (editor === null || shell?.beginCommand === undefined) return
+    // The machine's draft must describe the same text the span is applied
+    // over: flush a lagging mirror now (the debounced write would race the
+    // claim and drop it).
+    const text = editor.getText()
+    if (inputRef.current.draft !== text) {
+      window.clearTimeout(draftSyncTimerRef.current)
+      inputActionsRef.current.setDraft(text)
+    }
+    // The span's revision is the machine's OWN current revision (the live
+    // store), never the rendered snapshot a synchronous flush outruns.
+    const live = shell.state?.getSnapshot()
+    const draftRev = typeof live?.draftRev === 'number' ? live.draftRev : inputRef.current.draftRev
+    const applied = shell.beginCommand(claim, { start: 0, end: headEnd, draftRev })
+    if (applied) {
+      // The claim owns the draft projection while it holds (the chip
+      // document): the token mirror claimSelection armed would replace it
+      // and drop the claim.
+      window.clearTimeout(draftSyncTimerRef.current)
+    }
+  }, [])
+
   useEffect(() => {
     const surface = surfaceRef.current
     if (surface === null) return undefined
@@ -531,7 +676,9 @@ export function MarkdownComposer({
         parent: surface,
         placeholder: '',
         mode: storedMode(),
-        onSubmit: submit,
+        // The accelerated chord rides the same submit pipeline with its own
+        // gesture (issue #79): the editor only knows ctrl/meta was held.
+        onSubmit: (accelerated) => { submit(accelerated ? 'accelerated' : 'enter') },
         onFiles: (files) => intakeFilesRef.current(files),
         onDocChange: (text) => {
           // Any document change invalidates the `+` menu's trigger track
@@ -541,6 +688,11 @@ export function MarkdownComposer({
           if (seedingRef.current) return
           touchedRef.current = true
           setHasText(text.trim().length > 0)
+          // While a command claim holds (issue #79 AC5) the machine's draft
+          // is the chip document: a plain-text mirror would replace it and
+          // drop the claim, so the mirror waits for the claim to end. The
+          // submit flush still carries the args at Enter time.
+          if (inputRef.current.phase === 'claimed') return
           // Live draft mirror: the host persists machine-draft changes, so the
           // typed text reaches it as the user types, not only on unmount/submit.
           window.clearTimeout(draftSyncTimerRef.current)
@@ -658,6 +810,13 @@ export function MarkdownComposer({
   // claim holds, the resolved per-command hint (the translated native key
   // wins, the machine's own hint answers for other claimed commands) rides
   // into the editor, which decides blank-args from its live document.
+  // Once claimed (issue #79 AC5), the claim's own insertion mirror — armed
+  // before the shell applied the chip — is cancelled: the machine's draft
+  // is the chip projection now, and the pending plain-text write would
+  // drop the claim.
+  useEffect(() => {
+    if (input.phase === 'claimed') window.clearTimeout(draftSyncTimerRef.current)
+  }, [input.phase])
   const hasGoal = useProjection('goal', (goal: unknown) => goal != null) === true
   // The plan mode's folded target (issue #34, native InputBar parity): the
   // same value the plan chip and the native `placeholder.plan` read. The
@@ -877,10 +1036,18 @@ export function MarkdownComposer({
   // including the open `+` menu's suppression arm and the queue rows'
   // `placement === 'queued'` wire test. (The native ladder's earlier arms —
   // workspace picker, block reason, offline parent — ride states the card
-  // does not model.)
-  const canSteerQueue = sessionId !== undefined && !machineBusy && draftEmpty
-    && (session?.running ?? false) && session?.subagent == null && !menuOpen
-    && input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued')
+  // does not model.) The gate is the SAME pure function the accelerated
+  // chord reads (issue #79): the hint never promises a gesture the chord
+  // would refuse, and vice versa.
+  const canSteerQueue = canSteerQueueOf({
+    sessionBound: sessionId !== undefined,
+    phase: input.phase,
+    draftEmpty,
+    running,
+    steeringAvailable,
+    menuOpen,
+    hasQueuedRows: input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued'),
+  })
   // The native placeholder ladder's FIRST arm (#42): while the card is the
   // workspace picker, `placeholder.workspace` outranks every steering/plan/
   // render arm — the surface is not an editor then, it is the pick target.
@@ -895,7 +1062,31 @@ export function MarkdownComposer({
     editorRef.current?.setMode(mode, placeholderText)
   }, [mode, placeholderText])
 
-  const canSubmit = !draftEmpty && input.phase === 'plain' && !uploadsPending
+  // Native parity: the submit seat stays live while a claim holds (issue
+  // #79 AC6) — the claim args are ordinary text and the click delivers
+  // them; only the busy admission phases disable it.
+  const canSubmit = !draftEmpty && (input.phase === 'plain' || input.phase === 'claimed')
+    && !uploadsPending
+  // The primary seat's copy names the mode the click delivers (issue #79
+  // AC2) — the same resolution plain Enter uses (the shared `enter`
+  // gesture) — but only while the click would really deliver a plain
+  // message right now: enabled, over a plain non-command draft, on a
+  // running steerable session (the native primaryLabel arms verbatim). A
+  // claimed or `/` draft, an idle session, or a pending upload keeps plain
+  // send — the label never names a delivery the click cannot perform.
+  const submitMode = resolveSubmitMode(busyEnter, running, 'enter', steeringAvailable)
+  const plainMessageDraft = !draftEmpty && input.phase === 'plain'
+    && !input.draft.trimStart().startsWith('/')
+  const submitLabelKey = primarySubmitLabelOf({
+    primaryStops, running, steeringAvailable, enabled: canSubmit, plainMessageDraft, submitMode,
+  })
+  const submitLabel = submitLabelKey === 'stop'
+    ? t('composer.action.stop')
+    : submitLabelKey === 'send.queue'
+      ? t('composer.send.queue')
+      : submitLabelKey === 'send.steer'
+        ? t('composer.send.steer')
+        : t('composer.action.submit')
   // Native canAcceptDrop parity: subagent === null, not locked (a session id
   // exists), not busy, and the intake face present.
   const canIntake = attachmentFace !== undefined && sessionId !== undefined
@@ -1325,6 +1516,7 @@ export function MarkdownComposer({
                 onError={showBanner}
                 registerClose={registerMenuClose}
                 onOpen={handleMenuOpen}
+                beginClaim={beginClaim}
               />
             </FaceGate>
             {/* Completion popups (typed triggers, T10): the `/` command+skill
@@ -1432,13 +1624,13 @@ export function MarkdownComposer({
                 group, and its bubble is fixed-position — out of flow, so a
                 hover can never widen what the row measures (the transient
                 latch candidate the alpha.13 note flagged). */}
-            <Tooltip label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+            <Tooltip label={submitLabel}
               side="top" delayMs={500}
               disabled={primaryStops ? stop === undefined : !canSubmit}>
               <button type="button" className={css.submitButton}
-                aria-label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+                aria-label={submitLabel}
                 disabled={primaryStops ? stop === undefined : !canSubmit}
-                onClick={primaryStops ? stopRunning : submit}>
+                onClick={primaryStops ? stopRunning : () => { submit('enter') }}>
                 {primaryStops ? (
                   <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
                     <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />

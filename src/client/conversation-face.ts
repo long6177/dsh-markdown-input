@@ -119,6 +119,78 @@ export function noticesOf(
 }
 
 /**
+ * One command claim as the shell's `beginCommand` consumes it (the wire's
+ * CommandClaim): the catalog name, the draft token (spelling + separator),
+ * and the submit closure the machine's claimed branch calls with the args
+ * typed after the token.
+ */
+export interface ShellClaim {
+  readonly name: string
+  readonly token: string
+  readonly hint?: string
+  readonly attachments?: boolean
+  submit(
+    args: string,
+    actx?: unknown,
+    attachments?: readonly unknown[],
+  ): Promise<{ readonly kind: 'success' | 'error'; readonly text?: string }>
+}
+
+/** The pick-time span `beginCommand` applies the claim over (detect coordinates). */
+export interface ShellSpan {
+  readonly start: number
+  readonly end: number
+  readonly draftRev: number
+}
+
+/**
+ * The per-session input shell's submit plane (issue #79): the runtime
+ * facade `conversation.input.shell(sessionId)` resolves beyond the
+ * published `InputActions` face — the mode-aware submit (queue/steer, the
+ * busy-Enter preference carrier), the whole-queue steer verb, and the
+ * command-claim application. Runtime members beyond the published shapes
+ * are consumed structurally at the cast site (the conversation-face
+ * convention); the face is all-or-nothing: a shell missing any verb reads
+ * as absent and the card falls back to the queue-only public face — the
+ * exact pre-#79 behavior.
+ */
+export interface SessionShellFace {
+  readonly notices: ObservableSource<ComposerNotice | null>
+  /** The live InputState store (the machine's own revision reads). */
+  readonly state?: ObservableSource<{ readonly draftRev: number }>
+  submit(mode?: 'queue' | 'steer', source?: 'click' | 'enter'): void
+  steerQueue(): void
+  beginCommand(claim: ShellClaim, span: ShellSpan): boolean
+}
+
+/**
+ * The runtime input shell for one session, capability-detected per call.
+ * Undefined while the session binding is absent (the hub throws — a
+ * composer frame can render before it materializes) or when the submit
+ * verbs are not all present.
+ * @param conversation - the conversation service face.
+ * @param sessionId - owning session.
+ */
+export function sessionShellOf(
+  conversation: ConversationFace,
+  sessionId: SessionId,
+): SessionShellFace | undefined {
+  try {
+    const shell = (conversation.input as InputHubFace).shell(sessionId) as
+      | Partial<SessionShellFace>
+      | undefined
+      | null
+    if (shell === undefined || shell === null) return undefined
+    if (typeof shell.submit !== 'function') return undefined
+    if (typeof shell.steerQueue !== 'function') return undefined
+    if (typeof shell.beginCommand !== 'function') return undefined
+    return shell as SessionShellFace
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Subscribe a component to a bare snapshot source (React 18's
  * useSyncExternalStore; the closures are captured per source so no
  * resubscription churn). Undefined sources read as undefined.

@@ -54,6 +54,12 @@ export interface CommandMenuRow {
   readonly section: string
   /** Claim token text (leading slash + trailing space), for `claim` rows. */
   readonly token?: string
+  /**
+   * The catalog input hint (the machine hint the claim snapshot carries;
+   * the localized per-command keys win over it at ghost time), for `claim`
+   * rows — absent on the synthetic fallback and bare rows (AC5).
+   */
+  readonly hint?: string
   /** Detached command line, for `execute` rows. */
   readonly line?: string
   /** Which second-layer popup face, for `popup` rows. */
@@ -223,6 +229,9 @@ export function assembleCommandRows(input: CommandRowsInput): readonly CommandMe
       kind,
       ...(kind === 'claim' ? {
         token: `/${face?.token === undefined ? descriptor.name : t(face.token)} `,
+        hint: descriptor.input?.hint === undefined || descriptor.input?.hint === ''
+          ? undefined
+          : descriptor.input.hint,
       } : {}),
       ...(kind === 'execute' ? { line: `/${descriptor.name}` } : {}),
       ...(kind === 'popup' ? { popup: popupId } : {}),
