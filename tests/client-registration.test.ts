@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { apply, userMessageCapability } from '../src/client/index.ts'
-import { MarkdownUserMessage } from '../src/client/UserMessage.tsx'
+import { MarkdownEchoText, MarkdownUserMessage } from '../src/client/UserMessage.tsx'
 import { TakeoverCard } from '../src/client/composer-card.tsx'
 import { degradeTakeover, resetTakeoverDegradation } from '../src/client/degrade.ts'
 import { commandFaceSupported, resetCommandFace } from '../src/client/command-face.ts'
@@ -135,11 +135,16 @@ describe('client apply registration', () => {
     expect(commandFaceSupported()).toBe(false)
   })
 
-  it('touches only the composer chain, chat-node slot, and composer dock', () => {
+  it('touches only the composer chain, chat-node slot, echo text node, and composer dock', () => {
     const { ctx, injected } = recordedContext()
     apply(ctx)
     expect([...new Set(injected)].sort())
-      .toEqual(['conversation.chat.node', 'conversation.composer', 'conversation.composer.dock'])
+      .toEqual([
+        'conversation.chat.node',
+        'conversation.composer',
+        'conversation.composer.dock',
+        'conversation.user.text.node',
+      ])
   })
 
   it('replaces exactly the user and steering chat-node keys', () => {
@@ -156,6 +161,18 @@ describe('client apply registration', () => {
       expect(seat.component).toBe(MarkdownUserMessage)
       expect(seat.locale).toBe('chat')
     }
+  })
+
+  it('shadows the echo text node at a lower rank with the Markdown entry (#77)', () => {
+    const { ctx, registrations } = recordedContext()
+    apply(ctx)
+    const echoSeats = registrations.filter(entry => entry.name === 'conversation.user.text.node')
+    // Keyed 'text' only: the host's 'session' entry (the wire-form chip)
+    // keeps rendering between the Markdown blocks, exactly as it does around
+    // the durable seat's own projection.
+    expect(echoSeats.map(entry => entry.key)).toEqual(['text'])
+    expect(echoSeats[0]?.priority).toBe(-1)
+    expect(echoSeats[0]?.component).toBe(MarkdownEchoText)
   })
 
   it('leaves the composer dock to the fallback notice; the meter rides the card (#43)', () => {

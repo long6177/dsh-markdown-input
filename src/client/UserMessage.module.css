@@ -11,18 +11,30 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
-  max-width: 85%;
+  /* Host userStack class values (#77): the echo bubble renders inside the
+     host MessageItem's own stack and bubble, the durable bubble renders
+     here — the handoff at admission must not repaint the container. */
+  gap: 8px;
+  max-width: min(calc(var(--dsh-chat-content-width, 748px) * 0.702), 82%);
 }
 
 /* The attachment row and its file cards are the host user-content factory's
    own render (the factory occurrence inside .stack, #77); only the bubble
    skin is ours. */
 
+/* Host .bubble class values (#77): background/radius tokens, the 10/16
+   padding, and the content font metrics the host bubble carries. The
+   white-space stays `normal` (the Markdown blocks manage their own breaks —
+   the author's hardened lines ride <br> elements; the host's pre-wrap suits
+   its plain-run projection, not block Markdown). */
 .bubble {
-  padding: 8px 12px;
-  border-radius: 14px 14px 4px 14px;
-  background: var(--dsw-bubble-user, color-mix(in srgb, currentColor 8%, transparent));
+  max-width: 100%;
+  background: var(--dsw-specific-bubble);
+  border-radius: var(--dsw-radius-xl);
+  padding: 10px 16px;
+  font-size: var(--dsh-content-font-size, 14px);
+  line-height: calc(22px + var(--dsh-content-font-delta, 0px));
+  color: var(--dsw-alias-label-primary);
   white-space: normal;
   word-break: break-word;
 }

@@ -18,3 +18,25 @@ describe('user-message bubble list CSS contract (fourth feedback round)', () => 
     expect(rule).toContain('padding-left: 2em')
   })
 })
+
+describe('user-message bubble container contract (#77 echo handoff)', () => {
+  it('speaks the host bubble’s class values so the echo→durable handoff has no style jump', () => {
+    // The echo bubble renders inside the host MessageItem's own `.bubble`
+    // (background token, radius token, 10/16 padding, content font metrics);
+    // the durable bubble renders THIS sheet — the values must be the host's,
+    // or the admitted bubble visibly repaints at admission.
+    const rule = ruleOf(bubbleCss, '.bubble')
+    expect(rule).toContain('background: var(--dsw-specific-bubble)')
+    expect(rule).toContain('border-radius: var(--dsw-radius-xl)')
+    expect(rule).toContain('padding: 10px 16px')
+    expect(rule).toContain('font-size: var(--dsh-content-font-size, 14px)')
+    expect(rule).toContain('line-height: calc(22px + var(--dsh-content-font-delta, 0px))')
+    expect(rule).toContain('color: var(--dsw-alias-label-primary)')
+  })
+
+  it('caps the stack the way the host userStack does (width share, not a bare percent)', () => {
+    const rule = ruleOf(bubbleCss, '.stack')
+    expect(rule).toContain('gap: 8px')
+    expect(rule).toContain('max-width: min(calc(var(--dsh-chat-content-width, 748px) * 0.702), 82%)')
+  })
+})

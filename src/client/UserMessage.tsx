@@ -24,7 +24,9 @@ import {
 import type {
   ChatNodeViewProps, UserContentAttachment, UserMessageNode,
 } from '@deepseek-ai/dsh-client-ui-chat/client'
+import type { UserTextNodeProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { MessageActions } from './MessageActions.tsx'
+import { echoLocale } from './echo-text-face.ts'
 import { hardenSoftBreaks } from './user-markdown.ts'
 import { projectUserText } from './user-text-projection.tsx'
 import css from './UserMessage.module.css'
@@ -124,7 +126,7 @@ interface ContentBlock {
  * author sent them (#77 — the previous images/files split reordered them),
  * and the all-attachment count is what drives the host's compact tile rule
  * (one image + one file tiles like two images). A typed block without its
- wire reference is not trusted as a card: it parks in `rest` like the
+ * wire reference is not trusted as a card: it parks in `rest` like the
  * host's own fold.
  */
 export function contentParts(content: readonly unknown[]): {
@@ -203,3 +205,38 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
     </div>
   )
 })
+
+/**
+ * The submission-echo text entry (#77): the keyed `conversation.user.text.
+ * node` `text` shadow — the local echo's plain text run through the SAME
+ * Markdown projection its durable bubble renders (`MarkdownUserMessage`
+ * above), so the handoff at admission has no visible style jump. The entry
+ * sees only this run; the host's own `session` entry keeps rendering the
+ * wire-form chips between the blocks, as it does around the durable seat's
+ * projection. An unbound locale (a host whose `chat` dictionary never
+ * bound) degrades to the host's plain run — the native echo, nothing lost.
+ *
+ * The run's own text is the original substring (the rule contract preserves
+ * source text); display transforms never apply here — the echo carries no
+ * whitespace facts, and the durable bubble projects the source too.
+ * @param props - the keyed text-node seat (node + raw run, no locale seat).
+ */
+export function MarkdownEchoText({ node }: UserTextNodeProps<'text'>) {
+  const t = echoLocale()
+  // Stable per bound seat: a fresh labels object identity would rebuild
+  // MarkdownText's caches per render (the MarkdownUserMessage note holds).
+  const labels = useMemo(() => (t === undefined ? undefined : {
+    code: {
+      copyLabel: t('copy'),
+      copiedLabel: t('copied'),
+      toolbarLabels: {
+        codeLabel: t('codeBlock.title'),
+        wrapLabel: t('codeBlock.wrap'),
+        unwrapLabel: t('codeBlock.unwrap'),
+      },
+    },
+    footnotes: t('markdown.footnotes'),
+  } satisfies MarkdownLabels), [t])
+  if (labels === undefined) return <UserTextRun text={node.data.text} />
+  return <>{composeUserMarkdown(node.data.text, labels, [], [])}</>
+}

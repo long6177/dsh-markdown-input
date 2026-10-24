@@ -45,11 +45,12 @@ import { installSkillSource } from './skill-face.ts'
 import { installFileReferenceSource } from './file-reference-face.ts'
 import { TakeoverCard } from './composer-card.tsx'
 import { CONTEXT_NS, resetContextLocale, setContextLocale } from './context-meter-face.ts'
+import { ECHO_TEXT_NS, resetEchoLocale, setEchoLocale } from './echo-text-face.ts'
 import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
 import { en as modelEn, zh as modelZh, type ModelKey } from './ModelSelectFace.locales.ts'
-import { MarkdownUserMessage } from './UserMessage.tsx'
+import { MarkdownEchoText, MarkdownUserMessage } from './UserMessage.tsx'
 import { installWorkspaceVerbSource } from './workspace-verb.ts'
 import {
   WORKSPACE_ADD_NS, installWorkspaceAddSource, resetWorkspaceAddLocale, setWorkspaceAddLocale,
@@ -260,6 +261,16 @@ export function apply(ctx: ClientContext): void {
     setWorkspaceAddLocale(ctx.locale.bind(WORKSPACE_ADD_NS))
     return resetWorkspaceAddLocale
   }, 'markdown-input: workspace add-flow host copy')
+  // The submission echo's chrome labels (#77) bind the HOST `chat`
+  // namespace the same read-only way as the stats pills above — the echo
+  // entry renders on the host's `conversation.user.text` factory, which
+  // passes no locale seat, so the fence toolbar and footnote words resolve
+  // through this bound seat. Unbound (no chat dictionary), the entry
+  // degrades to the native plain run on its own.
+  ctx.effect(() => {
+    setEchoLocale(ctx.locale.bind(ECHO_TEXT_NS))
+    return resetEchoLocale
+  }, 'markdown-input: echo text host copy')
   installStatsSettingsSource(ctx)
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
@@ -312,6 +323,18 @@ export function apply(ctx: ClientContext): void {
         locale: 'chat',
       }, MarkdownUserMessage))
     }
+    // The submission echo's text run (#77): the keyed `conversation.user.
+    // text.node` slot has no factory to shadow — the host registers its
+    // 'text'/'session' entries at priority 100, so the same lower-rank
+    // shadow as the seats above puts the echo text through the Markdown
+    // projection its durable bubble uses. Keyed 'text' only: the host's
+    // 'session' entry (the wire-form chip) keeps serving. Gated on the same
+    // primitives probe — the entry composes the identical pipeline.
+    ctx.slots.inject('conversation.user.text.node', () => ctx.slots.register({
+      name: 'conversation.user.text.node',
+      key: 'text',
+      priority: -1,
+    }, MarkdownEchoText))
   } else {
     console.info(`[markdown-input] user-message Markdown rendering disabled: ${messageCapability.reason}`)
   }
