@@ -6,6 +6,12 @@ const zh = {
   'composer.placeholder.render': '以 Markdown 撰写…（Enter 发送，Shift+Enter 换行）',
   'composer.placeholder.source': 'Markdown 源码…（Enter 发送，Shift+Enter 换行）',
   'composer.action.submit': '发送',
+  // Send-mode labels (issue #79) — the host `conversation` namespace's own
+  // keys copied verbatim (`input.send.queue` / `input.send.steer`): the
+  // primary seat names the delivery mode the gesture resolves to, exactly
+  // the native bar's primaryLabel arms.
+  'composer.send.queue': '排队发送',
+  'composer.send.steer': '插话发送',
   // Stop action (issue #32) — the host `conversation` namespace's `input.stop`
   // copied verbatim: the takeover card names stop exactly as the native bar.
   'composer.action.stop': '停止生成',
@@ -227,6 +233,10 @@ const en: Record<ComposerKey, string> = {
   'composer.placeholder.render': 'Write in Markdown… (Enter to send, Shift+Enter for newline)',
   'composer.placeholder.source': 'Markdown source… (Enter to send, Shift+Enter for newline)',
   'composer.action.submit': 'Send',
+  // Send-mode labels (issue #79) — the host `conversation` namespace's own
+  // lines copied verbatim (see the zh block above for the fold).
+  'composer.send.queue': 'Queue message',
+  'composer.send.steer': 'Steer message',
   'composer.action.stop': 'Stop generating',
   'composer.mode.render': 'Render',
   'composer.mode.source': 'Source',

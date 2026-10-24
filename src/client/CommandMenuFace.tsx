@@ -28,7 +28,7 @@ import { createPortal } from 'react-dom'
 import { IconPlusOutlineMedium, MenuSurface, useAnchoredMaxHeight } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from './conversation-face.ts'
-import { useObservable } from './conversation-face.ts'
+import { useObservable, type ShellClaim } from './conversation-face.ts'
 import { hasChainPopup, openChainPopup } from './chain-open.ts'
 import { commandFace } from './command-face.ts'
 import { assembleCommandRows, reportExecute } from './command-rows.ts'
@@ -75,6 +75,16 @@ export interface CommandMenuFaceProps {
    * the native pipeline's single-MenuView semantics.
    */
   readonly onOpen?: () => void
+  /**
+   * The card's claim application (issue #79 AC5): called after a claim row's
+   * token text lands, with the claim the shell's `beginCommand` applies —
+   * catalog name, localized token, catalog hint, and a submit closure over
+   * the detached execute verb — plus the pre-pick head end (detect
+   * coordinates) the machine's chip replaces. Absent (or a no-op) on a host
+   * without the runtime shell: the token text stands alone and the
+   * typed-slash adjudication delivers it on Enter, the pre-#79 behavior.
+   */
+  readonly beginClaim?: (claim: ShellClaim, headEnd: number) => void
 }
 
 /**
@@ -83,7 +93,7 @@ export interface CommandMenuFaceProps {
  * @returns the trigger (with the portaled menu), or nothing while locked.
  */
 export function CommandMenuFace({
-  sessionId, t, editor, container, canPickFiles, onPickFiles, onError, registerClose, onOpen,
+  sessionId, t, editor, container, canPickFiles, onPickFiles, onError, registerClose, onOpen, beginClaim,
 }: CommandMenuFaceProps): ReactNode {
   const [open, setOpen] = useState(false)
   const [leading, setLeading] = useState(true)
@@ -121,6 +131,25 @@ export function CommandMenuFace({
 
   const close = useCallback((): void => { setOpen(false) }, [])
 
+  // The claim's submit closure (issue #79 AC5): the machine's claimed branch
+  // calls it with the args typed after the token. The line rides the same
+  // detached execute verb the bare rows use (the upstream leadingClaim
+  // shape — the line always carries the catalog name); the outcome maps onto
+  // the machine's SubmitOutcome instead of the banner.
+  const executeClaimLine = useCallback(async (line: string): Promise<{
+    kind: 'success' | 'error'
+    text?: string
+  }> => {
+    if (face === undefined || sessionId === undefined) {
+      return { kind: 'error', text: t('command.executeFailed', { message: 'command face absent' }) }
+    }
+    const result = await face.execute(sessionId, line)
+    if (result.kind === 'success') return { kind: 'success' }
+    if (result.kind === 'error') return { kind: 'error', text: result.text }
+    if (result.kind === 'unmatched') return { kind: 'error', text: t('command.executeUnmatched') }
+    return { kind: 'error', text: t('command.executeFailed', { message: result.message }) }
+  }, [face, sessionId, t])
+
   // The card closes the menu whenever the document changes (the host
   // pipeline's track-loss: a typed character invalidates the trigger span).
   useEffect(() => {
@@ -154,13 +183,25 @@ export function CommandMenuFace({
       case 'action':
         onPickFiles()
         return
-      case 'claim':
+      case 'claim': {
         // The leading guard re-checks at apply time (host beginCommand): a
         // caret moved into text since open never claims.
         if (editorHandle !== null && editorHandle.isLeadingSelection()) {
+          // The pre-pick head end is the span the machine's chip replaces —
+          // captured before the token insertion moves the caret.
+          const headEnd = editorHandle.selectionEnd()
           editorHandle.claimSelection(row.token ?? '')
+          // The card applies the claim through the shell (issue #79 AC5):
+          // the machine enters claimed and the ghost hint lives.
+          beginClaim?.({
+            name: row.name,
+            token: row.token ?? '',
+            ...(row.hint === undefined ? {} : { hint: row.hint }),
+            submit: (args) => executeClaimLine(`/${row.name} ${args}`.trimEnd()),
+          }, headEnd)
         }
         return
+      }
       case 'execute':
         if (face !== undefined && sessionId !== undefined) {
           void face.execute(sessionId, row.line ?? '').then((result) => {
@@ -179,7 +220,7 @@ export function CommandMenuFace({
         openFeedbackSession(sessionId)
         return
     }
-  }, [face, onError, onPickFiles, sessionId, t, editor])
+  }, [face, onError, onPickFiles, sessionId, t, editor, beginClaim, executeClaimLine])
 
   // The menu's combobox keyboard rides the editor's key seam: bound once,
   // reading fresh state through the refs. Closed (or rowless), every key is

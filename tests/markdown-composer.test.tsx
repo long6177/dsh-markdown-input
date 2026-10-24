@@ -10,6 +10,7 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, mergeRestoredDraft, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { installConversationSource, resetImageLightbox, setConversationSource, setImageLightbox } from '../src/client/conversation-face.ts'
+import { resetBusyEnterSource, setBusyEnterSource } from '../src/client/submit-policy.ts'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
@@ -38,6 +39,8 @@ function fakeConversation(options: {
   notice?: { level: 'info' | 'error'; text: string; seq: number } | null
   drafts?: readonly FakeDraft[]
   block?: { reason: string }
+  /** Opt-in shell members (issue #79): the runtime submit plane the card probes. */
+  shell?: Record<string, unknown>
 } = {}) {
   const drafts = options.drafts ?? []
   const created: FakeDraft[] = []
@@ -68,6 +71,7 @@ function fakeConversation(options: {
     input: {
       shell: vi.fn(() => ({
         notices: { subscribe: () => () => {}, getSnapshot: () => noticeSnapshot },
+        ...(options.shell ?? {}),
       })),
     },
     blocks: {
@@ -176,6 +180,7 @@ afterEach(() => {
   resetCommandFace()
   resetModelFace()
   resetGoalFace()
+  resetBusyEnterSource()
   window.localStorage.clear()
   resetFaces()
   resetTakeoverDegradation()
@@ -1271,8 +1276,10 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
 
   it('keeps the send gesture while an actionable draft is typed on a running session', () => {
     installStopScope(fakeConversation())
+    // The #79 relabel: on a running steerable session the seat names the
+    // mode the click delivers (queue under the default preference).
     render(<MarkdownComposer {...chainProps({ draft: '排队的话', session: stopSession() })} />)
-    const send = seatNamed(en['composer.action.submit'])
+    const send = seatNamed(en['composer.send.queue'])
     expect(send).toBeInTheDocument()
     expect(send).toBeEnabled()
     expect(seatNamed(en['composer.action.stop'])).toBeUndefined()
@@ -1295,9 +1302,10 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     })} />)
     const dedicated = getByRole('button', { name: en['composer.action.stop'] })
     expect(dedicated).toBeEnabled()
-    // Native dedicated stop: the inline square glyph, the primary stays Send.
+    // Native dedicated stop: the inline square glyph, the primary stays Send
+    // — the #79 relabel names its queue mode on the continuable child.
     expect(dedicated.querySelector('svg rect')).not.toBeNull()
-    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+    expect(seatNamed(en['composer.send.queue'])).toBeInTheDocument()
     fireEvent.click(dedicated)
     await waitFor(() => expect(conversation.cancel).toHaveBeenCalledTimes(1))
   })
@@ -1331,7 +1339,7 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
       draft: '无阻塞面时保持发送',
       session: stopSession(),
     })} />)
-    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+    expect(seatNamed(en['composer.send.queue'])).toBeInTheDocument()
   })
 
   it('swallows a failed cancel without degrading the card', async () => {
@@ -1403,6 +1411,369 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     } finally {
       vi.stubGlobal('ResizeObserver', undefined)
     }
+  })
+})
+
+describe('MarkdownComposer — submission policy (issue #79)', () => {
+  /** A shell exposing the runtime submit plane (the full SessionInputShell). */
+  function shellMembers(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      state: { subscribe: () => () => {}, getSnapshot: () => ({ draftRev: 0 }) },
+      submit: vi.fn(),
+      steerQueue: vi.fn(),
+      beginCommand: vi.fn(() => false),
+      ...overrides,
+    }
+  }
+
+  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */
+  function bindBusyEnter(behavior: string): void {
+    // Store-contract parity: the store and its snapshot answer stable
+    // references between updates, or useSyncExternalStore would loop.
+    const snapshot = { value: { busyEnter: behavior } }
+    const store = {
+      subscribe: () => () => {},
+      getSnapshot: () => snapshot,
+    }
+    setBusyEnterSource(() => store)
+  }
+
+  it('delivers Enter through the shell with the steer preference on a running session', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('插话这句')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+    // The queue-only public face is bypassed — its signature takes no mode.
+    expect(inputActions.submit).not.toHaveBeenCalled()
+  })
+
+  it('keeps the queue mode when the preference is queue', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('queue')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('排队这句')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('queue', 'enter'))
+  })
+
+  it('queues on an idle session whatever the preference (resolveSubmitMode)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      session: { running: false, subagent: null },
+    })} />)
+    pastePlain('空闲时的话')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('queue', 'enter'))
+  })
+
+  it('falls back to the queue-only public face when the shell verbs are absent', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('降级宿主的话')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not offer the mode delivery when the shell member set is partial', async () => {
+    // The face rule: a half-reachable runtime shell reads as absent — the
+    // public face keeps the delivery instead of a broken mode hop.
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    setConversationSource(() => fakeConversation({ shell: { submit: vi.fn() } }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('半面的话')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('names the delivery mode on the primary seat while a click would deliver a plain message (AC2)', () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      draft: '要发的这句话',
+      session: { running: true, subagent: null },
+    })} />)
+    // The seat stays icon-only (#39): the mode name rides aria and the
+    // tooltip, never a text node.
+    const seat = seatNamed(en['composer.send.steer'])
+    expect(seat).toBeInTheDocument()
+    expect(seat.textContent).toBe('')
+    expect(seat).toBeEnabled()
+  })
+
+  it('names the queue mode under the queue preference on the same state (AC2)', () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('queue')
+    render(<MarkdownComposer {...chainProps({
+      draft: '要发的这句话',
+      session: { running: true, subagent: null },
+    })} />)
+    expect(seatNamed(en['composer.send.queue'])).toBeInTheDocument()
+  })
+
+  it('keeps plain send outside the mode arms: idle, slash draft, claimed (AC2)', () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    const idle = render(<MarkdownComposer {...chainProps({ draft: '空闲时的话' })} />)
+    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+    idle.unmount()
+    // A `/` line heads for adjudication, not a plain message — no mode name.
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      session: { running: true, subagent: null },
+    })} />)
+    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+  })
+
+  it('submits through the shell with the button-click gesture (AC2 onPrimary parity)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      draft: '按钮发的这句',
+      session: { running: true, subagent: null },
+    })} />)
+    fireEvent.click(seatNamed(en['composer.send.steer']))
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+  })
+
+  it('steers the whole queue on an empty draft with the accelerated chord (AC3)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      session: { running: true, subagent: null, pendingSubmissions: [] },
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }], placement: 'queued' }],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(shell.steerQueue).toHaveBeenCalledTimes(1))
+    // The steer is not a draft send: no flight, no submission hop.
+    expect(shell.submit).not.toHaveBeenCalled()
+  })
+
+  it('steers per-row through the session verb when the shell verb is absent (AC3 degraded)', async () => {
+    const conversation = fakeConversation()
+    installConversationSource({
+      get: (name: string) => name === 'sessions'
+        ? { scope: () => ({ get: (n: string) => n === 'conversation' ? conversation : undefined }) }
+        : undefined,
+    } as never)
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      session: { running: true, subagent: null, pendingSubmissions: [] },
+      queue: [
+        { id: 'm1', content: [{ type: 'text', text: '第一条' }], placement: 'queued' },
+        { id: 'm2', content: [{ type: 'text', text: '第二条' }], placement: 'queued' },
+      ],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(conversation.updateQueue).toHaveBeenCalledWith('m1', { kind: 'steer' }))
+    expect(conversation.updateQueue).toHaveBeenCalledWith('m2', { kind: 'steer' })
+  })
+
+  it('keeps the empty-draft no-op when the steer gate is closed (AC3 gate arms)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    // Idle session: no steering, no queue verb — the machine's empty no-op.
+    const idle = render(<MarkdownComposer {...chainProps({
+      session: { running: false, subagent: null },
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }], placement: 'queued' }],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    expect(shell.steerQueue).not.toHaveBeenCalled()
+    idle.unmount()
+    // Rows without the durable queued placement never qualify (the native
+    // wire test the placeholder already reads).
+    render(<MarkdownComposer {...chainProps({
+      session: { running: true, subagent: null },
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }] }],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    expect(shell.steerQueue).not.toHaveBeenCalled()
+  })
+
+  it('inverts the preference on the accelerated chord with a draft (AC3)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('queue')
+    render(<MarkdownComposer {...chainProps({
+      draft: '加速 chord 的话',
+      session: { running: true, subagent: null },
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+  })
+
+  it('applies a menu claim pick through the shell beginCommand (AC5)', async () => {
+    const beginCommand = vi.fn(() => true)
+    const shell = shellMembers({ beginCommand })
+    setConversationSource(() => fakeConversation({ shell }))
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps()} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    expect(goalRow).toBeDefined()
+    fireEvent.mouseDown(goalRow)
+    await waitFor(() => expect(beginCommand).toHaveBeenCalledTimes(1))
+    const [claim, span] = beginCommand.mock.calls[0] as [
+      { name: string, token: string, submit: unknown },
+      { start: number, end: number, draftRev: number },
+    ]
+    // The claim is the leadingClaim shape: catalog name, localized token
+    // with its separator (the en card resolves the alias spelling), and a
+    // callable submit closure.
+    expect(claim.name).toBe('goal')
+    expect(claim.token).toBe('/goal ')
+    expect(typeof claim.submit).toBe('function')
+    // The span covers the head the pick replaced (the empty draft's caret),
+    // at the machine's own revision.
+    expect(span).toEqual({ start: 0, end: 0, draftRev: 0 })
+    // The visible token text landed in the editor either way.
+    expect(content().textContent).toContain('goal')
+  })
+
+  it('flushes the token draft synchronously and silences the mirror once claimed (AC5)', () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const beginCommand = vi.fn(() => true)
+      const shell = shellMembers({ beginCommand })
+      setConversationSource(() => fakeConversation({ shell }))
+      setCommandSource(() => ({
+        commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+      }) as never)
+      render(<MarkdownComposer {...chainProps({ inputActions })} />)
+      fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+      const goalRow = [...document.querySelectorAll('[role="option"]')]
+        .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+      fireEvent.mouseDown(goalRow)
+      expect(beginCommand).toHaveBeenCalledTimes(1)
+      // The machine's draft must describe the text the span is applied over:
+      // the flush is synchronous, before the debounce window could race it.
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+      expect(inputActions.setDraft).toHaveBeenCalledWith('/goal ')
+      vi.advanceTimersByTime(DRAFT_SYNC_DEBOUNCE_MS * 2)
+      // And the applied claim owns the projection — the token mirror
+      // claimSelection armed never fires to drop the chip back to text.
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('holds the debounced draft mirror while a claim phase owns the projection (AC5)', async () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      render(<MarkdownComposer {...chainProps({
+        draft: '/goal ',
+        phase: 'claimed',
+        claim: { name: 'goal', token: '/goal ' },
+        inputActions,
+      })} />)
+      // The user types args while the claim holds: a plain-text mirror
+      // would replace the chip document and drop the claim.
+      pastePlain('ship it')
+      expect(content().textContent).toBe('/goal ship it')
+      await vi.advanceTimersByTimeAsync(DRAFT_SYNC_DEBOUNCE_MS * 2)
+      expect(inputActions.setDraft).not.toHaveBeenCalled()
+      // The submit flush still carries the args at Enter time (AC6's
+      // claimed-pass pipeline) — asserted in the claimed-phase tests.
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the token-text-only behavior when the shell face is absent (AC5 degrade)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps({ inputActions })} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    fireEvent.mouseDown(goalRow)
+    // The mirror (no claim owns the projection): the token text persists as
+    // an ordinary draft, and Enter rides the typed-slash adjudication.
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith('/goal '))
+  })
+
+  it('submits a claimed draft on Enter instead of dropping it (AC6)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      phase: 'claimed',
+      claim: { name: 'goal', token: '/goal ' },
+      inputActions,
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    // The claim args are ordinary text: the flush carries them and the hop
+    // delivers — no phase-gate deadlock.
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    expect(inputActions.setDraft).toHaveBeenCalledWith('/goal ship it')
+    expect(content().textContent).toBe('/goal ship it')
+  })
+
+  it('submits a claimed draft through the shell with the resolved mode (AC6)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      phase: 'claimed',
+      claim: { name: 'goal', token: '/goal ' },
+      session: { running: true, subagent: null },
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+  })
+
+  it('keeps the submit seat enabled while a claim holds (AC6)', () => {
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      phase: 'claimed',
+      claim: { name: 'goal', token: '/goal ' },
+    })} />)
+    expect(seatNamed(en['composer.action.submit'])).toBeEnabled()
+  })
+
+  it('still refuses Enter during the busy admission phases (regression)', () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    render(<MarkdownComposer {...chainProps({ phase: 'adjudicating', inputActions })} />)
+    pastePlain('忙时的话')
+    // Busy phases read-only the editor: the paste lands nowhere.
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    expect(inputActions.setDraft).not.toHaveBeenCalled()
+    expect(inputActions.submit).not.toHaveBeenCalled()
   })
 })
 
@@ -1514,6 +1885,18 @@ describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issu
     ]
     render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.plan'])
+  })
+
+  it('offers the steer hint to a running continuable child too (AC4 real-signal parity)', () => {
+    // The native canSteerQueue gate reads steeringAvailable — a continuable
+    // child address steers (the per-row buttons already say so); the hint
+    // must never promise less than the chord delivers.
+    const session = { running: true, subagent: { address: { mode: 'continuable' } } }
+    const queue: readonly QueueRow[] = [
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }], placement: 'queued' },
+    ]
+    render(<MarkdownComposer {...chainProps({ session, queue })} />)
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
   })
 
   it('keeps the render-mode copy in the default arm', () => {
