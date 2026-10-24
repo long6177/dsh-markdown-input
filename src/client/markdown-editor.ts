@@ -177,6 +177,9 @@ function enterCommand(submit: (accelerated: boolean) => void): (view: EditorView
   }
 }
 
+/** The post-composition hold window (the upstream keymap's own constant). */
+const COMPOSITION_HOLD_MS = 10
+
 /**
  * The Enter key-lifecycle guard (issue #74): the arms the keymap's own
  * `run(view)` cannot see because they live on the raw keydown event. The
@@ -194,12 +197,9 @@ function enterCommand(submit: (accelerated: boolean) => void): (view: EditorView
  * keystrokes some engines deliver after compositionend — by then CM6's own
  * observer has dropped `view.composing`, and its Safari-only suppression
  * eats exactly one such keydown, so the window is the signal left.
- */
-const COMPOSITION_HOLD_MS = 10
-
-/**
- * Mount the Enter key-lifecycle guard against the shared composition hold
- * stamp (read by the menu combobox guard too).
+ *
+ * Mounts against the shared composition hold stamp (read by the menu
+ * combobox guard too).
  * @param compositionHold - box holding the timestamp the guard holds sends
  *   until (0 when no composition recently ended).
  */

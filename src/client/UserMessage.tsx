@@ -45,8 +45,21 @@ type UserFileBlock = Extract<UserMessageNode['content'][number], { type: 'file' 
 /** Chat-node seats this renderer replaces; the host serves both with one view. */
 export type MarkdownSeatKind = 'user' | 'steering'
 
+/**
+ * The six `chat` namespace keys the Markdown chrome reads (fence toolbar,
+ * copy action, footnotes). Both the durable seat's and the echo seat's
+ * translate types accept at least these, so one labels builder serves both.
+ */
+type MarkdownChromeKey =
+  | 'copy'
+  | 'copied'
+  | 'codeBlock.title'
+  | 'codeBlock.wrap'
+  | 'codeBlock.unwrap'
+  | 'markdown.footnotes'
+
 /** Chat-seat copy for the Markdown chrome (same keys the host passes down). */
-function markdownLabels(t: ChatNodeViewProps<MarkdownSeatKind>['t']): MarkdownLabels {
+function markdownLabels(t: (key: MarkdownChromeKey) => string): MarkdownLabels {
   return {
     code: {
       copyLabel: t('copy'),
@@ -83,6 +96,18 @@ function runText(piece: ReactNode): string {
     : ''
 }
 
+/** The projection facts one message carries (the node's own data bundle). */
+export interface UserMarkdownOptions {
+  /** Exact session labels an adjacent recall associated with this text. */
+  readonly referenceLabels?: readonly string[]
+  /** Loaded skill names a `/name` token may decorate as. */
+  readonly skillNames?: readonly string[]
+  /** Preview actions; absent keeps every chip display-only. */
+  readonly references?: UserTextReferences
+  /** Whether a secret's reveal control renders (the durable bubble only). */
+  readonly interactive?: boolean
+}
+
 /**
  * Project the message text: chips inline, everything else through the host
  * Markdown pipeline. Chips come from the vendored projection unchanged;
@@ -93,13 +118,14 @@ function runText(piece: ReactNode): string {
 export function composeUserMarkdown(
   text: string,
   labels: MarkdownLabels,
-  referenceLabels: readonly string[],
-  skillNames: readonly string[],
-  references?: UserTextReferences,
-  interactive = false,
+  options: UserMarkdownOptions = {},
 ): ReactNode {
   if (text === '') return null
-  const projected = projectUserText(text, referenceLabels, skillNames, references, interactive)
+  const referenceLabels = options.referenceLabels ?? []
+  const skillNames = options.skillNames ?? []
+  const projected = projectUserText(
+    text, referenceLabels, skillNames, options.references, options.interactive ?? false,
+  )
   const pieces = Children.toArray(
     isValidElement(projected) && projected.type === Fragment ? projected.props.children : [projected],
   )
@@ -220,7 +246,7 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
         })}
         {(text !== '' || rest.length > 0) && (
           <div className={css.bubble} data-markdown-user-bubble>
-            {composeUserMarkdown(text, labels, referenceLabels, skillNames, references, true)}
+            {composeUserMarkdown(text, labels, { referenceLabels, skillNames, references, interactive: true })}
             {rest.map((block, index) => (
               <JsonBlock key={index} label={t('message.extraBlock')} payload={block} truncatedLabel={total => t('json.truncated', { total })} />
             ))}
@@ -263,18 +289,7 @@ export function MarkdownEchoText({ node }: UserTextNodeProps<'text'>) {
   const t = echoLocale()
   // Stable per bound seat: a fresh labels object identity would rebuild
   // MarkdownText's caches per render (the MarkdownUserMessage note holds).
-  const labels = useMemo(() => (t === undefined ? undefined : {
-    code: {
-      copyLabel: t('copy'),
-      copiedLabel: t('copied'),
-      toolbarLabels: {
-        codeLabel: t('codeBlock.title'),
-        wrapLabel: t('codeBlock.wrap'),
-        unwrapLabel: t('codeBlock.unwrap'),
-      },
-    },
-    footnotes: t('markdown.footnotes'),
-  } satisfies MarkdownLabels), [t])
+  const labels = useMemo(() => (t === undefined ? undefined : markdownLabels(t)), [t])
   if (labels === undefined) return <UserTextRun text={node.data.text} />
-  return <>{composeUserMarkdown(node.data.text, labels, [], [])}</>
+  return <>{composeUserMarkdown(node.data.text, labels)}</>
 }

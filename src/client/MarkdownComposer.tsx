@@ -56,7 +56,7 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, PropsRuntime, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
-import { AgentPresetFace, agentPresetFaceDefinition } from './AgentPresetFace.tsx'
+import { AgentPresetFace, agentPresetFaceDefinition, agentPresetSeatPossible } from './AgentPresetFace.tsx'
 import {
   agentPresetLocale, agentPresetRefreshSubscribe, agentPresetsRemoteFace, developerToolsStore,
 } from './agent-preset-face.ts'
@@ -99,7 +99,7 @@ import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
 import {
   busyEnterOf, busyEnterStore, canSteerQueueOf, primarySubmitLabelOf,
   resolveSubmitMode, steeringAvailableOf,
-  type SubmitGesture,
+  type SteerQueueGate, type SubmitGesture,
 } from './submit-policy.ts'
 import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
 import {
@@ -409,18 +409,24 @@ export function MarkdownComposer({
   shellRef.current = shell
   // The submission policy's live inputs (issue #79): mirrored per render so
   // the mounted-once editor's submit closure reads the freshest preference,
-  // session signals, and queue rows at gesture time. The initializer runs
-  // once with the early-render dummies; the real snapshot is assigned below,
-  // after the queue rows are computed.
+  // session signals, queue rows, and the ONE steer gate at gesture time.
+  // The initializer runs once with the early-render dummies; the real
+  // snapshot is assigned below, once the lock state is known.
   const submitPolicyRef = useRef({
     busyEnter,
-    running: false,
-    steeringAvailable: true,
     sessionBound: sessionId !== undefined,
-    menuOpen,
-    hasQueuedRows: false,
     queueRows: [] as ReturnType<typeof queueViewRows>,
     queueUpdate: undefined as ReturnType<typeof queueUpdateOf>,
+    gate: {
+      sessionBound: sessionId !== undefined,
+      phase: 'plain',
+      draftEmpty: true,
+      running: false,
+      steeringAvailable: true,
+      menuOpen,
+      hasQueuedRows: false,
+      locked: false,
+    } as SteerQueueGate,
   })
   // The mounted-once editor reads the paste intake through this ref: the
   // intakeFiles closure is re-created every render, the editor's onFiles
@@ -482,16 +488,6 @@ export function MarkdownComposer({
     [input.queue, session?.pendingSubmissions],
   )
   const queueMutable = queueMutableOf(session?.subagent)
-  submitPolicyRef.current = {
-    busyEnter,
-    running: sessionId !== undefined && (session?.running ?? false),
-    steeringAvailable: steeringAvailableOf(session?.subagent),
-    sessionBound: sessionId !== undefined,
-    menuOpen,
-    hasQueuedRows: input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued'),
-    queueRows,
-    queueUpdate,
-  }
 
   // Stop arms (issue #32): the native bar's send/stop semantics over the
   // card's planes. The cancel verb rides the session-scoped conversation
@@ -614,19 +610,12 @@ export function MarkdownComposer({
     // message into the running turn.
     const empty = editor.getText().trim() === '' && inputRef.current.attachmentIds.length === 0
     if (empty) {
-      if (gesture === 'accelerated') {
-        const policy = submitPolicyRef.current
-        if (canSteerQueueOf({
-          sessionBound: policy.sessionBound,
-          phase: inputRef.current.phase,
-          draftEmpty: true,
-          running: policy.running,
-          steeringAvailable: policy.steeringAvailable,
-          menuOpen: policy.menuOpen,
-          hasQueuedRows: policy.hasQueuedRows,
-        })) {
-          steerAllQueued()
-        }
+      // The gate's two per-gesture facts are live here: the draft IS empty,
+      // and the machine phase may have moved since the last render.
+      const gate = submitPolicyRef.current.gate
+      if (gesture === 'accelerated'
+        && canSteerQueueOf({ ...gate, draftEmpty: true, phase: inputRef.current.phase })) {
+        steerAllQueued()
       }
       return
     }
@@ -639,7 +628,9 @@ export function MarkdownComposer({
     // the Send button share the `enter` gesture, the accelerated chord
     // takes the opposite of the preference.
     const policy = submitPolicyRef.current
-    const mode = resolveSubmitMode(policy.busyEnter, policy.running, gesture, policy.steeringAvailable)
+    const deliveryMode = resolveSubmitMode(
+      policy.busyEnter, policy.gate.running, gesture, policy.gate.steeringAvailable,
+    )
     flightRef.current = 'pending'
     // Cancel a pending draft mirror: firing after the machine clears the
     // sent draft would resurrect the sent text into the input.
@@ -656,7 +647,7 @@ export function MarkdownComposer({
         // public face stays the queue-only fallback (its signature takes
         // no mode).
         const shell = shellRef.current
-        if (shell !== undefined) shell.submit(mode, 'enter')
+        if (shell !== undefined) shell.submit(deliveryMode, 'enter')
         else inputActionsRef.current.submit()
         // The flight is now the host's: the seed effect releases the gate
         // when the settled state (cleared or restored draft) arrives.
@@ -1086,6 +1077,28 @@ export function MarkdownComposer({
     && subagentShare.parentAvailable !== true
   const inputLocked = session?.removed === true || sessionId === undefined
     || triggerPosture || composerBlock !== undefined || parentOffline
+  // The ONE whole-queue steer gate both surfaces read: the placeholder
+  // ladder below and the accelerated chord in `submit` (through the mirrored
+  // ref). The native canSteerQueue formula over real wire signals; the
+  // queued-row arm is `queue.length > 0` (the inbox row is a UserMessage,
+  // with no placement field) and the #80 lock arm closes it whole.
+  const steerQueueGate: SteerQueueGate = {
+    sessionBound: sessionId !== undefined,
+    phase: input.phase,
+    draftEmpty,
+    running,
+    steeringAvailable,
+    menuOpen,
+    hasQueuedRows: input.queue.length > 0,
+    locked: inputLocked,
+  }
+  submitPolicyRef.current = {
+    busyEnter,
+    sessionBound: sessionId !== undefined,
+    queueRows,
+    queueUpdate,
+    gate: steerQueueGate,
+  }
   useEffect(() => {
     editorRef.current?.setEditable(!machineBusy && !inputLocked)
   }, [machineBusy, inputLocked])
@@ -1120,21 +1133,13 @@ export function MarkdownComposer({
   // The placeholder follows the native bar's runtime ladder (issue #34):
   // steering a queue while running wins over plan mode, plan mode wins over
   // the card's own render/source copy — the native formula verbatim,
-  // including the open `+` menu's suppression arm and the queue rows'
-  // `placement === 'queued'` wire test. (The native ladder's earlier arms —
-  // workspace picker, block reason, offline parent — ride states the card
-  // does not model.) The gate is the SAME pure function the accelerated
-  // chord reads (issue #79): the hint never promises a gesture the chord
-  // would refuse, and vice versa.
-  const canSteerQueue = canSteerQueueOf({
-    sessionBound: sessionId !== undefined,
-    phase: input.phase,
-    draftEmpty,
-    running,
-    steeringAvailable,
-    menuOpen,
-    hasQueuedRows: input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued'),
-  })
+  // including the open `+` menu's suppression arm and the native
+  // `queue.length > 0` test. (The native ladder's earlier arms — workspace
+  // picker, block reason, offline parent — ride the gate or the trigger
+  // posture.) The gate is the SAME pure function the accelerated chord
+  // reads (issue #79): the hint never promises a gesture the chord would
+  // refuse, and vice versa.
+  const canSteerQueue = canSteerQueueOf(steerQueueGate)
   // The native placeholder ladder's FIRST arm (#42): while the card is the
   // workspace picker, `placeholder.workspace` outranks every steering/plan/
   // render arm — the surface is not an editor then, it is the pick target.
@@ -1284,20 +1289,6 @@ export function MarkdownComposer({
   }
 
   /**
-   * Card-level hit area (issue #41): the stretched contentDOM covers the
-   * scroller band now, but the card's own padding and the gaps between the
-   * strips are still outside it. A mousedown there focuses the editor through
-   * the handle's public surface — never CodeMirror internals. No
-   * `preventDefault`: native text selection inside the editor (and the drag
-   * gestures that start on the card) must survive untouched.
-   *
-   * In the workspace trigger posture (#42) a card mousedown must NOT pull
-   * focus back into a surface that is not an editor: the native
-   * `cardWorkspaceTrigger` card is one pick target, and its click opens the
-   * picker. This is the explicit guard the ticket asked for against breaking
-   * the #41 hit area on the way in.
-   */
-  /**
    * The tool row's keep-focus arm (issue #74, the native keepDraftFocus): a
    * mousedown on a row button is consumed — focus never lands on the button
    * — and the editor takes it back, so typing continues after sending,
@@ -1316,6 +1307,20 @@ export function MarkdownComposer({
     editorRef.current?.focus()
   }
 
+  /**
+   * Card-level hit area (issue #41): the stretched contentDOM covers the
+   * scroller band now, but the card's own padding and the gaps between the
+   * strips are still outside it. A mousedown there focuses the editor through
+   * the handle's public surface — never CodeMirror internals. No
+   * `preventDefault`: native text selection inside the editor (and the drag
+   * gestures that start on the card) must survive untouched.
+   *
+   * In the workspace trigger posture (#42) a card mousedown must NOT pull
+   * focus back into a surface that is not an editor: the native
+   * `cardWorkspaceTrigger` card is one pick target, and its click opens the
+   * picker. This is the explicit guard the ticket asked for against breaking
+   * the #41 hit area on the way in.
+   */
   function onCardMouseDown(event: MouseEvent<HTMLDivElement>): void {
     if (triggerPosture) return
     if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
@@ -1373,10 +1378,13 @@ export function MarkdownComposer({
     )
   }
 
+  // The original-image preview's component (#77): read ONCE per render
+  // beside the other capability faces — an unbound face keeps the chip
+  // display-only and the lightbox unmounted (the chip and the card-level
+  // portal share this one probe).
+  const Lightbox = imageLightbox()
+
   function attachmentChip(attachment: ComposerAttachment): ReactNode {
-    // Original-image preview (#77): capability-detected — a host build
-    // without the primitives lightbox keeps the chip display-only.
-    const Lightbox = imageLightbox()
     return (
       <li key={attachment.id} className={css.attachment}>
         {attachment.kind === 'image'
@@ -1403,9 +1411,6 @@ export function MarkdownComposer({
   }
 
   const otherMode: EditMode = mode === 'render' ? 'source' : 'render'
-  // The original-image preview's component (#77): read per render beside the
-  // other capability faces — an unbound face keeps the lightbox unmounted.
-  const Lightbox = imageLightbox()
   // The agent-preset seat's copy (issue #42, alpha.12 feedback): the HOST
   // `settings.agentPreset` dictionary owns the shipped presets' words AND the
   // seat's three strings, so the bound seat is read per render here and the
@@ -1427,12 +1432,12 @@ export function MarkdownComposer({
   // never resubscribes.
   const presetRefresh = agentPresetRefreshSubscribe()
   // #78: the preset seat judges its OWN availability — the roster verbs and
-  // the projection hook, the same two facts its FaceGate probes. The
+  // the projection hook, the two facts its FaceGate probes. The predicate is
+  // the face's OWN export (ADR-0005: the probe is not re-derived here); the
   // workspace row's capability verdict no longer takes it down: the native
   // hero's two seats are independent slot occupants, and a workspace-less
   // chain entry still offers the preset switch when ITS data plane is there.
-  const presetSeatPossible = agentPresetsRemote !== undefined
-    && typeof useProjection === 'function'
+  const presetSeatPossible = agentPresetSeatPossible(useProjection, agentPresetsRemote !== undefined)
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
   // the binding (registerFace latches per id, so a first render before apply's
@@ -1595,14 +1600,14 @@ export function MarkdownComposer({
           <GoalStripFace
             useProjection={useProjection}
             sessionId={sessionId}
-            running={session?.running ?? false}
+            running={running}
             t={t}
           />
         </FaceGate>
         <QueueFace
           rows={queueRows}
           mutable={queueMutable}
-          running={session?.running ?? false}
+          running={running}
           updateQueue={queueUpdate}
           loadImage={queueImageLoad}
           t={t}
@@ -1715,7 +1720,6 @@ export function MarkdownComposer({
                 sessionId={sessionId}
                 t={t}
                 locked={sessionId === undefined}
-                onError={showBanner}
                 focusEditor={() => { editorRef.current?.focus() }}
               />
             </FaceGate>

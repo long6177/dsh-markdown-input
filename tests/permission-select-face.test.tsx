@@ -72,7 +72,6 @@ function mountFace(options: {
   catalogResult?: unknown
   focusEditor?: () => void
 } = {}) {
-  const onError = vi.fn()
   // `'selection' in options` keeps an explicit undefined (missing projection
   // key) distinct from the default current value.
   const projection = { current: 'selection' in options ? options.selection : { currentValue: 'workspace-write' } }
@@ -91,7 +90,6 @@ function mountFace(options: {
     sessionId: options.sessionId ?? 's1',
     t: fakeT as unknown as PermissionSelectFaceProps['t'],
     locked: options.locked ?? false,
-    onError,
     focusEditor: options.focusEditor,
   } as unknown as PermissionSelectFaceProps
   // Production shape: the body renders inside its FaceGate — the gate owns
@@ -102,7 +100,7 @@ function mountFace(options: {
     </FaceGate>,
   )
   const rerender = (): void => { view.rerender(<PermissionSelectFace {...props} />) }
-  return { view, rerender, onError, projection, command, sessions }
+  return { view, rerender, projection, command, sessions }
 }
 
 afterEach(() => {

@@ -17,7 +17,7 @@
  * words.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
-import { NS } from './locales.ts'
+import { NS, type ComposerKey } from './locales.ts'
 
 /** The host namespace the file-open dialog's copy lives in (ui-reference's locale NS). */
 export const REFERENCE_NS = 'reference'
@@ -39,8 +39,40 @@ export type SummarySeatTranslate = (key: SummaryHostKey, params?: Record<string,
 
 let referenceT: HostTranslate | undefined
 let secretT: HostTranslate | undefined
-/** The plugin's own translate, narrowed to the summary line's fallback keys. */
-let summaryT: ((key: SummaryHostKey, params?: Record<string, unknown>) => string) | undefined
+/**
+ * The plugin's own `markdown-input` translate (bound by apply): the shared
+ * fallback fold for every reference surface. It is what makes the shipped
+ * `en` entries reachable on an English page instead of the hardcoded zh
+ * literals.
+ */
+let ownT: OwnTranslate | undefined
+
+/** The plugin's own dictionary translate (its key union is `ComposerKey`). */
+type OwnTranslate = (key: ComposerKey, params?: Record<string, unknown>) => string
+
+/**
+ * One copy fold shared by all three reference surfaces: the host namespace's
+ * words when its translate answers, then the plugin's own dictionary, then
+ * the verbatim zh literal for a page with no binding at all. A host
+ * translate answers a miss with the echoed key, so that reads as a miss.
+ * @param host - the host namespace translate, if bound.
+ * @param own - the plugin's own translate, if bound.
+ * @param key - the dictionary key.
+ * @param fallback - the last-resort literal.
+ * @param params - interpolation values.
+ */
+function foldCopy<K extends string>(
+  host: ((key: K, params?: Record<string, unknown>) => string) | undefined,
+  own: ((key: K, params?: Record<string, unknown>) => string) | undefined,
+  key: K,
+  fallback: string,
+  params?: Record<string, unknown>,
+): string {
+  const hostValue = host?.(key, params)
+  if (hostValue !== undefined && hostValue !== key) return hostValue
+  const ownValue = own?.(key, params)
+  return ownValue !== undefined && ownValue !== key ? ownValue : fallback
+}
 
 /**
  * Bind the reference surfaces' translate seats (the client apply does this
@@ -61,9 +93,9 @@ export function setSecretLocale(t: HostTranslate): void {
 
 /**
  * The file-open dialog's copy: the host `reference` namespace's own words
- * through the bound seat, the plugin's verbatim fallback lines under a miss
- * (a bound translate answers a miss with the echoed key) or an unbound
- * namespace. The `resolveStatsCopy`/`resolveAddWorkspaceCopy` fold.
+ * through the bound seat, the plugin's own dictionary next (so the shipped
+ * `en` lines reach an English page), and the verbatim zh literal only when
+ * nothing is bound. The `resolveStatsCopy`/`resolveAddWorkspaceCopy` fold.
  */
 export function fileOpenCopy(): {
   title: string
@@ -71,10 +103,8 @@ export function fileOpenCopy(): {
   close: string
   retry: string
 } {
-  const read = (key: ReferenceHostKey, fallback: string, params?: Record<string, unknown>): string => {
-    const value = referenceT?.(key, params)
-    return value === undefined || value === key ? fallback : value
-  }
+  const read = (key: ReferenceHostKey, fallback: string, params?: Record<string, unknown>): string =>
+    foldCopy(referenceT, ownT, key, fallback, params)
   return {
     get title() { return read('fileOpen.title', '无法打开文件') },
     failed(path: string): string {
@@ -91,10 +121,8 @@ export function fileOpenCopy(): {
  * or an unbound namespace (the same fold as {@link fileOpenCopy}).
  */
 export function secretToggleCopy(): { reveal: string, hide: string } {
-  const read = (key: SecretHostKey, fallback: string): string => {
-    const value = secretT?.(key)
-    return value === undefined || value === key ? fallback : value
-  }
+  const read = (key: SecretHostKey, fallback: string): string =>
+    foldCopy(secretT, ownT, key, fallback)
   return {
     get reveal() { return read('secret.reveal', '显示密钥') },
     get hide() { return read('secret.hide', '隐藏密钥') },
@@ -121,24 +149,20 @@ export function referenceSummaryLineCopy(
     key: 'message.referenceSummary' | 'message.referenceSeparator',
     fallback: string,
     params?: Record<string, unknown>,
-  ): string => {
-    const host = seatT?.(key, params)
-    if (host !== undefined && host !== key) return host
-    const own = summaryT?.(key, params)
-    return own !== undefined && own !== key ? own : fallback
-  }
+  ): string => foldCopy(seatT, ownT, key, fallback, params)
   const joined = labels.join(read('message.referenceSeparator', '、'))
   return read('message.referenceSummary', `引用会话 · ${joined}`, { labels: joined })
 }
 
 /**
- * Bind the summary fallback's translate seat (the client apply does this
- * once, beside the other namespace bindings — this one is the plugin's OWN
- * namespace, registered by the apply body).
+ * Bind the plugin's OWN `markdown-input` translate — the shared fallback
+ * fold under every reference surface (file-open dialog, secret toggle, and
+ * the chat summary line). The client apply does this once, beside the other
+ * namespace bindings; the namespace is registered by the apply body.
  * @param t - the `markdown-input` namespace translate.
  */
-export function setSummaryLocale(t: (key: SummaryHostKey, params?: Record<string, unknown>) => string): void {
-  summaryT = t
+export function setOwnLocale(t: OwnTranslate): void {
+  ownT = t
 }
 
 /**
@@ -151,7 +175,7 @@ export function setSummaryLocale(t: (key: SummaryHostKey, params?: Record<string
 export function installReferenceLocales(ctx: ClientContext): void {
   setReferenceLocale(ctx.locale.bind(REFERENCE_NS))
   setSecretLocale(ctx.locale.bind(SECRET_MASK_NS))
-  setSummaryLocale(ctx.locale.bind(NS))
+  setOwnLocale(ctx.locale.bind(NS))
 }
 
 /**
@@ -161,5 +185,5 @@ export function installReferenceLocales(ctx: ClientContext): void {
 export function resetReferenceLocale(): void {
   referenceT = undefined
   secretT = undefined
-  summaryT = undefined
+  ownT = undefined
 }

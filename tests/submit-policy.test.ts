@@ -79,6 +79,7 @@ describe('canSteerQueueOf (issue #79 AC3/AC4: the whole-queue steer gate, placeh
     steeringAvailable: true,
     menuOpen: false,
     hasQueuedRows: true,
+    locked: false,
   }
 
   it('opens only with every arm on', () => {
@@ -92,6 +93,9 @@ describe('canSteerQueueOf (issue #79 AC3/AC4: the whole-queue steer gate, placeh
     expect(canSteerQueueOf({ ...gate, draftEmpty: false })).toBe(false)
     expect(canSteerQueueOf({ ...gate, menuOpen: true })).toBe(false)
     expect(canSteerQueueOf({ ...gate, hasQueuedRows: false })).toBe(false)
+    // The native `!locked` arm (#80): removed session, owner block, offline
+    // parent, or a missing session id keeps the gate shut.
+    expect(canSteerQueueOf({ ...gate, locked: true })).toBe(false)
     for (const phase of ['adjudicating', 'submitting'] as const) {
       expect(canSteerQueueOf({ ...gate, phase })).toBe(false)
     }

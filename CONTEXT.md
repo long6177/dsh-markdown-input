@@ -75,11 +75,23 @@ _Avoid_: 转换后的文本
 实际提交给模型的 Markdown 源码；输入区的视觉呈现只是它的投影，二者同源。
 _Avoid_: 渲染后文本（暗示发送的是渲染产物）
 
+**发送回显（Submission echo）**:
+发送瞬间由会话快照 `pendingSubmissions` 提供的本地回显（`requestId` / `placement` / 文本 / 本地附件预览）：`transcript` 回显占聊天座位、`queued` 回显在排队消息栏显示为「发送中」直到 inbox 接纳、`steering` 回显随回合入场；它是瞬态输入，不是持久消息。
+_Avoid_: 占位消息（暗示已持久化）、临时消息（与宿主的 pending 语义脱节）
+
+**回显影子（Echo shadow）**:
+宿主的 `conversation.user.text.node` `text` 座位（#77）：把本地回显跑到与持久气泡**同一个** Markdown 投影上，使回显接纳为持久消息时没有样式跳变；未绑定宿主词典时退回原生纯文本 run。
+_Avoid_: 预览（不是预览态，是回显座位）、影子 DOM（与 DOM 技术无关）
+
 **用户消息投影（User message projection）**:
 已发送用户消息的文本到聊天气泡显示的映射；本插件把它从纯文本升级为 Markdown 渲染，并且**作者敲下的换行按硬换行保真呈现**（GFM 软换行会折成空格、把列表项的续行并进上一排——alpha.17 反馈定案；围栏代码内部不改写）。气泡内列表按主流渲染：标记悬挂在内容列左侧（outside 定位）、**续行与条目文本同列**（第四轮反馈定案，接替第三轮的 inside 贴左形态）。
 
 **引用 chip（Reference chip）**:
 用户消息中 @提及、/技能、会话引用的内联标识控件；Markdown 化投影必须保留它。
+
+**密钥掩码（Secret mask）**:
+用户消息内识别出的凭据片段就地以掩码绘制（保留原字符用于复制与辅助技术），交互文本中带逐值显示/隐藏控件；掩码只改「画出来的文字」，消息原文、复制动作与模型输入始终保留原始字符。识别与绘制走同一套 vendored 规则，最早命中的片段优先占用区间。
+_Avoid_: 加密（不是加密，原文仍在）、脱敏（暗示数据被移除或改写）
 
 **排队 steering 消息（Steering message）**:
 回合运行中用户追加、由会话收入当前回合的用户消息（ChatNode `steering` 键）；与开场用户消息（`user` 键）共用同一渲染座位，Markdown 化同步生效。
@@ -87,6 +99,14 @@ _Avoid_: pending steering（指尚未入场的瞬态输入回显，宿主直渲�
 
 **排队消息栏（Queue strip）**:
 接管卡内重建的排队消息视图（原生 composer 的 queue dock 随回退栏被接管隐藏）：行数据读输入货币 `queue` 与会话快照回显，撤回/编辑/插话走会话域 `updateQueue`；动作面缺席时只降按钮不降可见性。
+
+**提交策略（Submission policy）**:
+接管卡的发送手势决策层（#79）：把普通 Enter / 发送按钮（同一 `enter` 手势）与 Ctrl/Cmd+Enter 加速手势，按忙时回车偏好、会话 `running`、`steeringAvailable` 三个真实线上信号解析为 `queue` / `steer` 两种投递模式；空草稿的加速手势不是发送，而是把整队排队消息插话进当前回合（经同一个原生 `canSteerQueue` 判据：有队列、运行中、可插话、菜单关闭、输入未锁定）。判据同时供占位提示与加速键读取，提示绝不承诺加速键会拒绝的手势。
+_Avoid_: 发送快捷键（只描述手势，不涵盖投递模式与门控）、插话按钮（是手势 × 偏好的解析，不是单一按钮）
+
+**忙时回车偏好（busyEnter preference）**:
+宿主 `ui-conversation` 设置表单的 `busyEnter` 字段（`queue` / `steer`），经 `configForms` 服务只读取得；服务或表单缺席、字段畸形时回落原生默认 `queue`。它只决定「回车投递什么」，不决定能否投递。
+_Avoid_: 发送模式（那是解析后的 `queue`/`steer` 结果，不是偏好本身）、默认行为（偏好可变，默认值才是常量）
 
 **停止臂（Stop arms）**:
 接管卡的发送/停止语义（#32，对齐原生 InputBar 的 `primaryStops`/`interruptible`）：普通会话运行中且草稿为空（或 owner 抬起 composer block）时主按钮切换为停止、点击经会话域 `cancel` 取消在飞回合并保留队列；可续子会话保留发送主钮、另设专属方形停止钮。cancel 动词缺席时按钮降为不可点，座位不消失。
@@ -117,7 +137,7 @@ _Avoid_: Agent 模式（宿主概念是按预设组合成 Agent，不是开关�
 _Avoid_: 上下文进度条（形态是环，且面板是主体）
 
 **会话统计（Stats pills）**:
-接管卡 dock 行内量表之前自渲染的原生 StatsPills（#43，原生是 `conversation.composer.dock` 槽位的 order-0 occupant（`ui-chat/src/client/apply.ts:284-288`），槽位同样只由隐藏的 InputBar 挂载——接管期间不可见，与量表同一结构性缺口，故与量表同位重建且保持原生先于量表的次序）：计数 pill 读 `sessionStats` 投影显示回合/步数与解码速度（tok/s），用量 pill 读 `tokenUsage` 投影显示四桶合计（未缓存输入 + 缓存读 + 缓存写 + 输出）与缓存命中百分比（部分命中永不进位到 100）；detailed/compact 形态读 `ui-chat` 设置节（`configForms` 服务，缺席回落原生默认 detailed）；detailed 模式两 pill 是按钮，点击经互斥槽位展开锚定其上方的会话统计 / Token 用量对话框（Escape、点外、再点同 pill 关闭；对话框面板复用量表的定位/关闭设施），无任何计时数据时计数 pill 降为静态 span（对话框将无行可显），用量对话框标题右侧恒显精确分组总量；compact 模式保持纯读数无按钮；无步数且无 token 整件隐藏，两 pill 各自独立降级，词典走宿主 `chat` 命名空间只读 bind、插件 locales 备同值兜底。
+接管卡 dock 行内量表之前自渲染的原生 StatsPills（#43，原生是 `conversation.composer.dock` 槽位的 order-0 occupant（`ui-chat/src/client/apply.ts:284-288`），槽位同样只由隐藏的 InputBar 挂载——接管期间不可见，与量表同一结构性缺口，故与量表同位重建且保持原生先于量表的次序）：计数 pill 读 `sessionStats` 投影显示回合/步数与解码速度（tok/s）——该投影缺席时回退为对已加载 chat 窗口节点做 `deriveStats` 折叠（窗口内计数，分页/压缩会移动它）；用量 pill 读 `tokenUsage` 投影显示四桶合计（未缓存输入 + 缓存读 + 缓存写 + 输出）与缓存命中百分比（部分命中永不进位到 100）；detailed/compact 形态读 `ui-chat` 设置节（`configForms` 服务，缺席回落原生默认 detailed）；detailed 模式两 pill 是按钮，点击经互斥槽位展开锚定其上方的会话统计 / Token 用量对话框（Escape、点外、再点同 pill 关闭；对话框面板复用量表的定位/关闭设施），无任何计时数据时计数 pill 降为静态 span（对话框将无行可显），用量对话框标题右侧恒显精确分组总量；compact 模式保持纯读数无按钮；无步数且无 token 整件隐藏，两 pill 各自独立降级，词典走宿主 `chat` 命名空间只读 bind、插件 locales 备同值兜底。
 _Avoid_: 性能设置（宿主 `performanceUsage` 是展示形态设置，pill 是读数不是设置入口）
 
 **保真模式（Fidelity mode）**:

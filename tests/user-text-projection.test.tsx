@@ -11,7 +11,8 @@
 import { cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { projectUserText } from '../src/client/user-text-projection.tsx'
-import { resetReferenceLocale, setReferenceLocale } from '../src/client/reference-locale.ts'
+import { resetReferenceLocale, setReferenceLocale, setOwnLocale } from '../src/client/reference-locale.ts'
+import { en } from '../src/client/locales.ts'
 
 afterEach(cleanup)
 
@@ -193,6 +194,34 @@ describe('activatable reference chips (#75)', () => {
     expect(container.querySelector('button[data-ref-chip]')).toBeNull()
     expect(container.querySelector('[data-ref-chip="file"]')).not.toBeNull()
     expect(container.querySelector('[data-ref-chip="skill"]')).not.toBeNull()
+  })
+
+  it('falls back through the plugin dictionary when the host reference namespace misses (en page)', () => {
+    // The host namespace answers the echoed key (a miss); the plugin's own
+    // dictionary is the next fold, so an en page speaks English, not the
+    // hardcoded zh literal.
+    const ownEn = (key: string): string => (en as Record<string, string>)[key] ?? key
+    setOwnLocale(ownEn as never)
+    try {
+      const openFile = vi.fn(() => { throw new Error('x') })
+      const container = project('@a.md', [], [], { openFile, openSkill: vi.fn() })
+      fireEvent.click(container.querySelector('button[data-ref-chip="file"]')!)
+      expect(document.body.textContent).toContain(en['fileOpen.title'])
+    } finally {
+      resetReferenceLocale()
+    }
+  })
+
+  it('falls back through the plugin dictionary for the secret toggle (en page)', () => {
+    const ownEn = (key: string): string => (en as Record<string, string>)[key] ?? key
+    setOwnLocale(ownEn as never)
+    try {
+      const container = project('token sk-abc123def456ghijklmn here', [], [], undefined, true)
+      expect(container.querySelector('[data-secret] button[aria-pressed]'))
+        .toHaveAttribute('aria-label', en['secret.reveal'])
+    } finally {
+      resetReferenceLocale()
+    }
   })
 
   it('speaks the host fileOpen words when the reference namespace is bound', () => {

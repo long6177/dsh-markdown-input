@@ -29,7 +29,8 @@ import { referenceActions } from './reference-actions-face.ts'
 import { NS } from './locales.ts'
 import { skillFace } from './skill-face.ts'
 import {
-  contentText, echoAttachments, previewText, queueAttachments, type QueueViewRow,
+  contentText, echoAttachments, previewText, queueAttachments,
+  type QueueAttachment, type QueueEchoAttachment, type QueueViewRow,
 } from './queue-core.ts'
 import { projectUserText } from './user-text-projection.tsx'
 import css from './MarkdownComposer.module.css'
@@ -101,6 +102,41 @@ function QueueFileChip({ attachment, label }: {
       <span className={css.queueFileSize}>{fileSizeText(attachment.bytes ?? 0)}</span>
     </span>
   )
+}
+
+/** One attachment either a durable row or a sending echo carries. */
+type QueueAttachmentView = QueueAttachment | QueueEchoAttachment
+
+/**
+ * Render one attachment span: durable rows load their thumbnail through the
+ * session-authorized loader and show file chips with name + size; sending
+ * echoes render their local preview URL directly (the submitter owns its
+ * lifetime, native pendingQueue parity). The row kind correlates with the
+ * item arm (queue-core builds each list from its own row).
+ */
+function attachmentView(
+  item: QueueAttachmentView,
+  rowKind: QueueViewRow['kind'],
+  key: string,
+  loadImage: QueueFaceProps['loadImage'],
+  t: QueueFaceProps['t'],
+): React.ReactNode {
+  if (rowKind === 'queued') {
+    const durable = item as QueueAttachment
+    return durable.type === 'image'
+      ? <QueueThumb key={key} attachment={durable.attachment} loadImage={loadImage} label={t('queue.image')} />
+      : (
+        <QueueFileChip
+          key={key}
+          attachment={durable.attachment}
+          label={t('queue.file', { name: durable.attachment.name ?? '' })}
+        />
+      )
+  }
+  const echo = item as QueueEchoAttachment
+  return echo.type === 'image'
+    ? <img key={key} className={css.queueThumb} src={echo.value?.previewUrl ?? ''} alt={t('queue.image')} />
+    : <QueueFileChip key={key} attachment={echo.value ?? {}} label={t('queue.file', { name: echo.value?.name ?? '' })} />
 }
 
 /**
@@ -207,9 +243,11 @@ export function QueueFace({ rows, mutable, running, updateQueue, loadImage, t, o
           // (thumbs through the loader, file chips with name + size);
           // sending rows render the echo's local preview URLs directly —
           // the submitter owns their lifetime (native pendingQueue parity).
-          const attachments = row.kind === 'queued'
+          const attachments: readonly QueueAttachmentView[] = row.kind === 'queued'
             ? queueAttachments(row.content)
             : echoAttachments(row.attachments)
+          const attachmentViews = attachments.map((item, index) =>
+            attachmentView(item, row.kind, `${row.kind === 'queued' ? 'd' : 'e'}${index}`, loadImage, t))
           // The single-line preview with the reference chips folded in —
           // the vendored projection chips `@path` / `/skill` / the wire
           // session form, the plain runs stay verbatim.
@@ -244,39 +282,7 @@ export function QueueFace({ rows, mutable, running, updateQueue, loadImage, t, o
                   <>
                     {attachments.length > 0 && (
                       <span className={css.queueAttachments}>
-                        {row.kind === 'queued'
-                          ? queueAttachments(row.content).map((item, index) => item.type === 'image'
-                            ? (
-                              <QueueThumb
-                                key={`d${index}`}
-                                attachment={item.attachment}
-                                loadImage={loadImage}
-                                label={t('queue.image')}
-                              />
-                            )
-                            : (
-                              <QueueFileChip
-                                key={`d${index}`}
-                                attachment={item.attachment}
-                                label={t('queue.file', { name: item.attachment.name ?? '' })}
-                              />
-                            ))
-                          : echoAttachments(row.attachments).map((item, index) => item.type === 'image'
-                            ? (
-                              <img
-                                key={`e${index}`}
-                                className={css.queueThumb}
-                                src={item.value?.previewUrl ?? ''}
-                                alt={t('queue.image')}
-                              />
-                            )
-                            : (
-                              <QueueFileChip
-                                key={`e${index}`}
-                                attachment={item.value ?? {}}
-                                label={t('queue.file', { name: item.value?.name ?? '' })}
-                              />
-                            ))}
+                        {attachmentViews}
                       </span>
                     )}
                     <span className={css.queuePreview}>{projectUserText(preview, [], skillNames, references)}</span>

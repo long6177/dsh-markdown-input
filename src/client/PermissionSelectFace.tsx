@@ -103,12 +103,6 @@ export interface PermissionSelectFaceProps {
   /** Owner lock (session gone) — disables the pill like the native seat. */
   readonly locked: boolean
   /**
-   * Card-banner outlet, kept for interface compatibility. Switch failures
-   * render IN PLACE since #80 (the native popup family's error/retry row),
-   * so nothing is reported through the banner.
-   */
-  readonly onError?: (text: string) => void
-  /**
    * Return focus to the composer after a user-initiated dismissal (Escape,
    * Shift+Tab, an outside press) — the native PopupSelectView's
    * `dismiss({ focusComposer: true })`. Absent leaves focus where it was.

@@ -519,7 +519,10 @@ export function assembleCompletionView(input: CompletionViewInput): CompletionVi
   } else if (sessionSource.length > 0) {
     groups.push({
       id: 'session',
-      status: files === null ? 'pending' : 'ready',
+      // Its OWN plane's signal decides: a landed session list is ready even
+      // while the file plane is still in flight (the old `files === null`
+      // read misreported a stale-session frame as pending).
+      status: sessions === null ? 'pending' : 'ready',
       entries: projectSessions(sessionSource, sessionEnv, t),
     })
   }

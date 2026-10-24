@@ -166,16 +166,24 @@ export interface SteerQueueGate {
   readonly steeringAvailable: boolean
   /** The `+` command menu is open (the native `!commandMenuOpen` arm). */
   readonly menuOpen: boolean
-  /** At least one queued row is durably placed (`placement === 'queued'`). */
+  /** At least one queued row (`input.queue.length > 0`, the native test). */
   readonly hasQueuedRows: boolean
+  /**
+   * The input lock (#80): a removed session, a missing session id, the
+   * workspace trigger posture, an owner-raised block, or an offline
+   * continuable parent. The native `!locked` arm — a locked surface offers
+   * neither the steer hint nor the chord.
+   */
+  readonly locked: boolean
 }
 
 /**
  * The native `canSteerQueue` gate for the whole-queue steer gesture — the
  * same formula the runtime placeholder reads, so the hint never promises a
- * gesture the chord would refuse (issue #79 AC3/AC4). The queued-row arm
- * tests the wire's own `placement` field (queue-core's documented line
- * field), a deliberate refinement over the native `queue.length > 0`.
+ * gesture the chord would refuse (issue #79 AC3/AC4, #80's lock arm). The
+ * queued-row arm is the native `queue.length > 0`: the inbox `next-turn`
+ * wire item is a `UserMessage` (id/content/source only), so there is no
+ * `placement` field to test.
  * @param gate - the card's live signals.
  */
 export function canSteerQueueOf(gate: SteerQueueGate): boolean {
@@ -186,6 +194,7 @@ export function canSteerQueueOf(gate: SteerQueueGate): boolean {
     && gate.steeringAvailable
     && !gate.menuOpen
     && gate.hasQueuedRows
+    && !gate.locked
 }
 
 /** The submit label the primary seat's copy resolves to. */
