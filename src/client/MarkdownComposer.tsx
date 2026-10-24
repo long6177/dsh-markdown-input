@@ -908,10 +908,26 @@ export function MarkdownComposer({
   // Native pick semantics: the card's blank session IS the session being moved,
   // so the reuse-or-create flow is the whole verb — no draft transfer (that is
   // `selectWorkspace`'s job for a non-blank session with something to carry).
+  // #78: the rejectable `openWorkspace` verb, the native `selectWorkspace`'s
+  // own navigation, is preferred when the host exposes it — its refusal rolls
+  // the pending pick back (conditional on the pick still being the latest
+  // one, `ConversationContent.tsx:119-131`), so a failed switch never leaves
+  // the chip naming a workspace the session never reached. The void
+  // `startSession` stays as the fallback for a host without it; its own
+  // failures are its own (console + the host notice), so only an immediate
+  // throw is catchable there.
   const pickWorkspace = useCallback((workspaceId: string) => {
     setPickerOpen(false)
     setPendingWorkspaceId(workspaceId)
     if (workspaceVerb === undefined) return
+    const opened = workspaceVerb.openWorkspace?.(workspaceId)
+    if (opened !== undefined) {
+      void opened.catch((error: unknown) => {
+        setPendingWorkspaceId(current => current === workspaceId ? undefined : current)
+        showBanner(error instanceof Error ? error.message : String(error))
+      })
+      return
+    }
     try {
       workspaceVerb.startSession(workspaceId)
     } catch (error: unknown) {
