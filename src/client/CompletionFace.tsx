@@ -310,7 +310,6 @@ export function CompletionFace({
     })
   }, [probe, command, fileFace, sessionFace, fetching, landedForProbe, landedValid, landed, commandRows, catalogPending, skillRoll, sessionId, t])
 
-  const pending = view?.pending ?? false
   // The rendered item list and the flat row space the keyboard highlight
   // cycles (one listbox over the groups in display order, native flatten).
   const { items, rows } = useMemo<{ items: CompletionRenderItem[]; rows: CompletionRowItem[] }>(() => {
