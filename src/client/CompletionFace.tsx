@@ -35,7 +35,7 @@
  * `/mo` and returns focus to the editor (host PopupSelectController.settle
  * semantics). Dismissals and failures leave the token in the draft.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { MenuSurface, ReferenceIconRegular, useAnchoredMaxHeight } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -46,8 +46,8 @@ import { commandFace, commandFaceSupported } from './command-face.ts'
 import { assembleCommandRows, reportExecute } from './command-rows.ts'
 import { feedbackUiSupported, openFeedbackSession } from './feedback-face.ts'
 import {
-  assembleCompletionView, guardAllowsProbe, sameProbeIdentity, skillInsertion,
-  type CompletionEntry, type CompletionGuard, type CompletionProbe,
+  assembleCompletionView, crumbsFor, guardAllowsProbe, sameProbeIdentity, skillInsertion,
+  type CompletionCrumb, type CompletionEntry, type CompletionGuard, type CompletionProbe,
   type CompletionView, type FileReferenceCandidate,
 } from './completion-core.ts'
 import { fileReferenceFace, fileReferenceFaceSupported } from './file-reference-face.ts'
@@ -204,6 +204,10 @@ export function CompletionFace({
   const [highlight, setHighlight] = useState(0)
   const [fetching, setFetching] = useState(false)
   const [landed, setLanded] = useState<LandedBatch | null>(null)
+  // The drill flag (issue #80, the host controller's `drilled`): true when the
+  // current menu was opened/rebounded by a drill, so continuing to type keeps
+  // the breadcrumb header while the menu closes clear it.
+  const [drilled, setDrilled] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   // Mirrors keep the editor-seam handler and pick closures reading fresh
@@ -360,7 +364,10 @@ export function CompletionFace({
   // No dismissed memory: this close is the data's answer, not the user's.
   const allReadyEmpty = visible && view !== null && !view.pending && rows.length === 0
   useEffect(() => {
-    if (allReadyEmpty) setOpen(false)
+    if (allReadyEmpty) {
+      setOpen(false)
+      setDrilled(false)
+    }
   }, [allReadyEmpty])
 
   /**
@@ -387,19 +394,21 @@ export function CompletionFace({
   const insertSettling = useCallback((text: string): void => {
     rememberNextRef.current = true
     setOpen(false)
+    setDrilled(false)
     insertOverToken(text)
   }, [insertOverToken])
 
   const closeWithMemory = useCallback((): void => {
     dismissedRef.current = probeRef.current
     setOpen(false)
+    setDrilled(false)
   }, [])
 
   // The bare close: no dismissed memory, the probe kept. The card's interlock
   // (the `+` menu opening) uses this — the native toggleSource's open path
   // never remembers (#76 AC6), so the `@` token the `+` menu displaced
   // re-tracks open when the menu is gone.
-  const close = useCallback((): void => { setOpen(false) }, [])
+  const close = useCallback((): void => { setOpen(false); setDrilled(false) }, [])
 
   const pickRow = useCallback((row: CompletionRowItem, viaTab: boolean): void => {
     const editorHandle = editorRef.current
@@ -493,6 +502,9 @@ export function CompletionFace({
     // the span is already followed by one (#76 AC7) — the mention never
     // glues to the next keystroke and never doubles an existing space.
     if (viaTab && option.kind === 'directory') {
+      // A drill keeps the menu open on the descended listing and marks the
+      // session drilled, so the breadcrumb header shows while typing goes on.
+      setDrilled(true)
       insertOverToken(option.mention)
     } else {
       const handle = editorRef.current
@@ -518,18 +530,23 @@ export function CompletionFace({
       dismissedRef.current = null
       setProbe(null)
       setOpen(false)
+      setDrilled(false)
       return
     }
     if (dismissedRef.current !== null && sameProbeIdentity(dismissedRef.current, next)) {
       // The dismissed token is still there, untouched: stay closed.
       setProbe(next)
       setOpen(false)
+      setDrilled(false)
       return
     }
     dismissedRef.current = null
     const wasOpen = openRef.current
     setProbe(next)
     setOpen(true)
+    // A fresh open starts un-drilled; a re-track while open (the drill's own
+    // descended token) keeps the flag.
+    if (!wasOpen) setDrilled(false)
     if (!wasOpen) onOpenRef.current()
   }, [])
 
@@ -676,6 +693,12 @@ export function CompletionFace({
   if (!visible || allReadyEmpty || probe === null || view === null || container.current === null) return null
 
   const activeFlat = Math.min(highlight, rows.length - 1)
+  // The breadcrumb trail of a drilled `@` source (issue #80): only the drill
+  // path carries one, and it lives outside the listbox (keyboard never lands
+  // on it; a press re-writes the ancestor mention and keeps the menu open).
+  const crumbs: readonly CompletionCrumb[] | undefined = probe.trigger === '@'
+    ? crumbsFor(probe.query, probe.quoted, drilled, t)
+    : undefined
 
   return createPortal(
     <MenuSurface
@@ -684,6 +707,32 @@ export function CompletionFace({
       style={{ maxHeight } satisfies CSSProperties}
       data-completion-menu=""
     >
+      {crumbs !== undefined && crumbs.length > 0 && (
+        <nav className={css.crumbs} aria-label={t('completion.crumbs.aria')} data-completion-crumbs>
+          {crumbs.map((crumb, index) => (
+            <Fragment key={`${String(index)}:${crumb.label}`}>
+              {index > 0 && <span className={css.crumbSeparator} aria-hidden>›</span>}
+              <button
+                type="button"
+                className={crumb.current === true ? `${css.crumb} ${css.crumbCurrent}` : css.crumb}
+                aria-current={crumb.current === true ? 'location' : undefined}
+                disabled={crumb.current === true}
+                data-completion-crumb={crumb.label}
+                onMouseDown={(event) => {
+                  // mousedown (not click) keeps the composer focused, the
+                  // native crumb's own gesture; the menu stays open.
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setDrilled(true)
+                  insertOverToken(crumb.mention)
+                }}
+              >
+                {crumb.label}
+              </button>
+            </Fragment>
+          ))}
+        </nav>
+      )}
       <div
         className={css.viewport}
         role="listbox"

@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  assembleCompletionView, detectCompletion, formatFileMention, guardAllowsProbe,
+  assembleCompletionView, crumbsFor, detectCompletion, formatFileMention, guardAllowsProbe,
   sameProbeIdentity, skillInsertion,
   type CompletionProbe, type FileReferenceCandidate, type SessionMentionCandidate,
 } from '../src/client/completion-core.ts'
@@ -442,5 +442,49 @@ describe('assembleCompletionView — @ session mentions (#75)', () => {
     })
     expect(view?.groups.find((group) => group.id === 'session')?.entries.map((entry) => (entry.option as { name: string }).name))
       .toEqual(['远端会话', '重构子任务'])
+  })
+})
+
+describe('crumbsFor (issue #80, host ui-reference crumbsFor)', () => {
+  it('answers undefined unless the menu was drilled', () => {
+    expect(crumbsFor('src/client/', false, false, tZh)).toBeUndefined()
+    expect(crumbsFor('src', false, true, tZh)).toBeUndefined()
+    expect(crumbsFor('', false, true, tZh)).toBeUndefined()
+  })
+
+  it('builds the root then one crumb per path segment, the last current', () => {
+    expect(crumbsFor('src/client/', false, true, tZh)).toEqual([
+      {
+        label: '工作区',
+        value: JSON.stringify({ kind: 'file', fileKind: 'directory', label: '工作区', mention: '@' }),
+        mention: '@',
+      },
+      {
+        label: 'src',
+        value: JSON.stringify({ kind: 'file', fileKind: 'directory', label: 'src', mention: '@src/' }),
+        mention: '@src/',
+        current: false,
+      },
+      {
+        label: 'client',
+        value: JSON.stringify({ kind: 'file', fileKind: 'directory', label: 'client', mention: '@src/client/' }),
+        mention: '@src/client/',
+        current: true,
+      },
+    ])
+  })
+
+  it('keeps the open quote on a quoted token (root mention `@"`)', () => {
+    const crumbs = crumbsFor('my docs/', true, true, tEn)!
+    expect(crumbs[0]).toMatchObject({ label: 'Workspace', mention: '@"' })
+    expect(crumbs[1]).toMatchObject({ label: 'my docs', mention: '@"my docs/', current: true })
+  })
+
+  it('drops the whole header when a segment cannot be written back', () => {
+    expect(crumbsFor('bad"name/', false, true, tZh)).toBeUndefined()
+  })
+
+  it('shows only the root for a bare drill (the slash is the whole path)', () => {
+    expect(crumbsFor('src/', false, true, tZh)?.map((crumb) => crumb.label)).toEqual(['工作区', 'src'])
   })
 })

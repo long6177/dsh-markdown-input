@@ -731,6 +731,34 @@ describe('CompletionFace picks', () => {
       emit(probe({ trigger: '@', query: 'src/', position: 'inline', start: 2, end: 7 }))
     })
     await waitFor(() => expect(listbox()).not.toBeNull())
+    // The drilled menu carries its breadcrumb trail (issue #80): root + the
+    // current directory, the current step inert.
+    const crumbs = [...document.querySelectorAll<HTMLElement>('[data-completion-crumb]')]
+    expect(crumbs.map((crumb) => crumb.textContent)).toEqual([zh['completion.crumb.root'], 'src'])
+    expect(crumbs[0]?.getAttribute('aria-current')).toBeNull()
+    expect(crumbs[1]).toHaveAttribute('aria-current', 'location')
+    expect(crumbs[1]).toBeDisabled()
+    expect(document.querySelector('[data-completion-crumbs]'))
+      .toHaveAttribute('aria-label', zh['completion.crumbs.aria'])
+    // Going back one level rewrites the token with the ancestor mention and
+    // keeps the menu open (the native drill outcome, no dismissed memory).
+    fireEvent.mouseDown(crumbs[0]!)
+    expect(dispatch).toHaveBeenCalledTimes(2)
+    const back = dispatch.mock.calls[1]![0] as { changes: { insert: string } }
+    expect(back.changes.insert).toBe('@')
+    expect(listbox()).not.toBeNull()
+  })
+
+  it('never shows a breadcrumb header without a drill', async () => {
+    const { emit } = mountFace({ fileResults: [{ path: 'src', kind: 'directory' }] })
+    await openAt(emit, 'sr')
+    await waitFor(() => expect(listbox()).not.toBeNull())
+    expect(document.querySelector('[data-completion-crumbs]')).toBeNull()
+    // Typing on (the token now has a slash) still needs the drill flag.
+    await act(async () => {
+      emit(probe({ trigger: '@', query: 'src/', position: 'inline', start: 2, end: 7 }))
+    })
+    expect(document.querySelector('[data-completion-crumbs]')).toBeNull()
   })
 
   it('inserts a quoted open mention for a quoted token and closes the quote on files', async () => {
@@ -980,12 +1008,12 @@ describe('CompletionFace real-surface linkage (T9)', () => {
     }
   })
 
-  it('decorates a picked file chip and stays closed for the settled token', async () => {
+  it('decorates a picked directory chip and stays closed for the settled token', async () => {
     setCommandSource(() => undefined)
     setSkillSource(() => undefined)
     setFileReferenceSource(() => ({
       fileReferences: {
-        list: vi.fn(() => Promise.resolve({ ok: true, value: [{ path: 'src/index.ts', kind: 'file' }] })),
+        list: vi.fn(() => Promise.resolve({ ok: true, value: [{ path: 'src', kind: 'directory' }] })),
       },
     }))
     const handle = mountRealEditor()
@@ -995,8 +1023,10 @@ describe('CompletionFace real-surface linkage (T9)', () => {
       await waitFor(() => expect(listbox()).not.toBeNull())
       fireEvent.mouseDown(options()[0])
       await waitFor(() => {
-        expect(handle.getText()).toBe('see @src/index.ts ')
-        expect(document.querySelector('.cm-mdx-ref-file')).not.toBeNull()
+        expect(handle.getText()).toBe('see @src/ ')
+        // Issue #80 narrowed the draft's `@` arm to the directory form; the
+        // picked directory still lights the chip (insert → decoration).
+        expect(document.querySelector('.cm-mdx-ref-folder')).not.toBeNull()
       })
       expect(listbox()).toBeNull()
     } finally {

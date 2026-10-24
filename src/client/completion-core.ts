@@ -181,6 +181,66 @@ export function skillInsertion(name: string): string {
   return `/${name} `
 }
 
+/** One breadcrumb step of a drilled `@` source (host `InputTriggerCrumb` shape). */
+export interface CompletionCrumb {
+  /** The visible segment name (`Workspace` for the root). */
+  readonly label: string
+  /** The source-owned pick payload (opaque to the pipeline); the host JSON form. */
+  readonly value: string
+  /** The directory mention this step writes back into the draft. */
+  readonly mention: string
+  /** Whether the list already shows this directory (the inert current step). */
+  readonly current?: boolean | undefined
+}
+
+/** The source-owned directory pick payload (host `directoryValue`, verbatim). */
+function directoryValue(label: string, mention: string): string {
+  return JSON.stringify({ kind: 'file', fileKind: 'directory', label, mention })
+}
+
+/**
+ * Build the drilled `@` source's breadcrumb trail (issue #80, host
+ * `ui-reference/src/client/index.ts:199-232`): only a drilled menu with a
+ * slash in its path carries one; the root is the first step, each path
+ * segment is another, and the last is current (inert). A segment the wire
+ * grammar cannot write back drops the whole header — the native rule.
+ * @param query - the live token text after `@`.
+ * @param quoted - whether the token is the quoted whitespace form.
+ * @param drilled - whether the menu was opened/rebounded by a drill.
+ * @param t - dictionary lookup.
+ * @returns the steps root-first, or undefined without a header.
+ */
+export function crumbsFor(
+  query: string,
+  quoted: boolean,
+  drilled: boolean,
+  t: (key: ComposerKey, params?: Record<string, unknown>) => string,
+): readonly CompletionCrumb[] | undefined {
+  if (!drilled) return undefined
+  const slash = query.lastIndexOf('/')
+  if (slash < 0) return undefined
+  const segments = query.slice(0, slash).split('/').filter(Boolean)
+  const rootLabel = t('completion.crumb.root')
+  const rootMention = quoted ? '@"' : '@'
+  const crumbs: CompletionCrumb[] = [{
+    label: rootLabel,
+    value: directoryValue(rootLabel, rootMention),
+    mention: rootMention,
+  }]
+  for (const [index, segment] of segments.entries()) {
+    const path = segments.slice(0, index + 1).join('/')
+    const mention = formatFileMention({ path, kind: 'directory' }, quoted)
+    if (mention === undefined) return undefined
+    crumbs.push({
+      label: segment,
+      value: directoryValue(segment, mention),
+      mention,
+      current: index === segments.length - 1,
+    })
+  }
+  return crumbs
+}
+
 /** One candidate row, tagged by the data plane it came from. */
 export type CompletionOption =
   | { readonly origin: 'command'; readonly row: CommandMenuRow }

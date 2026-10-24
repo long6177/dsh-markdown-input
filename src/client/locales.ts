@@ -132,6 +132,11 @@ const zh = {
   'completion.drill.hint': '进入目录',
   'completion.drill.key': 'Tab',
   'completion.drill.aria': '进入目录',
+  // The drilled-source breadcrumb (issue #80) — the host `ui-input-trigger`
+  // `crumbs.aria` / `ui-reference` `crumb.root` lines under this plugin's own
+  // namespace (that namespace is outside this build's dictionary table).
+  'completion.crumbs.aria': '目录导航',
+  'completion.crumb.root': '工作区',
   'completion.skill.userOnly': '仅用户',
   // `@` session-mention rows (#75). The section titles, the no-cwd marker,
   // and the relative-time words are the host `ui-reference` namespace's own
@@ -344,6 +349,9 @@ const en: Record<ComposerKey, string> = {
   'completion.drill.hint': 'Browse folder',
   'completion.drill.key': 'Tab',
   'completion.drill.aria': 'Browse folder',
+  // The drilled-source breadcrumb (issue #80) — the host lines verbatim.
+  'completion.crumbs.aria': 'Folder navigation',
+  'completion.crumb.root': 'Workspace',
   'completion.skill.userOnly': 'user-only',
   // `@` session-mention rows (#75) — the host `ui-reference` lines verbatim
   // (see the zh block above for the fold).
