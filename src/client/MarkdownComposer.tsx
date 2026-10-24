@@ -109,6 +109,26 @@ export interface MarkdownTakeover {
   readonly kind: 'markdown'
 }
 
+/**
+ * The failure-restore merge (issue #74): a failed send's draft comes back
+ * while the user kept typing during the flight. Nothing may be lost:
+ *
+ * - a pure in-flight append (the editor text starts with the restored
+ *   draft) survives whole — the upstream `retainSuffixOf` parity, the
+ *   append is the user's continuation of the sent text;
+ * - diverged text joins AFTER the restored draft with the submission-order
+ *   separator (the upstream failed-draft rebuild joins with `'\n\n'`) —
+ *   the restored text was submitted first;
+ * - an emptied editor just takes the restore; an equal or empty restore
+ *   never touches the editor text.
+ */
+export function mergeRestoredDraft(restored: string, editorText: string): string {
+  if (restored === '' || editorText === restored) return editorText
+  if (editorText === '') return restored
+  if (editorText.startsWith(restored)) return editorText
+  return `${restored}\n\n${editorText}`
+}
+
 /** The one non-null marker this chain entry elects with. */
 export const MARKDOWN_TAKEOVER: MarkdownTakeover = { kind: 'markdown' }
 
@@ -544,6 +564,21 @@ export function MarkdownComposer({
     }
   }, [])
 
+  // A session switch retires the editing window (issue #74): typed text
+  // from the previous session must not suppress the new session's draft
+  // seed, a pending mirror must not write the old session's text into the
+  // new one, and a flight still open on the old session can never settle.
+  // Declared ahead of the seed effect so the reset lands before the new
+  // session's draft is applied.
+  const flightSessionRef = useRef(sessionId)
+  useEffect(() => {
+    if (flightSessionRef.current === sessionId) return
+    flightSessionRef.current = sessionId
+    window.clearTimeout(draftSyncTimerRef.current)
+    touchedRef.current = false
+    flightRef.current = false
+  }, [sessionId])
+
   // Seed from the persisted draft until the user edits locally; after a
   // settled submit the machine clears the draft and this clears the surface.
   // The send flight settles through this same public state (issue #74): the
@@ -551,11 +586,37 @@ export function MarkdownComposer({
   // draft or returned attachments or the Session promptError (failed) —
   // releases the flight gate; the accepted clear is the commit point where
   // the seed cuts the undo history so Ctrl+Z cannot resurrect sent text.
+  // A host-side draft rewrite arriving over user-typed text (touched, the
+  // mirror lagging or already fired) is a failure restore, not a seed: it
+  // merges with what the user typed instead of being dropped — the old
+  // drop-then-remirror path lost the restored draft to the stale mirror.
+  const seededDraftRef = useRef<string | undefined>(undefined)
   useEffect(() => {
     const editor = editorRef.current
     if (editor === null) return
+    const draftChanged = seededDraftRef.current !== input.draft
+    seededDraftRef.current = input.draft
     const flightSettled = flightRef.current === 'sent'
     if (flightSettled) flightRef.current = false
+    const editorText = editor.getText()
+    if (touchedRef.current && draftChanged && input.draft !== '' && editorText !== input.draft) {
+      const merged = mergeRestoredDraft(input.draft, editorText)
+      // A pending mirror captured the pre-merge text; it must never land
+      // after the merge and put the truncated snapshot back.
+      window.clearTimeout(draftSyncTimerRef.current)
+      if (merged !== editorText) {
+        // The upstream restore shape: restoreDraft + clearHistory — the
+        // merged content starts a fresh undo history.
+        seedingRef.current = true
+        editor.setText(merged, { cutHistory: true })
+        seedingRef.current = false
+        setHasText(merged.trim().length > 0)
+      }
+      // The editor text is the truth now (kept append or merged): push it
+      // before any other writer can read the restored snapshot back.
+      inputActionsRef.current.setDraft(merged)
+      return
+    }
     const commitClear = flightSettled
       && input.draft === '' && input.attachmentIds.length === 0
     if (touchedRef.current) return

@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
+import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, mergeRestoredDraft, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { installConversationSource, setConversationSource } from '../src/client/conversation-face.ts'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
@@ -88,6 +88,7 @@ function chainProps(overrides: {
   goal?: unknown
   plan?: unknown
   queue?: readonly QueueRow[]
+  sessionId?: string
   inputActions?: Partial<Record<'setDraft' | 'submit', ReturnType<typeof vi.fn>>>
 } = {}): MarkdownComposerProps {
   const inputActions = {
@@ -113,7 +114,7 @@ function chainProps(overrides: {
   }
   return {
     matched: MARKDOWN_TAKEOVER,
-    sessionId: 's1',
+    sessionId: overrides.sessionId ?? 's1',
     session: overrides.session,
     useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
     inputActions: inputActions as unknown as MarkdownComposerProps['inputActions'],
@@ -151,6 +152,13 @@ function modeToggleCopy(mode: 'render' | 'source'): string {
 function pasteHtml(html: string): void {
   fireEvent.paste(content(), {
     clipboardData: { getData: (type: string) => type === 'text/html' ? html : '' },
+  })
+}
+
+/** Paste plain text at the caret (the default paste path, CM6's own). */
+function pastePlain(text: string): void {
+  fireEvent.paste(content(), {
+    clipboardData: { getData: (type: string) => type === 'text/plain' ? text : '' },
   })
 }
 
@@ -439,6 +447,78 @@ describe('MarkdownComposer', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('merges a failure-restored draft with the text typed during the flight (#74)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const view = render(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    expect(content().textContent).toContain('第一句')
+    fireEvent.click(seatNamed(en['composer.action.submit']))
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    // Accepted: the machine cleared the draft, the surface follows.
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+    await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+    // The user keeps typing while the flight is out.
+    pastePlain('第二句')
+    expect(content().textContent).toBe('第二句')
+    // The send fails: the failed draft comes back over the typed text —
+    // merged, never overwritten, and the merged text IS the draft now.
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenLastCalledWith('第一句\n\n第二句'))
+    expect(content().textContent).toContain('第一句')
+    expect(content().textContent).toContain('第二句')
+    view.unmount()
+  })
+
+  it('keeps a pure in-flight append whole when the failed draft comes back (#74)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const view = render(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    fireEvent.click(seatNamed(en['composer.action.submit']))
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+    await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+    // The retyped text happens to start with the failed draft (the pure
+    // append shape the upstream retainSuffixOf retains): it survives whole.
+    pastePlain('第一句')
+    pastePlain('第二句')
+    expect(content().textContent).toBe('第一句第二句')
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenLastCalledWith('第一句第二句'))
+    expect(content().textContent).toBe('第一句第二句')
+    view.unmount()
+  })
+
+  it('a session switch retires the editing window: the new session draft seeds (#74)', () => {
+    const view = render(<MarkdownComposer {...chainProps({ draft: '' })} />)
+    pastePlain('旧会话的话')
+    expect(content().textContent).toBe('旧会话的话')
+    // Switching sessions retires touched/mirror state — the new session's
+    // draft seeds fresh instead of being dropped as user edits (and the
+    // old text must not merge into it).
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '新会话的草稿', sessionId: 's2' })} />)
+    expect(content().textContent).toBe('新会话的草稿')
+  })
+})
+
+describe('mergeRestoredDraft (#74 failure restore over in-flight edits)', () => {
+  it('keeps a pure in-flight append whole (the retainSuffixOf parity)', () => {
+    expect(mergeRestoredDraft('第一句', '第一句第二句')).toBe('第一句第二句')
+  })
+
+  it('joins diverged text after the restored draft (the submission-order separator)', () => {
+    expect(mergeRestoredDraft('第一句', '第二句')).toBe('第一句\n\n第二句')
+  })
+
+  it('fills an emptied editor with the restored draft', () => {
+    expect(mergeRestoredDraft('第一句', '')).toBe('第一句')
+  })
+
+  it('returns the editor text when it already equals the restore', () => {
+    expect(mergeRestoredDraft('第一句', '第一句')).toBe('第一句')
+  })
+
+  it('an empty restore never touches the editor text', () => {
+    expect(mergeRestoredDraft('', '第二句')).toBe('第二句')
   })
 })
 
