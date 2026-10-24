@@ -59,6 +59,8 @@ function mountFace(options: {
   chainPopups?: boolean
   /** The card's claim-application callback (issue #79 AC5). */
   beginClaim?: (claim: unknown) => void
+  /** The session snapshot's subagent share (native short-circuit, #76 AC4). */
+  subagent?: unknown
 } = {}) {
   const onError = vi.fn()
   const onPickFiles = vi.fn()
@@ -92,6 +94,7 @@ function mountFace(options: {
     onError,
     registerClose: (fn: (() => void) | null) => { close = fn },
     ...(options.beginClaim === undefined ? {} : { beginClaim: options.beginClaim }),
+    ...(options.subagent === undefined ? {} : { subagent: options.subagent }),
   } as unknown as CommandMenuFaceProps
   const view = render(
     <div ref={containerRef as never} data-composer-card>
@@ -176,6 +179,17 @@ describe('CommandMenuFace trigger', () => {
     mountFace({ sessionId: undefined })
     expect(trigger()).not.toBeInTheDocument()
     expect(listbox()).toBeNull()
+  })
+
+  it('does not open for a subagent session (the native catalog short-circuit leaves no rows)', async () => {
+    // Native parity (#76 AC4): the subagent catalog fetch short-circuits to
+    // an empty roster before any RPC — no candidate rows survive, so the
+    // menu never floats (the launcher's click is a no-op).
+    const { surfaces } = mountFace({ subagent: { address: { mode: 'nested' } } })
+    fireEvent.click(trigger())
+    await new Promise((resolve) => { setTimeout(resolve, 10) })
+    expect(listbox()).toBeNull()
+    expect(surfaces.commands.list).not.toHaveBeenCalled()
   })
 })
 

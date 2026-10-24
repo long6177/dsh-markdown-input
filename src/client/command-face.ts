@@ -18,11 +18,13 @@
  * plugin pending — a lazy per-call probe degrades this face alone.
  *
  * The catalog caches per session (the host's CommandDirectory contract):
- * the forwarded `commands/change` event drops every cache, `agent-preset/
- * selected` drops that one session (a preset switch re-composes which
- * commands its agent resolves), and `connection/reset` drops everything.
- * A failed read leaves the session uncached so a later open retries; the
- * view shows the static built-in rows meanwhile — never an empty menu.
+ * the forwarded `commands/change` event repulls every known session in place
+ * (the ready snapshot keeps serving — native invalidateAll), `agent-preset/
+ * selected` drops that one session and prewarms it, and `connection/reset`
+ * drops everything and prewarms the known sessions (native resetConnected).
+ * A failed read marks the session failed (no snapshot, a later ensure
+ * retries — never a poisoned key); the `+` menu keeps its static built-in
+ * rows for such a session, so the menu never opens empty.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import { registeredFace, type FaceDefinition, type FaceHandle } from './face.ts'
@@ -75,6 +77,12 @@ export type CommandExecuteResult =
 /** Per-session catalog caches as one publishable snapshot. */
 export interface CommandCatalogState {
   readonly value: ReadonlyMap<SessionId, readonly CommandDescriptor[]>
+  /**
+   * Sessions whose latest read failed (the host directory's `failed` state):
+   * no snapshot is served, the completion popup removes the command group,
+   * and the failure is never a poisoned key — a later ensure retries.
+   */
+  readonly failed: ReadonlySet<SessionId>
 }
 
 /** The command menu face the tool-row control consumes. */
@@ -199,7 +207,7 @@ export function commandFace(): CommandFace | undefined {
 }
 
 function createFace(surfaces: CommandSurfaces): CommandFace {
-  let snapshot: CommandCatalogState = { value: new Map() }
+  let snapshot: CommandCatalogState = { value: new Map(), failed: new Set() }
   const inFlight = new Set<SessionId>()
   const listeners = new Set<() => void>()
   const store: ObservableSource<CommandCatalogState> = {
@@ -215,41 +223,90 @@ function createFace(surfaces: CommandSurfaces): CommandFace {
     snapshot = next
     for (const listener of [...listeners]) listener()
   }
-  function ensure(sessionId: SessionId): void {
-    if (snapshot.value.has(sessionId) || inFlight.has(sessionId)) return
+  /** Every session the face holds a verdict for (a snapshot or a failure). */
+  function known(): Set<SessionId> {
+    return new Set([...snapshot.value.keys(), ...snapshot.failed])
+  }
+  function pull(sessionId: SessionId): void {
+    if (inFlight.has(sessionId)) return
     inFlight.add(sessionId)
     void (async () => {
+      let result: RemoteResult<readonly CommandDescriptor[]> | 'rejected'
       try {
-        const result = await surfaces.commands.list(sessionId)
-        inFlight.delete(sessionId)
-        if (!result.ok) return // uncached: the view keeps the static rows, a later ensure retries
-        publish({ value: new Map(snapshot.value).set(sessionId, result.value) })
+        const answered = await surfaces.commands.list(sessionId)
+        // A malformed answer (an undefined or non-RemoteResult body from a
+        // degraded bridge) reads as a failed pull, never a crash into the
+        // card — the shape check keeps the old silent-tolerance contract.
+        result = answered !== null && typeof answered === 'object'
+          && typeof (answered as { ok?: unknown }).ok === 'boolean'
+          ? answered as RemoteResult<readonly CommandDescriptor[]>
+          : 'rejected'
       } catch {
-        inFlight.delete(sessionId)
+        result = 'rejected'
       }
+      inFlight.delete(sessionId)
+      if (result === 'rejected' || !result.ok) {
+        // Native refresh failure: state `failed`, snapshot dropped. The
+        // popup removes the command group; the `+` menu keeps its static
+        // rows (existing design); a later ensure retries. Already-failed
+        // sessions publish nothing new.
+        if (snapshot.failed.has(sessionId) && !snapshot.value.has(sessionId)) return
+        const value = new Map(snapshot.value)
+        value.delete(sessionId)
+        const failed = new Set(snapshot.failed)
+        failed.add(sessionId)
+        publish({ value, failed })
+        return
+      }
+      const failed = new Set(snapshot.failed)
+      failed.delete(sessionId)
+      publish({ value: new Map(snapshot.value).set(sessionId, result.value), failed })
     })()
   }
+  function ensure(sessionId: SessionId): void {
+    // A healthy cached session is served from the cache; a failed one (or an
+    // unknown one) pulls — the retry path, never a poisoned key.
+    if (snapshot.value.has(sessionId) && !snapshot.failed.has(sessionId)) return
+    pull(sessionId)
+  }
   function dropAll(): void {
-    if (snapshot.value.size === 0) return
-    publish({ value: new Map() })
+    if (snapshot.value.size === 0 && snapshot.failed.size === 0) return
+    publish({ value: new Map(), failed: new Set() })
   }
   // The forwarded events mirror the host CommandDirectory's invalidation
   // sources; without the event face the caches still serve and re-fetch on
   // reopen after a manual page reload.
   if (surfaces.remoteEvents !== undefined) {
     try {
-      surfaces.remoteEvents.$on('commands/change', () => { dropAll() })
+      surfaces.remoteEvents.$on('commands/change', () => {
+        // Soft invalidation (native invalidateAll): every known session
+        // repulls in the background while its ready snapshot keeps serving —
+        // no flash to the static fallback, no synthetic regression.
+        for (const sessionId of known()) pull(sessionId)
+      })
       surfaces.remoteEvents.$on('agent-preset/selected', (...args: unknown[]) => {
         // The forwarded payload is one session id (the host resets that
         // session's composed commands); a non-string payload is ignored.
         if (typeof args[0] !== 'string') return
         const sessionId = args[0] as SessionId
-        if (!snapshot.value.has(sessionId)) return
-        const next = new Map(snapshot.value)
-        next.delete(sessionId)
-        publish({ value: next })
+        // Hard invalidation (native resetSession): drop the known session's
+        // snapshot and prewarm it immediately.
+        if (snapshot.value.has(sessionId) || snapshot.failed.has(sessionId)) {
+          const value = new Map(snapshot.value)
+          value.delete(sessionId)
+          const failed = new Set(snapshot.failed)
+          failed.delete(sessionId)
+          publish({ value, failed })
+          ensure(sessionId)
+        }
       })
-      surfaces.remoteEvents.$on('connection/reset', () => { dropAll() })
+      surfaces.remoteEvents.$on('connection/reset', () => {
+        // Hard invalidation (native resetConnected): drop everything and
+        // prewarm the known sessions.
+        const knownSessions = known()
+        dropAll()
+        for (const sessionId of knownSessions) pull(sessionId)
+      })
     } catch (error: unknown) {
       console.error('[markdown-input] command catalog event subscription failed', error)
     }
