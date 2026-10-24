@@ -11,56 +11,30 @@
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 4px;
-  max-width: 85%;
+  /* Host userStack class values (#77): the echo bubble renders inside the
+     host MessageItem's own stack and bubble, the durable bubble renders
+     here — the handoff at admission must not repaint the container. */
+  gap: 8px;
+  max-width: min(calc(var(--dsh-chat-content-width, 748px) * 0.702), 82%);
 }
 
-.attachmentRow {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 4px;
-}
+/* The attachment row and its file cards are the host user-content factory's
+   own render (the factory occurrence inside .stack, #77); only the bubble
+   skin is ours. */
 
-.fileCard {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  border: 1px solid var(--dsw-border, color-mix(in srgb, currentColor 14%, transparent));
-  border-radius: 10px;
-  padding: 6px 10px;
-  background: var(--dsw-bg, color-mix(in srgb, currentColor 5%, transparent));
-}
-
-.fileIcon {
-  width: 18px;
-  height: 18px;
-  flex: none;
-}
-
-.fileContent {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.fileName {
-  font-size: 0.9em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 220px;
-}
-
-.fileMeta {
-  font-size: 0.75em;
-  opacity: 0.65;
-}
-
+/* Host .bubble class values (#77): background/radius tokens, the 10/16
+   padding, and the content font metrics the host bubble carries. The
+   white-space stays `normal` (the Markdown blocks manage their own breaks —
+   the author's hardened lines ride <br> elements; the host's pre-wrap suits
+   its plain-run projection, not block Markdown). */
 .bubble {
-  padding: 8px 12px;
-  border-radius: 14px 14px 4px 14px;
-  background: var(--dsw-bubble-user, color-mix(in srgb, currentColor 8%, transparent));
+  max-width: 100%;
+  background: var(--dsw-specific-bubble);
+  border-radius: var(--dsw-radius-xl);
+  padding: 10px 16px;
+  font-size: var(--dsh-content-font-size, 14px);
+  line-height: calc(22px + var(--dsh-content-font-delta, 0px));
+  color: var(--dsw-alias-label-primary);
   white-space: normal;
   word-break: break-word;
 }

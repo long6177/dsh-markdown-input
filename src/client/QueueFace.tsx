@@ -9,9 +9,16 @@
  * header, unadmitted submissions show as sending echoes with disabled
  * actions, rows carry edit (text-only) / remove (retract) / steer, and a
  * failed mutation reports on the card banner while the row stays.
+ *
+ * Attachments ride the rows too (#77): durable rows render thumbnails
+ * through the session-authorized image loader (placeholder without the
+ * face) and file chips, sending echoes render straight from their local
+ * preview URLs; the preview keeps its single-line shape with the reference
+ * chips the sent-text projection folds in.
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
+  FileTypeIcon, fileSizeText,
   IconCheckOutlineMedium, IconChevronDownOutlineMedium, IconChevronUpOutlineMedium,
   IconCloseOutlineMedium, IconEditOutlineMedium, IconQueueOutlineMedium,
   IconSendOutlineMedium, IconTrashOutlineMedium,
@@ -20,8 +27,9 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { QueueAction, QueueUpdate } from './conversation-face.ts'
 import { NS } from './locales.ts'
 import {
-  contentText, previewText, type QueueViewRow,
+  contentText, echoAttachments, previewText, queueAttachments, type QueueViewRow,
 } from './queue-core.ts'
+import { projectUserText } from './user-text-projection.tsx'
 import css from './MarkdownComposer.module.css'
 
 export interface QueueFaceProps {
@@ -33,6 +41,12 @@ export interface QueueFaceProps {
   readonly running: boolean
   /** The session-scoped mutation verb; undefined sheds the action buttons. */
   readonly updateQueue: QueueUpdate | undefined
+  /**
+   * The session's durable-image URL resolver (the native dock's `loadImage`
+   * inject); undefined sheds the durable thumbnails to their placeholder —
+   * the rows, chips, and preview stay (#77).
+   */
+  readonly loadImage: ((attachment: unknown) => Promise<string>) | undefined
   readonly t: PropsLocale<typeof NS>['t']
   /** Card-banner outlet: a failed mutation reports here, the row stays. */
   readonly onError: (text: string) => void
@@ -44,10 +58,49 @@ function chevron(expanded: boolean): React.ReactNode {
 }
 
 /**
+ * One durable queued image as a fixed-size thumbnail: the loader resolves
+ * the session-authorized URL, a failure (or an absent face) keeps the empty
+ * placeholder — the native QueueThumb posture.
+ */
+function QueueThumb({ attachment, loadImage, label }: {
+  attachment: unknown
+  loadImage: QueueFaceProps['loadImage']
+  label: string
+}) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (loadImage === undefined) return undefined
+    let alive = true
+    loadImage(attachment).then(
+      (resolved) => { if (alive) setUrl(resolved) },
+      () => { /* placeholder retained; the durable transcript surfaces read errors */ },
+    )
+    return () => { alive = false }
+  }, [attachment, loadImage])
+  return url === null
+    ? <span className={css.queueThumb} aria-hidden />
+    : <img className={css.queueThumb} src={url} alt={label} />
+}
+
+/** Compact file identity used beside queue thumbnails (the native QueueFile). */
+function QueueFileChip({ attachment, label }: {
+  attachment: { readonly name?: string; readonly bytes?: number }
+  label: string
+}) {
+  return (
+    <span className={css.queueFile} aria-label={label} title={attachment.name ?? ''}>
+      <span className={css.queueFileIcon} aria-hidden><FileTypeIcon path={attachment.name ?? ''} size={16} /></span>
+      <span className={css.queueFileName}>{attachment.name}</span>
+      <span className={css.queueFileSize}>{fileSizeText(attachment.bytes ?? 0)}</span>
+    </span>
+  )
+}
+
+/**
  * The queue strip, or null on an empty queue.
  * @param props - assembled rows, availability gates, copy, and the banner outlet.
  */
-export function QueueFace({ rows, mutable, running, updateQueue, t, onError }: QueueFaceProps) {
+export function QueueFace({ rows, mutable, running, updateQueue, loadImage, t, onError }: QueueFaceProps) {
   const [collapsed, setCollapsed] = useState(true)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -126,6 +179,17 @@ export function QueueFace({ rows, mutable, running, updateQueue, t, onError }: Q
             : null
           const text = row.kind === 'queued' ? contentText(row.content) : row.text
           const actions = mutable && updateQueue !== undefined
+          // Attachment spans (#77): durable rows map their wire references
+          // (thumbs through the loader, file chips with name + size);
+          // sending rows render the echo's local preview URLs directly —
+          // the submitter owns their lifetime (native pendingQueue parity).
+          const attachments = row.kind === 'queued'
+            ? queueAttachments(row.content)
+            : echoAttachments(row.attachments)
+          // The single-line preview with the reference chips folded in —
+          // the vendored projection chips `@path` / `/skill` / the wire
+          // session form, the plain runs stay verbatim.
+          const preview = row.kind === 'queued' ? previewText(row.content) : row.text
           return (
             <li key={row.id} className={`${css.queueRow} ${row.kind === 'sending' ? css.queueSendingRow : ''}`}>
               {rows.length === 1 && (
@@ -153,9 +217,46 @@ export function QueueFace({ rows, mutable, running, updateQueue, t, onError }: Q
                   />
                 )
                 : (
-                  <span className={css.queuePreview}>
-                    {row.kind === 'queued' ? previewText(row.content) : row.text}
-                  </span>
+                  <>
+                    {attachments.length > 0 && (
+                      <span className={css.queueAttachments}>
+                        {row.kind === 'queued'
+                          ? queueAttachments(row.content).map((item, index) => item.type === 'image'
+                            ? (
+                              <QueueThumb
+                                key={`d${index}`}
+                                attachment={item.attachment}
+                                loadImage={loadImage}
+                                label={t('queue.image')}
+                              />
+                            )
+                            : (
+                              <QueueFileChip
+                                key={`d${index}`}
+                                attachment={item.attachment}
+                                label={t('queue.file', { name: item.attachment.name ?? '' })}
+                              />
+                            ))
+                          : echoAttachments(row.attachments).map((item, index) => item.type === 'image'
+                            ? (
+                              <img
+                                key={`e${index}`}
+                                className={css.queueThumb}
+                                src={item.value?.previewUrl ?? ''}
+                                alt={t('queue.image')}
+                              />
+                            )
+                            : (
+                              <QueueFileChip
+                                key={`e${index}`}
+                                attachment={item.value ?? {}}
+                                label={t('queue.file', { name: item.value?.name ?? '' })}
+                              />
+                            ))}
+                      </span>
+                    )}
+                    <span className={css.queuePreview}>{projectUserText(preview, [], [])}</span>
+                  </>
                 )}
               {row.kind === 'sending' && (
                 <span className={css.queueStatus} role="status">{t('queue.sending')}</span>
