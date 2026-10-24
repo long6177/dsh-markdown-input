@@ -7,8 +7,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, mergeRestoredDraft, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
-import { installConversationSource, setConversationSource } from '../src/client/conversation-face.ts'
+import { installConversationSource, resetImageLightbox, setConversationSource, setImageLightbox } from '../src/client/conversation-face.ts'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
@@ -29,10 +30,11 @@ interface FakeDraft {
   kind: 'file' | 'image'
   id: string
   file: File
+  previewUrl?: string
 }
 
 function fakeConversation(options: {
-  uploads?: Record<string, { status: string, loaded?: number }>
+  uploads?: Record<string, { status: string, loaded?: number, total?: number }>
   notice?: { level: 'info' | 'error'; text: string; seq: number } | null
   drafts?: readonly FakeDraft[]
   block?: { reason: string }
@@ -169,6 +171,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   setConversationSource(() => undefined)
+  resetImageLightbox()
   resetSkillFace()
   resetCommandFace()
   resetModelFace()
@@ -697,6 +700,82 @@ describe('MarkdownComposer attachments', () => {
     const plain = render(<MarkdownComposer {...chainProps()} />)
     expect(plain.container.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('true')
   })
+
+  it('shows the upload progress fraction while a file uploads with a known total (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File(['x'.repeat(100)], 'a.txt') }],
+      uploads: { d0: { status: 'uploading', loaded: 50, total: 100 } },
+    })
+    setConversationSource(() => conversation)
+    const { container, getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    expect(getByText(en['composer.file.uploading'])).toBeInTheDocument()
+    const bar = container.querySelector<HTMLElement>('[data-markdown-upload-progress]')
+    expect(bar).not.toBeNull()
+    expect(bar?.style.width).toBe('50%')
+  })
+
+  it('keeps the upload state text-only while the total is unknown (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File(['x'], 'a.txt') }],
+      uploads: { d0: { status: 'uploading', loaded: 4 } },
+    })
+    setConversationSource(() => conversation)
+    const { container, getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    expect(getByText(en['composer.file.uploading'])).toBeInTheDocument()
+    expect(container.querySelector('[data-markdown-upload-progress]')).toBeNull()
+  })
+
+  it('shows the extension badge and size on a ready file chip (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File([new Uint8Array(2048)], 'a.txt') }],
+      uploads: { d0: { status: 'ready' } },
+    })
+    setConversationSource(() => conversation)
+    const { getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    // Native FileCard ready meta: extension badge + size ("TXT 2.0KB").
+    expect(getByText('TXT 2.0KB')).toBeInTheDocument()
+  })
+
+  it('opens the original-image preview from a draft thumbnail and closes it (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'image', id: 'd0', file: new File(['x'], 'pic.png'), previewUrl: 'blob:pic' }],
+    })
+    setConversationSource(() => conversation)
+    setImageLightbox(ImageLightbox)
+    const { container, getByRole } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    const thumb = container.querySelector('[data-markdown-attachments] img') as HTMLElement
+    const opener = thumb.closest('button')
+    expect(opener).not.toBeNull()
+    expect(opener).toHaveAttribute('title', en['image.openOriginal'])
+    fireEvent.click(opener as HTMLElement)
+    const dialog = getByRole('dialog')
+    expect(dialog).toHaveAttribute('aria-label', en['image.preview'])
+    expect(dialog.querySelector('img')).toHaveAttribute('src', 'blob:pic')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('keeps the draft thumbnail display-only while the lightbox face is absent (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'image', id: 'd0', file: new File(['x'], 'pic.png'), previewUrl: 'blob:pic' }],
+    })
+    setConversationSource(() => conversation)
+    const { container } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    const thumb = container.querySelector('[data-markdown-attachments] img')
+    expect(thumb).not.toBeNull()
+    // No lightbox capability: the chip degrades to a plain image, no button.
+    expect(thumb?.closest('button')).toBeNull()
+  })
 })
 
 describe('MarkdownComposer notices', () => {
@@ -1061,6 +1140,83 @@ describe('MarkdownComposer — queue strip (issue #30)', () => {
     const { getByText, queryByRole } = render(<MarkdownComposer {...queuedProps()} />)
     expect(getByText('排队补充')).toBeInTheDocument()
     expect(queryByRole('button', { name: en['queue.remove'] })).toBeNull()
+  })
+
+  it('renders the durable row’s thumbnails and file chips beside the preview (#77)', async () => {
+    const conversation = fakeConversation()
+    const imageUrl = vi.fn(async () => 'blob:queued')
+    // installScope plus the uiConversation face the queue thumbs resolve
+    // through (the native dock's loadImage inject path).
+    installConversationSource({
+      get: (name: string) => name === 'sessions'
+        ? { scope: () => ({ get: (n: string) => n === 'conversation' ? conversation : undefined }) }
+        : name === 'uiConversation' ? { imageUrl } : undefined,
+    } as never)
+    const { container, findByAltText, getByText } = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [{
+        id: 'm1',
+        content: [
+          { type: 'text', text: '看 @notes/file.md 这张' },
+          { type: 'image', attachment: { attachmentId: 'att-1' } },
+          { type: 'file', attachment: { attachmentId: 'f1', name: 'spec.md', bytes: 2048 } },
+        ],
+        source: { kind: 'user', rpcId: 'r1' },
+      }],
+    })} />)
+    // The durable image resolves through the session-authorized loader and
+    // renders as a 1:1 thumbnail with the native alt label.
+    expect(await findByAltText(en['queue.image'])).toHaveAttribute('src', 'blob:queued')
+    expect(imageUrl).toHaveBeenCalledWith('s1', { attachmentId: 'att-1' })
+    // The file chip: icon + name + size (the native QueueFile shape).
+    const strip = document.querySelector('[data-markdown-queue]') as HTMLElement
+    expect(getByText('spec.md')).toBeInTheDocument()
+    expect(strip.textContent).toContain('2.0KB')
+    // The reference chip rides the preview (the vendored projection), and
+    // the text blocks no longer carry `[type]` markers.
+    expect(strip.querySelector('[data-ref-chip="file"]')).not.toBeNull()
+    expect(strip.textContent).not.toContain('[image]')
+  })
+
+  it('degrades the durable thumbnails to placeholders without the image face (#77)', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { container } = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [{
+        id: 'm1',
+        content: [{ type: 'text', text: '带图' }, { type: 'image', attachment: { attachmentId: 'att-1' } }],
+        source: { kind: 'user', rpcId: 'r1' },
+      }],
+    })} />)
+    const strip = container.querySelector('[data-markdown-queue]') as HTMLElement
+    // The row stays, the thumbnail slot stays, only the bytes do not load.
+    expect(strip.querySelector('img')).toBeNull()
+    expect(strip.querySelector('span[aria-hidden]')).not.toBeNull()
+  })
+
+  it('renders the sending echo’s attachments straight from the preview URLs (#77)', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { getByAltText, getByText } = render(<MarkdownComposer {...chainProps({
+      session: queueSession({
+        pendingSubmissions: [{
+          requestId: 'r9',
+          placement: 'queued',
+          time: 0,
+          text: '还在路上',
+          attachments: [
+            { type: 'image', value: { previewUrl: 'blob:echo' } },
+            { type: 'file', value: { attachmentId: 'f1', name: 'a.txt', bytes: 8 } },
+          ],
+        }],
+      }),
+    })} />)
+    // The echo's local preview URL is the submitter's — rendered directly,
+    // no loader round-trip (native pendingQueue parity).
+    expect(getByAltText(en['queue.image'])).toHaveAttribute('src', 'blob:echo')
+    expect(getByText('a.txt')).toBeInTheDocument()
+    expect(getByText(en['queue.sending'])).toBeInTheDocument()
   })
 })
 
