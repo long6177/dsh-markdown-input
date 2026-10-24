@@ -17,7 +17,10 @@
  * Caching and invalidation mirror the host source: one list per session,
  * dropped by the forwarded `agent-preset/selected` (a preset switch
  * recomposes which skill providers its agent reads) and `connection/reset`.
- * A failed read leaves the session uncached so a later ensure retries.
+ * A failed read is never a poisoned key: the session publishes an EMPTY roll
+ * (the native source-failed shape — the `/` popup removes the skill group
+ * instead of pending forever) while the failure marker itself makes the next
+ * ensure retry the read.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { RemoteResult } from './command-face.ts'
@@ -56,7 +59,8 @@ export interface SkillFace {
    * The session's full catalog, cached or freshly fetched (the chip
    * activation's read, #75): resolves the cached entries, or one shared
    * fetch that also publishes the lexicon store. A failed read resolves
-   * `undefined` and leaves the session uncached (a later call retries).
+   * `undefined` and marks the session failed (#76 — an empty roll is
+   * published; a later call retries).
    */
   catalog(sessionId: SessionId): Promise<readonly SkillEntry[] | undefined>
 }
@@ -129,6 +133,10 @@ export function skillFace(): SkillFace | undefined {
 function createFace(surfaces: SkillSurfaces): SkillFace {
   let snapshot: SkillLexiconState = { value: new Map() }
   const inFlight = new Map<SessionId, Promise<readonly SkillEntry[] | undefined>>()
+  // Sessions whose latest read failed: the published roll is empty (the
+  // popup's failed-group removal, #76) and the marker lets a later ensure
+  // retry — never a poisoned key.
+  const failed = new Set<SessionId>()
   const listeners = new Set<() => void>()
   const store: ObservableSource<SkillLexiconState> = {
     subscribe(listener: () => void): () => void {
@@ -143,18 +151,44 @@ function createFace(surfaces: SkillSurfaces): SkillFace {
     snapshot = next
     for (const listener of [...listeners]) listener()
   }
+  function publishFailure(sessionId: SessionId): void {
+    failed.add(sessionId)
+    // Publish only on a change: an already-empty roll stays put (a failing
+    // retry must not loop the invalidation subscribers).
+    if (snapshot.value.get(sessionId)?.length !== 0) {
+      publish({ value: new Map(snapshot.value).set(sessionId, []) })
+    }
+  }
   /** One shared read per session: concurrent callers ride the same promise. */
   function read(sessionId: SessionId): Promise<readonly SkillEntry[] | undefined> {
     const existing = inFlight.get(sessionId)
     if (existing !== undefined) return existing
     const promise = (async (): Promise<readonly SkillEntry[] | undefined> => {
       try {
-        const result = await surfaces.skills.list({ sessionId })
-        if (!result.ok) return undefined // uncached: the `/` arm stays plain, a later read retries
+        let result: Awaited<ReturnType<SkillsRemoteFace['list']>> | 'rejected'
+        try {
+          const answered = await surfaces.skills.list({ sessionId })
+          // A malformed answer (an undefined or non-RemoteResult body from a
+          // degraded bridge) reads as a failed pull, never a crash into the
+          // card — the shape check keeps the old silent-tolerance contract.
+          result = answered !== null && typeof answered === 'object'
+            && typeof (answered as { ok?: unknown }).ok === 'boolean'
+            ? answered as Awaited<ReturnType<SkillsRemoteFace['list']>>
+            : 'rejected'
+        } catch {
+          result = 'rejected'
+        }
+        if (result === 'rejected' || !result.ok) {
+          // The failed session publishes an EMPTY roll (the native
+          // source-failed shape — the `/` popup removes the skill group
+          // instead of pending forever, #76); the failure marker makes the
+          // next ensure/catalog retry — never a poisoned key.
+          publishFailure(sessionId)
+          return undefined
+        }
+        failed.delete(sessionId)
         publish({ value: new Map(snapshot.value).set(sessionId, result.value.skills) })
         return result.value.skills
-      } catch {
-        return undefined
       } finally {
         inFlight.delete(sessionId)
       }
@@ -163,22 +197,29 @@ function createFace(surfaces: SkillSurfaces): SkillFace {
     return promise
   }
   function ensure(sessionId: SessionId): void {
-    if (snapshot.value.has(sessionId) || inFlight.has(sessionId)) return
+    // A healthy cached session is served from the cache; a failed one (or an
+    // unknown one) reads — the retry path (#76), never a poisoned key.
+    if (snapshot.value.has(sessionId) && !failed.has(sessionId)) return
+    if (inFlight.has(sessionId)) return
     void read(sessionId)
   }
   async function catalog(sessionId: SessionId): Promise<readonly SkillEntry[] | undefined> {
     const cached = snapshot.value.get(sessionId)
-    if (cached !== undefined) return cached
+    // A failed session's cached empty roll is not a verdict (#76): the
+    // activation's read retries instead of serving the failure.
+    if (cached !== undefined && !failed.has(sessionId)) return cached
     return read(sessionId)
   }
   function dropSession(sessionId: SessionId): void {
-    if (!snapshot.value.has(sessionId)) return
+    if (!snapshot.value.has(sessionId) && !failed.has(sessionId)) return
     const next = new Map(snapshot.value)
     next.delete(sessionId)
+    failed.delete(sessionId)
     publish({ value: next })
   }
   function dropAll(): void {
-    if (snapshot.value.size === 0) return
+    if (snapshot.value.size === 0 && failed.size === 0) return
+    failed.clear()
     publish({ value: new Map() })
   }
   // The forwarded events mirror the host source's invalidation channels;

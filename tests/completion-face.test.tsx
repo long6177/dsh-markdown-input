@@ -92,6 +92,16 @@ function stubEditor() {
   }
 }
 
+/** The six first-party host descriptors the real catalog carries (#76 AC3). */
+const HOST_BUILTINS = [
+  { definitionId: '@deepseek-ai/dsh-command-goal', name: 'goal', description: 'Set or view the goal', input: { hint: '[<objective>|clear]' } },
+  { definitionId: '@deepseek-ai/dsh-plan-mode', name: 'plan', description: 'Enter or leave plan mode', input: { hint: '[off|message]' } },
+  { definitionId: '@deepseek-ai/dsh-command-feedback', name: 'feedback', description: 'Record feedback', input: { hint: '<text>' } },
+  { definitionId: '@deepseek-ai/dsh-command-compact', name: 'compact', description: 'Compact older conversation history' },
+  { definitionId: '@deepseek-ai/dsh-permission-presets', name: 'permission', description: 'Switch the permission preset', input: { hint: '<preset>' } },
+  { definitionId: '@deepseek-ai/dsh-session-log-export', name: 'export', description: 'Download this Session log as a ZIP archive' },
+]
+
 interface MountOptions {
   sessionId?: string | undefined
   locale?: 'zh' | 'en'
@@ -106,6 +116,18 @@ interface MountOptions {
   executeResult?: unknown
   /** Landed skill roll; absent = the lexicon read stays pending (skeleton). */
   skills?: readonly { name: string, description?: string, modelInvocable?: boolean }[]
+  /** Reject the skills/list read (the failed-group-removal shape, #76 AC1). */
+  skillsReject?: unknown
+  /** Override the whole skills/list mock (deferred tests drive it by hand). */
+  skillList?: ReturnType<typeof vi.fn>
+  /** Landed command catalog; absent = the host built-ins land (#76 AC3). */
+  catalog?: readonly Record<string, unknown>[]
+  /** Keep the catalog read pending (the popup shows the pending group). */
+  catalogPending?: boolean
+  /** Reject the commands/list read (the failed-group-removal shape, #76 AC3). */
+  catalogReject?: unknown
+  /** The session snapshot's subagent share (native short-circuit, #76 AC4). */
+  subagent?: unknown
 }
 
 function mountFace(options: MountOptions = {}) {
@@ -113,26 +135,47 @@ function mountFace(options: MountOptions = {}) {
   const onPickFiles = vi.fn()
   const registerClose = vi.fn()
   const onOpen = vi.fn()
-  // The command catalog read stays pending: the popup shows the static
-  // fallback rows deterministically.
+  // The forwarded-event listeners are captured so tests can fire the
+  // invalidation events the faces subscribe to (#76 AC3).
+  const eventListeners = new Map<string, Array<(...args: unknown[]) => void>>()
+  const $on = vi.fn((event: string, listener: (...args: unknown[]) => void) => {
+    const bucket = eventListeners.get(event) ?? []
+    bucket.push(listener)
+    eventListeners.set(event, bucket)
+    return () => {
+      const at = bucket.indexOf(listener)
+      if (at >= 0) bucket.splice(at, 1)
+    }
+  })
   const commandExecute = vi.fn(() => Promise.resolve(options.executeResult ?? {
     ok: true, value: { commandId: 'c1', result: { kind: 'success' } },
   }))
+  // The catalog read lands the host built-ins by default: the popup rows are
+  // the real catalog's (the static fallback never serves the popup, #76 AC3).
+  const commandList = vi.fn(() => {
+    if (options.catalogReject !== undefined) return Promise.reject(options.catalogReject)
+    if (options.catalogPending === true) return new Promise(() => {})
+    return Promise.resolve({ ok: true, value: options.catalog ?? HOST_BUILTINS })
+  })
   setCommandSource(() => ({
     commands: {
-      list: vi.fn(() => new Promise(() => {})),
+      list: commandList,
       execute: commandExecute,
     },
-    remoteEvents: { $on: vi.fn(() => () => {}) },
+    remoteEvents: { $on },
   }))
+  const skillList = options.skillList ?? vi.fn(() => {
+    if (options.skillsReject !== undefined) return Promise.reject(options.skillsReject)
+    if (options.skills === undefined) return new Promise(() => {})
+    return Promise.resolve({ ok: true, value: { skills: options.skills } })
+  })
   setSkillSource(() => ({
-    skills: {
-      list: options.skills === undefined
-        ? vi.fn(() => new Promise(() => {}))
-        : vi.fn(() => Promise.resolve({ ok: true, value: { skills: options.skills! } })),
-    },
-    remoteEvents: { $on: vi.fn(() => () => {}) },
+    skills: { list: skillList },
+    remoteEvents: { $on },
   }))
+  const fire = (event: string, ...args: unknown[]): void => {
+    for (const listener of eventListeners.get(event) ?? []) listener(...args)
+  }
   const fileSearch = options.fileSearch ?? vi.fn(() => Promise.resolve({
     ok: true,
     value: options.fileResults ?? [
@@ -168,6 +211,7 @@ function mountFace(options: MountOptions = {}) {
     onError,
     registerClose,
     onOpen,
+    ...(options.subagent === undefined ? {} : { subagent: options.subagent }),
   } as unknown as CompletionFaceProps
   const view = render(
     <div ref={containerRef as never} data-composer-card>
@@ -176,7 +220,10 @@ function mountFace(options: MountOptions = {}) {
       </FaceGate>
     </div>,
   )
-  return { view, onError, onPickFiles, registerClose, onOpen, handler, emit, dispatch, fileSearch, sessionSearch, commandExecute, editor }
+  return {
+    view, onError, onPickFiles, registerClose, onOpen, handler, emit, dispatch, fileSearch,
+    sessionSearch, commandExecute, commandList, skillList, fire, editor,
+  }
 }
 
 function listbox(): HTMLElement | null {
@@ -274,6 +321,19 @@ describe('CompletionFace open/close contract', () => {
     await waitFor(() => expect(listbox()).not.toBeNull())
   })
 
+  it('keeps no dismissed memory when the + menu interlock closes the popup', async () => {
+    const { emit, registerClose } = mountFace()
+    await openSlash(emit)
+    const interlockClose = registerClose.mock.calls.at(-1)?.[0] as (() => void) | undefined
+    expect(typeof interlockClose).toBe('function')
+    await act(async () => { interlockClose?.() })
+    expect(listbox()).toBeNull()
+    // The same token re-tracks open: the interlock close never remembered
+    // (native toggleSource's open path writes no dismissed memory, #76 AC6).
+    await act(async () => { emit(probe({ trigger: '/', query: '', start: 0, end: 1 })) })
+    await waitFor(() => expect(listbox()).not.toBeNull())
+  })
+
   it('applies the guard tiers (claimed suppresses /, frozen suppresses both)', async () => {
     const claimed = mountFace({ guard: 'claimed' })
     await act(async () => { claimed.emit(probe({ trigger: '/' })) })
@@ -288,14 +348,104 @@ describe('CompletionFace open/close contract', () => {
 })
 
 describe('CompletionFace / popup', () => {
-  it('shows the sectioned fallback rows and the pending skill skeleton at the empty query', async () => {
+  it('shows the landed catalog rows and the pending skill skeleton at the empty query', async () => {
     const { emit } = mountFace()
     await openSlash(emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     expect(sectionTitles()).toEqual(['添加', '指令'])
     expect(groupTitles()).toEqual(['技能'])
     expect(document.querySelector('[data-completion-loading]')).not.toBeNull()
     const names = options().map((row) => row.getAttribute('data-completion-option'))
     expect(names.slice(0, 4)).toEqual(['file', 'goal', 'plan', 'feedback'])
+  })
+
+  it('shows a pending command group instead of static rows while the catalog read is in flight', async () => {
+    const { emit } = mountFace({ catalogPending: true })
+    await openSlash(emit)
+    // The popup never falls back to the synthetic catalog (#76 AC3): both
+    // reads pending → skeletons only, no candidate rows.
+    expect(options()).toEqual([])
+    expect(document.querySelectorAll('[data-completion-loading]')).toHaveLength(2)
+  })
+
+  it('removes the command group when the catalog read fails (no static fallback in the popup)', async () => {
+    const { emit } = mountFace({ catalogReject: new Error('boom'), skills: [{ name: 'core-review' }] })
+    await act(async () => { emit(probe({ trigger: '/', query: 'core', start: 0, end: 5 })) })
+    // The failed command group is removed (native source-failed): no rows,
+    // no skeleton, no static stand-in — the popup serves the surviving skill
+    // group alone.
+    await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+    expect(options().map((row) => row.getAttribute('data-completion-option'))).toEqual(['core-review'])
+    expect(groupTitles()).toEqual(['技能'])
+  })
+
+  it('keeps serving the landed catalog through a soft invalidation and swaps when the repull lands', async () => {
+    const { emit, commandList, fire } = mountFace({ catalog: [{ name: 'custom', description: 'A custom command' }] })
+    await openSlash(emit)
+    await waitFor(() => expect(options().map((row) => row.getAttribute('data-completion-option'))).toContain('custom'))
+    commandList.mockReturnValue(Promise.resolve({
+      ok: true,
+      value: [{ definitionId: '@deepseek-ai/dsh-command-compact', name: 'compact', description: 'Compact' }],
+    }))
+    fire('commands/change')
+    // In-place repull (native invalidateAll): the landed rows keep serving —
+    // no synthetic fallback, no empty flash.
+    expect(options().map((row) => row.getAttribute('data-completion-option'))).toContain('custom')
+    await waitFor(() => expect(options().map((row) => row.getAttribute('data-completion-option'))).toContain('compact'))
+    expect(options().map((row) => row.getAttribute('data-completion-option'))).not.toContain('custom')
+  })
+
+  it('drops to the pending group after a preset switch and recovers when the prewarm lands', async () => {
+    const { emit, commandList, fire } = mountFace({ catalog: [{ name: 'custom', description: 'A custom command' }] })
+    await openSlash(emit)
+    await waitFor(() => expect(options().map((row) => row.getAttribute('data-completion-option'))).toContain('custom'))
+    commandList.mockImplementationOnce(() => new Promise((resolve) => {
+      // Resolved below: the prewarmed read lands the fresh catalog.
+      resolve({ ok: true, value: [{ definitionId: '@deepseek-ai/dsh-command-compact', name: 'compact', description: 'Compact' }] })
+    }))
+    fire('agent-preset/selected', 's1')
+    // Hard invalidation (native resetSession): the snapshot drops, the popup
+    // pends — never the synthetic catalog.
+    await waitFor(() => { expect(options()).toEqual([]) })
+    expect(document.querySelector('[data-completion-loading]')).not.toBeNull()
+    await waitFor(() => expect(options().map((row) => row.getAttribute('data-completion-option'))).toContain('compact'))
+  })
+
+  it('removes the skill group when the lexicon read fails and keeps the keyboard live', async () => {
+    const { emit, handler, onPickFiles } = mountFace({ skillsReject: new Error('boom') })
+    await openSlash(emit)
+    await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+    // The failed group is removed (native source-failed): no title, no
+    // skeleton — never a permanent pending (#76 AC1).
+    expect(groupTitles()).toEqual([])
+    // Enter picks the highlighted command row immediately.
+    await act(async () => { handler()?.('pick') })
+    expect(onPickFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it('auto-closes when the lexicon failed and no command matches the query', async () => {
+    let rejectSkills: ((reason: unknown) => void) | undefined
+    const skillList = vi.fn(() => new Promise((_resolve, reject) => { rejectSkills = reject }))
+    const { emit } = mountFace({ skillList })
+    await openSlash(emit, 'zzz')
+    // Command group ready-empty; the skill read still pending: the popup
+    // holds (a pending group is not an empty surface).
+    await waitFor(() => expect(document.querySelector('[data-completion-loading]')).not.toBeNull())
+    await act(async () => { rejectSkills?.(new Error('boom')) })
+    // Both groups settle empty → the popup closes (host all-ready-empty rule).
+    await waitFor(() => expect(listbox()).toBeNull())
+  })
+
+  it('re-pulls the lexicon read on the next popup open after a failure', async () => {
+    const { emit, skillList } = mountFace({ skillsReject: new Error('boom') })
+    await openSlash(emit)
+    await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+    const afterFirst = skillList.mock.calls.length
+    // Close and re-track the token: the failed read retries (never a
+    // poisoned key, #76 AC1).
+    await act(async () => { emit(null) })
+    await openSlash(emit, 'x', { start: 0, end: 2 })
+    await waitFor(() => expect(skillList.mock.calls.length).toBeGreaterThan(afterFirst))
   })
 
   it('swaps in the landed skill roll under its group title', async () => {
@@ -314,7 +464,9 @@ describe('CompletionFace / popup', () => {
     const { emit } = mountFace({ skills: [{ name: 'core-review', description: 'Review the core' }] })
     await openSlash(emit, 'co')
     await waitFor(() => {
-      expect(options().map((row) => row.getAttribute('data-completion-option'))).toContain('core-review')
+      const names = options().map((row) => row.getAttribute('data-completion-option'))
+      expect(names).toContain('core-review')
+      expect(names).toContain('compact')
     })
     expect(sectionTitles()).toEqual([])
     expect(groupTitles()).toEqual(['指令', '技能'])
@@ -331,9 +483,37 @@ describe('CompletionFace / popup', () => {
       emit(probe({ trigger: '/', query: '', position: 'inline', start: 4, end: 5 }))
     })
     await waitFor(() => expect(listbox()).not.toBeNull())
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     const names = options().map((row) => row.getAttribute('data-completion-option'))
     expect(names).not.toContain('goal')
     expect(names).toContain('compact')
+  })
+
+  it('picks the highlighted row while another group is still pending (no double-Enter stall)', async () => {
+    // Native arbitrate: readiness is judged on the highlighted row's OWN
+    // group — a pending skill group must not consume the gesture (#76 AC2).
+    const { emit, handler, onPickFiles } = mountFace()
+    await openSlash(emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
+    await act(async () => { handler()?.('pick') })
+    // The file row (highlight 0) picked at once: no first-Enter swallow.
+    expect(onPickFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it('short-circuits the catalog and lexicon for a subagent session (no rows, no RPC)', async () => {
+    // Native subagent parity (#76 AC4): the command catalog and the skill
+    // source short-circuit before any RPC; the empty candidate surface
+    // auto-closes — the popup never floats and never leaks catalog rows.
+    const { emit, commandList, skillList, onOpen } = mountFace({ subagent: { address: { mode: 'nested' } } })
+    await act(async () => { emit(probe({ trigger: '/' })) })
+    await new Promise((resolve) => { setTimeout(resolve, 20) })
+    expect(listbox()).toBeNull()
+    expect(document.querySelector('[data-completion-menu]')).toBeNull()
+    expect(commandList).not.toHaveBeenCalled()
+    expect(skillList).not.toHaveBeenCalled()
+    // The open path ran (the interlock fired) — the close is the empty
+    // surface's own answer, not a guard refusal.
+    expect(onOpen).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -483,7 +663,7 @@ describe('CompletionFace keyboard', () => {
     await act(async () => { handler()?.('down') })
     expect(listbox()?.getAttribute('aria-activedescendant')).toBe('dsh-mdx-option-command-1')
     // ↑ from the head wraps to the tail — the flat space's last row (the
-    // skill roll's single entry).
+    // catalog's export row; the skill roll is still pending here).
     const lastRow = options()[options().length - 1]!
     await act(async () => { handler()?.('up') })
     await act(async () => { handler()?.('up') })
@@ -507,7 +687,7 @@ describe('CompletionFace keyboard', () => {
 })
 
 describe('CompletionFace picks', () => {
-  it('picks a file row by inserting the wire mention over the token span', async () => {
+  it('picks a file row by inserting the wire mention with its separating space', async () => {
     const { emit, dispatch } = mountFace()
     await openAt(emit, 'sr')
     await waitFor(() => expect(options()).toHaveLength(2))
@@ -516,7 +696,9 @@ describe('CompletionFace picks', () => {
     expect(fireEvent.mouseDown(fileRow, { cancelable: true })).toBe(false)
     expect(dispatch).toHaveBeenCalledTimes(1)
     const spec = dispatch.mock.calls[0]![0] as { changes: { from: number; to: number; insert: string } }
-    expect(spec.changes).toEqual({ from: 2, to: 4, insert: '@src/index.ts' })
+    // The tail rule (native runtime.ts): one separating space — the mention
+    // never glues to the next keystroke (#76 AC7).
+    expect(spec.changes).toEqual({ from: 2, to: 4, insert: '@src/index.ts ' })
     expect(listbox()).toBeNull()
   })
 
@@ -559,7 +741,7 @@ describe('CompletionFace picks', () => {
     await waitFor(() => expect(options()).toHaveLength(1))
     fireEvent.mouseDown(options()[0])
     const spec = dispatch.mock.calls[0]![0] as { changes: { insert: string } }
-    expect(spec.changes.insert).toBe('@"my docs/report.pdf"')
+    expect(spec.changes.insert).toBe('@"my docs/report.pdf" ')
   })
 
   it('inserts a skill token with its trailing space', async () => {
@@ -575,12 +757,14 @@ describe('CompletionFace picks', () => {
   it('picks a claim row at the leading position; inline assemblies drop the rows', async () => {
     const leading = mountFace()
     await openSlash(leading.emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     const goal = options().find((row) => row.getAttribute('data-completion-option') === 'goal')!
     fireEvent.mouseDown(goal)
     expect(leading.editor.claimSelection).toHaveBeenCalledWith('/目标 ')
     cleanup()
     const inline = mountFace()
     await openSlash(inline.emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     const compact = options().find((row) => row.getAttribute('data-completion-option') === 'compact')!
     fireEvent.mouseDown(compact)
     expect(inline.editor.claimSelection).not.toHaveBeenCalled()
@@ -591,6 +775,7 @@ describe('CompletionFace picks', () => {
       executeResult: { ok: false, error: { code: 'session/writer-held', message: 'busy' } },
     })
     await openSlash(emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     const compact = options().find((row) => row.getAttribute('data-completion-option') === 'compact')!
     fireEvent.mouseDown(compact)
     await waitFor(() => expect(commandExecute).toHaveBeenCalledWith('s1', '/compact', []))
@@ -607,9 +792,9 @@ describe('CompletionFace picks', () => {
       // The popup faces are alive at assembly: the chainable rows render.
       const { emit } = mountFace()
       await openSlash(emit)
-      const model = options().find((row) => row.getAttribute('data-completion-option') === 'model')
-      expect(model).not.toBeNull()
-      fireEvent.mouseDown(model!)
+      await waitFor(() => expect(options().some((row) => row.getAttribute('data-completion-option') === 'model')).toBe(true))
+      const model = options().find((row) => row.getAttribute('data-completion-option') === 'model')!
+      fireEvent.mouseDown(model)
       expect(opened).toEqual(['model'])
       expect(listbox()).toBeNull()
     } finally {
@@ -621,6 +806,7 @@ describe('CompletionFace picks', () => {
   it('rides the hidden file input for the file action row', async () => {
     const { emit, onPickFiles } = mountFace()
     await openSlash(emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     const fileRow = options().find((row) => row.getAttribute('data-completion-option') === 'file')!
     fireEvent.mouseDown(fileRow)
     expect(onPickFiles).toHaveBeenCalledTimes(1)
@@ -639,26 +825,39 @@ describe('CompletionFace picks', () => {
 })
 
 describe('CompletionFace feedback decoration (#35)', () => {
-  it('opens the session dialog on a mouse pick instead of inserting a token', async () => {
-    // The native decoration (ui-message-feedback index.ts:139): a bare row
-    // pick opens the session feedback dialog and lands NOTHING in the draft.
+  it('consumes the trigger token and opens the session dialog on a mouse pick', async () => {
+    // The native decoration invoke (service.ts): consume the token via the
+    // span CAS first, then run — the draft carries no /fee fragment after,
+    // and the popup closes with the consumption (#76 AC5).
     const openSession = withFeedbackUi()
-    const { emit, dispatch } = mountFace()
-    await openSlash(emit)
-    expect(fireEvent.mouseDown(feedbackOption(), { cancelable: true })).toBe(false)
-    expect(openSession).toHaveBeenCalledWith('s1')
-    expect(dispatch).not.toHaveBeenCalled()
-    expect(listbox()).toBeNull()
+    stubSources([])
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
+    try {
+      await act(async () => { handle.setText('/fee') })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      await waitFor(() => {
+        expect(options().some((row) => row.getAttribute('data-completion-option') === 'feedback')).toBe(true)
+      })
+      fireEvent.mouseDown(options().find((row) => row.getAttribute('data-completion-option') === 'feedback')!)
+      await waitFor(() => expect(openSession).toHaveBeenCalledWith('s1'))
+      expect(handle.getText()).toBe('')
+      expect(listbox()).toBeNull()
+    } finally {
+      handle.destroy()
+    }
   })
 
   it('picks the action through the key seam as well', async () => {
     const openSession = withFeedbackUi()
-    // A landed skill roll keeps the view non-pending: Enter then picks the
-    // highlighted row instead of being consumed by the refinement.
+    // A landed (empty) skill roll and catalog keep the view non-pending:
+    // Enter then picks the highlighted row instead of being consumed by the
+    // refinement.
     const { emit, handler, dispatch } = mountFace({ skills: [] })
     await openSlash(emit, 'fee')
-    await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
-    expect(options().map((row) => row.getAttribute('data-completion-option'))).toEqual(['feedback'])
+    await waitFor(() => {
+      expect(options().map((row) => row.getAttribute('data-completion-option'))).toEqual(['feedback'])
+    })
     await act(async () => { handler()?.('pick') })
     expect(openSession).toHaveBeenCalledWith('s1')
     expect(dispatch).not.toHaveBeenCalled()
@@ -668,6 +867,7 @@ describe('CompletionFace feedback decoration (#35)', () => {
   it('degrades to the claim row on a host without the feedbackUi service', async () => {
     const { emit, dispatch, editor } = mountFace()
     await openSlash(emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     fireEvent.mouseDown(feedbackOption())
     // Today's shape: the pick inserts the localized claim token over the span
     // (the claim path rides claimSelection, never a direct dispatch).
@@ -680,6 +880,7 @@ describe('CompletionFace feedback decoration (#35)', () => {
     withFeedbackUi()
     const { emit, dispatch } = mountFace()
     await openSlash(emit)
+    await waitFor(() => expect(options().length).toBeGreaterThan(0))
     setFeedbackSource(() => undefined)
     expect(() => { fireEvent.mouseDown(feedbackOption()) }).not.toThrow()
     expect(dispatch).not.toHaveBeenCalled()
@@ -702,14 +903,18 @@ function mountRealEditor(): MarkdownEditorHandle {
 }
 
 /**
- * The three data planes behind the popup, with the catalog read left pending
- * (the static fallback rows) and the skill lexicon pending unless a roll is
- * given — a landed roll keeps the view's pending flag down, which the key
- * seam's Enter pick requires (a pending refinement consumes Enter by design).
+ * The three data planes behind the popup, with the catalog read landing the
+ * host built-ins (#76 AC3: the popup never serves the static fallback) and
+ * the skill lexicon pending unless a roll is given — a landed roll keeps the
+ * view's pending flag down, which the key seam's Enter pick requires (a
+ * pending refinement consumes Enter by design).
  */
 function stubSources(skills?: readonly { name: string, description?: string, modelInvocable?: boolean }[]): void {
   setCommandSource(() => ({
-    commands: { list: vi.fn(() => new Promise(() => {})), execute: vi.fn() },
+    commands: {
+      list: vi.fn(() => Promise.resolve({ ok: true, value: HOST_BUILTINS })),
+      execute: vi.fn(),
+    },
     remoteEvents: { $on: vi.fn(() => () => {}) },
   }))
   setSkillSource(() => ({
@@ -790,10 +995,34 @@ describe('CompletionFace real-surface linkage (T9)', () => {
       await waitFor(() => expect(listbox()).not.toBeNull())
       fireEvent.mouseDown(options()[0])
       await waitFor(() => {
-        expect(handle.getText()).toBe('see @src/index.ts')
+        expect(handle.getText()).toBe('see @src/index.ts ')
         expect(document.querySelector('.cm-mdx-ref-file')).not.toBeNull()
       })
       expect(listbox()).toBeNull()
+    } finally {
+      handle.destroy()
+    }
+  })
+
+  it('does not double the space when the draft already has one after the token', async () => {
+    setCommandSource(() => undefined)
+    setSkillSource(() => undefined)
+    setFileReferenceSource(() => ({
+      fileReferences: {
+        list: vi.fn(() => Promise.resolve({ ok: true, value: [{ path: 'src/index.ts', kind: 'file' }] })),
+      },
+    }))
+    const handle = mountRealEditor()
+    mountOverRealEditor(handle)
+    try {
+      await act(async () => { handle.setText('see @in tail') })
+      // The caret rides to the token end (before the existing space).
+      await act(async () => { handle.view.dispatch({ selection: { anchor: 7 } }) })
+      await waitFor(() => expect(listbox()).not.toBeNull())
+      await waitFor(() => expect(options()).toHaveLength(1))
+      fireEvent.mouseDown(options()[0])
+      // The tail rule: the span is already followed by a space — no second.
+      await waitFor(() => expect(handle.getText()).toBe('see @src/index.ts tail'))
     } finally {
       handle.destroy()
     }
@@ -811,6 +1040,9 @@ describe('CompletionFace real-surface claim dispatch (#28)', () => {
       // real-host defect). The guard must read the probe's token position.
       await act(async () => { handle.setText('/p') })
       await waitFor(() => expect(listbox()).not.toBeNull())
+      await waitFor(() => {
+        expect(options().some((row) => row.getAttribute('data-completion-option') === 'plan')).toBe(true)
+      })
       const plan = options().find((row) => row.getAttribute('data-completion-option') === 'plan')!
       fireEvent.mouseDown(plan)
       expect(handle.getText()).toBe('/计划 ')
@@ -827,7 +1059,7 @@ describe('CompletionFace real-surface claim dispatch (#28)', () => {
     try {
       await act(async () => { handle.setText('/') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+      await waitFor(() => expect(options().length).toBeGreaterThan(1))
       const content = handle.view.contentDOM
       // Real-keystroke pacing: each keydown is its own task, so the highlight
       // commit (and its ref mirror) lands before Enter reads it.
@@ -852,6 +1084,9 @@ describe('CompletionFace real-surface claim dispatch (#28)', () => {
       const off = registerChainPopup('model', () => false)
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
+      await waitFor(() => {
+        expect(options().some((row) => row.getAttribute('data-completion-option') === 'model')).toBe(true)
+      })
       const model = options().find((row) => row.getAttribute('data-completion-option') === 'model')!
       fireEvent.mouseDown(model)
       expect(listbox()).toBeNull()
@@ -901,7 +1136,9 @@ describe('CompletionFace real-surface claim dispatch (#28)', () => {
     try {
       await act(async () => { handle.setText('/fee') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      await waitFor(() => expect(document.querySelector('[data-completion-loading]')).toBeNull())
+      await waitFor(() => {
+        expect(options().some((row) => row.getAttribute('data-completion-option') === 'feedback')).toBe(true)
+      })
       const feedback = options().find((row) => row.getAttribute('data-completion-option') === 'feedback')!
       fireEvent.mouseDown(feedback)
       expect(handle.getText()).toBe('/反馈 ')
@@ -1032,7 +1269,10 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
   }
 
   /** Pick the chainable model row through the full pointer sequence of a click. */
-  function chainIntoModelCard(): void {
+  async function chainIntoModelCard(): Promise<void> {
+    await waitFor(() => {
+      expect(options().some((row) => row.getAttribute('data-completion-option') === 'model')).toBe(true)
+    })
     const model = options().find((row) => row.getAttribute('data-completion-option') === 'model')!
     fireEvent.pointerDown(model)
     fireEvent.mouseDown(model)
@@ -1057,7 +1297,7 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
     try {
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      chainIntoModelCard()
+      await chainIntoModelCard()
       await waitFor(() => expect(chainCard()).not.toBeNull())
       // The card is open and the token is untouched: only a SUCCESSFUL
       // selection consumes it.
@@ -1079,7 +1319,7 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
     try {
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      chainIntoModelCard()
+      await chainIntoModelCard()
       await pickModelInCard('GPT-5')
       await waitFor(() => expect(select).toHaveBeenCalledOnce())
       await waitFor(() => expect(document.body.textContent).toContain(modelZh['error.sessionInUse']))
@@ -1094,7 +1334,7 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
     try {
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      chainIntoModelCard()
+      await chainIntoModelCard()
       await waitFor(() => expect(chainCard()).not.toBeNull())
       fireEvent.keyDown(chainCard()!, { key: 'Escape' })
       await waitFor(() => expect(chainCard()).toBeNull())
@@ -1109,7 +1349,7 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
     try {
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      chainIntoModelCard()
+      await chainIntoModelCard()
       await waitFor(() => expect(chainCard()).not.toBeNull())
       fireEvent.pointerDown(document.body)
       await waitFor(() => expect(chainCard()).toBeNull())
@@ -1124,7 +1364,7 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
     try {
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      chainIntoModelCard()
+      await chainIntoModelCard()
       await waitFor(() => expect(chainCard()).not.toBeNull())
       // Dismiss the chain: its unused settle hook dies with the card, so the
       // later direct pick cannot consume the stale trigger token.
@@ -1145,7 +1385,7 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
     try {
       await act(async () => { handle.setText('/mo') })
       await waitFor(() => expect(listbox()).not.toBeNull())
-      chainIntoModelCard()
+      await chainIntoModelCard()
       await waitFor(() => expect(chainCard()).not.toBeNull())
       // The draft moved on while the card was open (a seeded draft, a session
       // switch): the pick-time span no longer carries the snapshot.
@@ -1197,6 +1437,9 @@ describe('CompletionFace chain settle consumes the typed trigger (#36)', () => {
       await waitFor(() => expect(document.querySelector('button[data-permission-pill]')).not.toBeNull())
       await act(async () => { handle.setText('/per') })
       await waitFor(() => expect(listbox()).not.toBeNull())
+      await waitFor(() => {
+        expect(options().some((candidate) => candidate.getAttribute('data-completion-option') === 'permission')).toBe(true)
+      })
       const row = options().find((candidate) => candidate.getAttribute('data-completion-option') === 'permission')!
       fireEvent.mouseDown(row)
       const menu = await waitFor(() => {

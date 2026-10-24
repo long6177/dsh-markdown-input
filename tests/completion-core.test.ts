@@ -226,6 +226,18 @@ describe('assembleCompletionView — / trigger', () => {
       files: null, staleFiles: null, t: tZh,
     })).toBeNull()
   })
+
+  it('renders the command group pending while the catalog read is in flight (never the synthetic rows)', () => {
+    // The popup path: no landed catalog means the group pends (native
+    // directory semantics), it never falls back to the static catalog.
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '/', query: 'co' }), commandRows: [], catalogPending: true,
+      skills: [], files: null, staleFiles: null, t: tZh,
+    })
+    expect(view?.groups[0]).toMatchObject({ id: 'command', status: 'pending', title: '指令' })
+    expect(view?.groups[0]?.entries).toEqual([])
+    expect(view?.pending).toBe(true)
+  })
 })
 
 describe('assembleCompletionView — @ trigger', () => {

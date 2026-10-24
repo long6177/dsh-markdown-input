@@ -207,16 +207,23 @@ describe('commandFace catalog cache', () => {
     await vi.waitFor(() => expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(true))
   })
 
-  it('the commands/change event invalidates every session cache', async () => {
+  it('the commands/change event repulls every known session in place (the ready snapshot keeps serving)', async () => {
     const { surfaces, listeners } = bindSurfaces()
     const face = commandFace()
     face?.ensure('s1')
-    await vi.waitFor(() => expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(true))
+    await vi.waitFor(() => expect(face?.catalogs.getSnapshot().value.get('s1')).toEqual([GOAL, COMPACT]))
+    // A newer catalog is on the wire when the soft invalidation fires.
+    surfaces.remote.commands.list.mockReturnValue(Promise.resolve({ ok: true, value: [COMPACT] }))
     fire(listeners, 'commands/change')
-    expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(false)
+    // In-place repull (native invalidateAll): the old snapshot keeps serving
+    // — no flash to the static fallback, no synthetic regression — and the
+    // fresh read lands over it.
+    expect(face?.catalogs.getSnapshot().value.get('s1')).toEqual([GOAL, COMPACT])
+    await vi.waitFor(() => expect(surfaces.remote.commands.list).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(face?.catalogs.getSnapshot().value.get('s1')).toEqual([COMPACT]))
   })
 
-  it('the agent-preset/selected event invalidates only that session', async () => {
+  it('the agent-preset/selected event drops that session and prewarms it (native resetSession)', async () => {
     const { surfaces, listeners } = bindSurfaces()
     const face = commandFace()
     face?.ensure('s1')
@@ -225,18 +232,47 @@ describe('commandFace catalog cache', () => {
       expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(true)
       expect(face?.catalogs.getSnapshot().value.has('s2')).toBe(true)
     })
+    surfaces.remote.commands.list.mockClear()
     fire(listeners, 'agent-preset/selected', 's1')
     expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(false)
     expect(face?.catalogs.getSnapshot().value.has('s2')).toBe(true)
+    // Immediate prewarm of the switched session only.
+    await vi.waitFor(() => expect(surfaces.remote.commands.list).toHaveBeenCalledTimes(1))
+    expect(surfaces.remote.commands.list).toHaveBeenCalledWith('s1')
   })
 
-  it('the connection/reset event invalidates every session cache', async () => {
-    const { listeners } = bindSurfaces()
+  it('the connection/reset event drops every session and prewarms the known ones (native resetConnected)', async () => {
+    const { surfaces, listeners } = bindSurfaces()
     const face = commandFace()
     face?.ensure('s1')
-    await vi.waitFor(() => expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(true))
+    face?.ensure('s2')
+    await vi.waitFor(() => {
+      expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(true)
+      expect(face?.catalogs.getSnapshot().value.has('s2')).toBe(true)
+    })
+    surfaces.remote.commands.list.mockClear()
     fire(listeners, 'connection/reset')
+    expect(face?.catalogs.getSnapshot().value.size).toBe(0)
+    await vi.waitFor(() => expect(surfaces.remote.commands.list).toHaveBeenCalledTimes(2))
+  })
+
+  it('a failed read marks the session failed (the popup removes the group) with no snapshot', async () => {
+    bindSurfaces({ listResult: { ok: false, error: { code: 'x/y', message: 'no' } } })
+    const face = commandFace()
+    expect(() => face?.ensure('s1')).not.toThrow()
+    await vi.waitFor(() => expect(face?.catalogs.getSnapshot().failed.has('s1')).toBe(true))
     expect(face?.catalogs.getSnapshot().value.has('s1')).toBe(false)
+  })
+
+  it('a later ensure retries a failed session (never a poisoned key)', async () => {
+    const { surfaces } = bindSurfaces({ listResult: { ok: false, error: { code: 'x/y', message: 'no' } } })
+    const face = commandFace()
+    face?.ensure('s1')
+    await vi.waitFor(() => expect(surfaces.remote.commands.list).toHaveBeenCalledOnce())
+    surfaces.remote.commands.list.mockReturnValue(Promise.resolve({ ok: true, value: [COMPACT] }))
+    face?.ensure('s1')
+    await vi.waitFor(() => expect(face?.catalogs.getSnapshot().value.get('s1')).toEqual([COMPACT]))
+    expect(face?.catalogs.getSnapshot().failed.has('s1')).toBe(false)
   })
 
   it('is one process-wide instance (every surface shares the cache)', () => {

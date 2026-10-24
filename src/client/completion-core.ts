@@ -242,8 +242,16 @@ export interface CompletionViewInput {
   /**
    * The assembled command rows (leading-filtered, availability-filtered —
    * the `+` menu's own assembly); null while the command plane is absent.
+   * The popup face passes [] while the catalog read is pending or failed —
+   * the popup path never falls back to the synthetic catalog.
    */
   readonly commandRows: readonly CommandMenuRow[] | null
+  /**
+   * True while the command catalog read is still in flight (no snapshot, no
+   * failure): the command group renders its pending skeleton — the native
+   * directory semantics, never a static stand-in.
+   */
+  readonly catalogPending?: boolean
   /** The session's skill roll; null while the lexicon read is pending. */
   readonly skills: readonly SkillEntry[] | null
   /** Landed candidates for the live query; null while none apply. */
@@ -367,7 +375,7 @@ function projectFiles(
  * plane (the popup face stays hidden — plain text input is unaffected).
  */
 export function assembleCompletionView(input: CompletionViewInput): CompletionView | null {
-  const { probe, commandRows, skills, files, staleFiles, t } = input
+  const { probe, commandRows, catalogPending = false, skills, files, staleFiles, t } = input
   // Undefined reads as an ABSENT plane (empty, group omitted): callers
   // without a session plane predate the session group. An explicit `null`
   // is the caller's pending marker (the fetch is in flight, nothing stale).
@@ -376,7 +384,16 @@ export function assembleCompletionView(input: CompletionViewInput): CompletionVi
   const sessionEnv: SessionRowEnvironment = input.sessionEnv ?? { sessionId: '', now: 0 }
   if (probe.trigger === '/') {
     if (commandRows === null) return null
-    const commandGroup: CompletionGroupView = probe.query === ''
+    const commandGroup: CompletionGroupView = catalogPending
+      ? {
+        id: 'command',
+        status: 'pending',
+        // The landed empty-query shape carries no group title (the rows are
+        // sectioned); the pending skeleton keeps that shape.
+        ...(probe.query === '' ? {} : { title: t('completion.group.command') }),
+        entries: [],
+      }
+      : probe.query === ''
       ? {
         id: 'command',
         status: 'ready',
