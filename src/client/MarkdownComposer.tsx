@@ -56,7 +56,7 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, PropsRuntime, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
-import { AgentPresetFace, agentPresetFaceDefinition } from './AgentPresetFace.tsx'
+import { AgentPresetFace, agentPresetFaceDefinition, agentPresetSeatPossible } from './AgentPresetFace.tsx'
 import {
   agentPresetLocale, agentPresetRefreshSubscribe, agentPresetsRemoteFace, developerToolsStore,
 } from './agent-preset-face.ts'
@@ -1432,12 +1432,12 @@ export function MarkdownComposer({
   // never resubscribes.
   const presetRefresh = agentPresetRefreshSubscribe()
   // #78: the preset seat judges its OWN availability — the roster verbs and
-  // the projection hook, the same two facts its FaceGate probes. The
+  // the projection hook, the two facts its FaceGate probes. The predicate is
+  // the face's OWN export (ADR-0005: the probe is not re-derived here); the
   // workspace row's capability verdict no longer takes it down: the native
   // hero's two seats are independent slot occupants, and a workspace-less
   // chain entry still offers the preset switch when ITS data plane is there.
-  const presetSeatPossible = agentPresetsRemote !== undefined
-    && typeof useProjection === 'function'
+  const presetSeatPossible = agentPresetSeatPossible(useProjection, agentPresetsRemote !== undefined)
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
   // the binding (registerFace latches per id, so a first render before apply's

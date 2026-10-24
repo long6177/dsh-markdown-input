@@ -58,6 +58,17 @@ import css from './MarkdownComposer.module.css'
 export const AGENT_PRESET_FACE_ID = 'hero.agentPreset'
 
 /**
+ * The seat's one availability predicate (ADR-0005): the roster verbs and the
+ * projection hook. The FaceGate probe and the card's own hero-row line read
+ * this SAME function, so the line never computes a second, drifting verdict.
+ * @param useProjection - the session projection hook as the chain delivers it.
+ * @param remotePresent - whether `ctx.remote.agentPresets` resolved.
+ */
+export function agentPresetSeatPossible(useProjection: unknown, remotePresent: boolean): boolean {
+  return remotePresent && typeof useProjection === 'function'
+}
+
+/**
  * The FaceGate definition of the Agent-preset seat: the projections it cannot
  * exist without — the remote verb surface and the projection seat. The roster
  * CONTENT is checked inside the face (it arrives asynchronously, and a probe
@@ -72,7 +83,7 @@ export function agentPresetFaceDefinition(
 ): FaceDefinition {
   return {
     id: AGENT_PRESET_FACE_ID,
-    probe: () => remotePresent && typeof useProjection === 'function',
+    probe: () => agentPresetSeatPossible(useProjection, remotePresent),
   }
 }
 
