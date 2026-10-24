@@ -523,6 +523,8 @@ export interface WindowStatsNode {
 
 /** One assistant step's derivable latency facts (host `StepReading`). */
 interface StepReading {
+  /** The whole step span (step start → completion); the window fold sums it. */
+  readonly llmMs: number | null
   readonly ttftMs: number | null
   readonly decodeMs: number | null
   readonly outputTokens: number | null
@@ -545,6 +547,7 @@ export function assistantStepReading(node: WindowStatsNode): StepReading {
   const stepStart = finiteNumber(timing?.stepStartTime)
   const firstToken = finiteNumber(timing?.firstTokenTime)
   const completed = finiteNumber(timing?.completedTime)
+  const llmMs = stepStart !== null && completed !== null ? Math.max(0, completed - stepStart) : null
   const ttftMs = stepStart !== null && firstToken !== null ? Math.max(0, firstToken - stepStart) : null
   const decodeMs = firstToken !== null && completed !== null ? Math.max(0, completed - firstToken) : null
   const usage = (typeof node.usage === 'object' && node.usage !== null)
@@ -554,7 +557,7 @@ export function assistantStepReading(node: WindowStatsNode): StepReading {
   const outputTokens = typeof rawOutput === 'number' && Number.isFinite(rawOutput) && rawOutput >= 0
     ? rawOutput
     : null
-  return { ttftMs, decodeMs, outputTokens }
+  return { llmMs, ttftMs, decodeMs, outputTokens }
 }
 
 /**
@@ -587,13 +590,10 @@ export function deriveStats(nodes: readonly WindowStatsNode[]): SessionStatsView
     const turn = finiteNumber(node.turn)
     if (turn !== null) turns.add(turn)
     steps += 1
-    const timing = (typeof node.timing === 'object' && node.timing !== null)
-      ? node.timing as Record<string, unknown>
-      : undefined
-    const stepStart = finiteNumber(timing?.stepStartTime)
-    const completed = finiteNumber(timing?.completedTime)
-    if (stepStart !== null && completed !== null) llmMs += Math.max(0, completed - stepStart)
+    // One extraction per step: assistantStepReading already parses the
+    // timing block; the fold reuses its whole-span figure.
     const reading = assistantStepReading(node)
+    if (reading.llmMs !== null) llmMs += reading.llmMs
     if (reading.ttftMs !== null) {
       ttftMs += reading.ttftMs
       ttftSteps += 1

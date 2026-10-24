@@ -9,7 +9,7 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { MarkdownUserMessage, type MarkdownSeatKind } from '../src/client/UserMessage.tsx'
 import { installClipboardStub } from './clipboard-stub.ts'
-import { resetReferenceLocale, setSummaryLocale } from '../src/client/reference-locale.ts'
+import { resetReferenceLocale, setOwnLocale } from '../src/client/reference-locale.ts'
 import { resetSessionsSource, setSessionsSource } from '../src/client/sessions-face.ts'
 import { resetSidebarRightFace, setSidebarRightSource } from '../src/client/sidebar-right-face.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
@@ -359,7 +359,7 @@ describe('MarkdownUserMessage reference summary line (#75)', () => {
   })
 
   it('resolves the fallback through the bound plugin dictionary (en words on an en page)', () => {
-    setSummaryLocale(((key: string, params?: Record<string, unknown>) => {
+    setOwnLocale(((key: string, params?: Record<string, unknown>) => {
       if (key === 'message.referenceSummary') return `Referenced session · ${String(params?.labels)}`
       if (key === 'message.referenceSeparator') return ', '
       return String(key)

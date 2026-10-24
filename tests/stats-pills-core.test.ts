@@ -394,10 +394,11 @@ describe('deriveStats (issue #80, host StatsPills.tsx window fold)', () => {
   })
 
   it('assistantStepReading maps each part independently', () => {
-    expect(assistantStepReading(assistant())).toEqual({ ttftMs: 50, decodeMs: 200, outputTokens: 100 })
+    expect(assistantStepReading(assistant()))
+      .toEqual({ llmMs: 250, ttftMs: 50, decodeMs: 200, outputTokens: 100 })
     expect(assistantStepReading(assistant({ timing: { stepStartTime: 100, firstTokenTime: null, completedTime: 300 } })))
-      .toEqual({ ttftMs: null, decodeMs: null, outputTokens: 100 })
+      .toEqual({ llmMs: 200, ttftMs: null, decodeMs: null, outputTokens: 100 })
     expect(assistantStepReading(assistant({ usage: { outputTokens: -1 } })))
-      .toEqual({ ttftMs: 50, decodeMs: 200, outputTokens: null })
+      .toEqual({ llmMs: 250, ttftMs: 50, decodeMs: 200, outputTokens: null })
   })
 })

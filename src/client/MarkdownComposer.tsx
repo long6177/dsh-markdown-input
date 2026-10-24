@@ -1289,20 +1289,6 @@ export function MarkdownComposer({
   }
 
   /**
-   * Card-level hit area (issue #41): the stretched contentDOM covers the
-   * scroller band now, but the card's own padding and the gaps between the
-   * strips are still outside it. A mousedown there focuses the editor through
-   * the handle's public surface — never CodeMirror internals. No
-   * `preventDefault`: native text selection inside the editor (and the drag
-   * gestures that start on the card) must survive untouched.
-   *
-   * In the workspace trigger posture (#42) a card mousedown must NOT pull
-   * focus back into a surface that is not an editor: the native
-   * `cardWorkspaceTrigger` card is one pick target, and its click opens the
-   * picker. This is the explicit guard the ticket asked for against breaking
-   * the #41 hit area on the way in.
-   */
-  /**
    * The tool row's keep-focus arm (issue #74, the native keepDraftFocus): a
    * mousedown on a row button is consumed — focus never lands on the button
    * — and the editor takes it back, so typing continues after sending,
@@ -1321,6 +1307,20 @@ export function MarkdownComposer({
     editorRef.current?.focus()
   }
 
+  /**
+   * Card-level hit area (issue #41): the stretched contentDOM covers the
+   * scroller band now, but the card's own padding and the gaps between the
+   * strips are still outside it. A mousedown there focuses the editor through
+   * the handle's public surface — never CodeMirror internals. No
+   * `preventDefault`: native text selection inside the editor (and the drag
+   * gestures that start on the card) must survive untouched.
+   *
+   * In the workspace trigger posture (#42) a card mousedown must NOT pull
+   * focus back into a surface that is not an editor: the native
+   * `cardWorkspaceTrigger` card is one pick target, and its click opens the
+   * picker. This is the explicit guard the ticket asked for against breaking
+   * the #41 hit area on the way in.
+   */
   function onCardMouseDown(event: MouseEvent<HTMLDivElement>): void {
     if (triggerPosture) return
     if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
@@ -1378,10 +1378,13 @@ export function MarkdownComposer({
     )
   }
 
+  // The original-image preview's component (#77): read ONCE per render
+  // beside the other capability faces — an unbound face keeps the chip
+  // display-only and the lightbox unmounted (the chip and the card-level
+  // portal share this one probe).
+  const Lightbox = imageLightbox()
+
   function attachmentChip(attachment: ComposerAttachment): ReactNode {
-    // Original-image preview (#77): capability-detected — a host build
-    // without the primitives lightbox keeps the chip display-only.
-    const Lightbox = imageLightbox()
     return (
       <li key={attachment.id} className={css.attachment}>
         {attachment.kind === 'image'
@@ -1408,9 +1411,6 @@ export function MarkdownComposer({
   }
 
   const otherMode: EditMode = mode === 'render' ? 'source' : 'render'
-  // The original-image preview's component (#77): read per render beside the
-  // other capability faces — an unbound face keeps the lightbox unmounted.
-  const Lightbox = imageLightbox()
   // The agent-preset seat's copy (issue #42, alpha.12 feedback): the HOST
   // `settings.agentPreset` dictionary owns the shipped presets' words AND the
   // seat's three strings, so the bound seat is read per render here and the
@@ -1600,14 +1600,14 @@ export function MarkdownComposer({
           <GoalStripFace
             useProjection={useProjection}
             sessionId={sessionId}
-            running={session?.running ?? false}
+            running={running}
             t={t}
           />
         </FaceGate>
         <QueueFace
           rows={queueRows}
           mutable={queueMutable}
-          running={session?.running ?? false}
+          running={running}
           updateQueue={queueUpdate}
           loadImage={queueImageLoad}
           t={t}
@@ -1720,7 +1720,6 @@ export function MarkdownComposer({
                 sessionId={sessionId}
                 t={t}
                 locked={sessionId === undefined}
-                onError={showBanner}
                 focusEditor={() => { editorRef.current?.focus() }}
               />
             </FaceGate>

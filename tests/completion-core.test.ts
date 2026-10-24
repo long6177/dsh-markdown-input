@@ -433,6 +433,18 @@ describe('assembleCompletionView — @ session mentions (#75)', () => {
     expect(view?.pending).toBe(true)
   })
 
+  it('marks the session group ready from its own plane while the file plane is pending', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: 'a', position: 'inline', start: 2, end: 4 }),
+      commandRows: null, skills: null, files: null, staleFiles: null,
+      sessions: [sessions[0]!], staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    expect(view?.groups[0]?.status).toBe('pending')
+    // The old formula read the FILE plane's null as the session group's
+    // pending marker; the session plane's own signal decides.
+    expect(view?.groups.find((group) => group.id === 'session')?.status).toBe('ready')
+  })
+
   it('keeps the resolver candidate order (the host ranks, the popup does not)', () => {
     const view = assembleCompletionView({
       probe: probe({ trigger: '@', query: '重', position: 'inline', start: 2, end: 4 }),

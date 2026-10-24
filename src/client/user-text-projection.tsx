@@ -209,7 +209,11 @@ export function projectUserText(
       render: (key) => <SecretSpan key={key} raw={text.slice(range.start, range.end)} masked={range.masked} interactive={interactive} />,
     })
   }
-  pieces.sort((a, b) => a.start - b.start || (a.secret === true ? -1 : 1) || b.end - a.end)
+  // Earliest start wins; a same-start tie puts the secret on top. The
+  // comparator is symmetric and returns 0 for equal-rank ties (the old
+  // trailing `b.end - a.end` was unreachable because the secret arm never
+  // returned 0).
+  pieces.sort((a, b) => a.start - b.start || Number(b.secret === true) - Number(a.secret === true))
   const parts: ReactNode[] = []
   let cursor = 0
   const pushPlain = (from: number, to: number): void => {
