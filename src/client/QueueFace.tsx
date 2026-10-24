@@ -16,7 +16,7 @@
  * preview URLs; the preview keeps its single-line shape with the reference
  * chips the sent-text projection folds in.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   FileTypeIcon, fileSizeText,
   IconCheckOutlineMedium, IconChevronDownOutlineMedium, IconChevronUpOutlineMedium,
@@ -24,8 +24,10 @@ import {
   IconSendOutlineMedium, IconTrashOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { QueueAction, QueueUpdate } from './conversation-face.ts'
+import { useObservable, type QueueAction, type QueueUpdate, type SessionId } from './conversation-face.ts'
+import { referenceActions } from './reference-actions-face.ts'
 import { NS } from './locales.ts'
+import { skillFace } from './skill-face.ts'
 import {
   contentText, echoAttachments, previewText, queueAttachments, type QueueViewRow,
 } from './queue-core.ts'
@@ -50,6 +52,11 @@ export interface QueueFaceProps {
   readonly t: PropsLocale<typeof NS>['t']
   /** Card-banner outlet: a failed mutation reports here, the row stays. */
   readonly onError: (text: string) => void
+  /**
+   * The owning session: scopes the preview chips' activations (#75).
+   * Undefined (or absent planes) keeps every chip a display-only span.
+   */
+  readonly sessionId?: SessionId | undefined
 }
 
 /** Chevron glyphs by expansion state (the native header's toggling pair). */
@@ -100,11 +107,28 @@ function QueueFileChip({ attachment, label }: {
  * The queue strip, or null on an empty queue.
  * @param props - assembled rows, availability gates, copy, and the banner outlet.
  */
-export function QueueFace({ rows, mutable, running, updateQueue, loadImage, t, onError }: QueueFaceProps) {
+export function QueueFace({ rows, mutable, running, updateQueue, loadImage, t, onError, sessionId }: QueueFaceProps) {
   const [collapsed, setCollapsed] = useState(true)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
+  // The preview chips' activations (#75): the same capability-detected
+  // actions the durable bubbles use — a host without the preview planes
+  // (or without the session id) keeps every chip display-only.
+  const references = useMemo(() => referenceActions(sessionId), [sessionId])
+  // The loaded skill roll: what lets a queued `/name` chip appear and
+  // activate (beyond the native dock, whose previews carry no skillNames
+  // facts and keep the gesture plain text).
+  const skillEntries = useObservable(skillFace()?.lexicons)
+  const skillNames = useMemo(() => {
+    if (sessionId === undefined || skillEntries === undefined) return []
+    return (skillEntries.value.get(sessionId) ?? []).map((skill) => skill.name)
+  }, [sessionId, skillEntries])
+  // The roll warms on mount (the completion face's idiom): a queued /name
+  // chip can land with the strip's first paint instead of the first popup.
+  useEffect(() => {
+    if (sessionId !== undefined) skillFace()?.ensure(sessionId)
+  }, [sessionId])
 
   const mutationActive = mutable && updateQueue !== undefined && (editing !== null || busy !== null)
   const expanded = !collapsed || mutationActive
@@ -255,7 +279,7 @@ export function QueueFace({ rows, mutable, running, updateQueue, loadImage, t, o
                             ))}
                       </span>
                     )}
-                    <span className={css.queuePreview}>{projectUserText(preview, [], [])}</span>
+                    <span className={css.queuePreview}>{projectUserText(preview, [], skillNames, references)}</span>
                   </>
                 )}
               {row.kind === 'sending' && (

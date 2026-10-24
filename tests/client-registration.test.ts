@@ -22,6 +22,12 @@ import { CONTEXT_NS } from '../src/client/context-meter-face.ts'
 import { agentPresetsRemoteFace, resetAgentPresetsSource } from '../src/client/agent-preset-face.ts'
 import { resetWorkspaceVerbSource, workspaceVerbFace } from '../src/client/workspace-verb.ts'
 import { resetWorkspaceAddSource, workspaceAddFace } from '../src/client/workspace-add.ts'
+import {
+  resetSessionReferenceFace, sessionReferenceFaceSupported,
+} from '../src/client/session-reference-face.ts'
+import { resetSessionsSource, sessionSnapshot } from '../src/client/sessions-face.ts'
+import { resetSidebarRightFace, sidebarRightFaceSupported } from '../src/client/sidebar-right-face.ts'
+import { resetReferenceLocale } from '../src/client/reference-locale.ts'
 
 interface RecordedRegistration {
   name: string
@@ -38,25 +44,33 @@ function recordedContext(options: {
   remote?: unknown
   remoteCommands?: unknown
   remoteAgentPresets?: unknown
+  remoteSessionReferenceResolver?: unknown
   uiWorkspace?: unknown
   workspaces?: unknown
+  sidebarRight?: unknown
+  sessions?: unknown
 } = {}): {
   ctx: ClientContext
   injected: readonly string[]
   registrations: readonly RecordedRegistration[]
   dictionaries: readonly unknown[][]
+  binds: readonly string[]
 } {
   const injected: string[] = []
   const registrations: RecordedRegistration[] = []
   const dictionaries: unknown[][] = []
+  const binds: string[] = []
   const ctx = {
     get(key: string): unknown {
       // The host gateway installs namespaces as `remote.<ns>` services; the
       // bare `remote` service carries only `$on`/`$mount`.
       if (key === 'remote.commands') return options.remoteCommands
       if (key === 'remote.agentPresets') return options.remoteAgentPresets
+      if (key === 'remote.sessionReferenceResolver') return options.remoteSessionReferenceResolver
       if (key === 'uiWorkspace') return options.uiWorkspace
       if (key === 'workspaces') return options.workspaces
+      if (key === 'sidebarRight') return options.sidebarRight
+      if (key === 'sessions') return options.sessions
       return key === 'remote' ? options.remote : undefined
     },
     effect(fn: () => unknown): unknown {
@@ -68,6 +82,7 @@ function recordedContext(options: {
         return () => {}
       },
       bind(ns: string): (key: string) => string {
+        binds.push(ns)
         return (key: string) => `${ns}:${key}`
       },
     },
@@ -90,7 +105,7 @@ function recordedContext(options: {
       },
     },
   } as unknown as ClientContext
-  return { ctx, injected, registrations, dictionaries }
+  return { ctx, injected, registrations, dictionaries, binds }
 }
 
 afterEach(() => {
@@ -99,6 +114,10 @@ afterEach(() => {
   resetWorkspaceVerbSource()
   resetAgentPresetsSource()
   resetWorkspaceAddSource()
+  resetSessionReferenceFace()
+  resetSessionsSource()
+  resetSidebarRightFace()
+  resetReferenceLocale()
 })
 
 describe('client apply registration', () => {
@@ -206,6 +225,45 @@ describe('client apply registration', () => {
     // seat for its own keys, so it registers nothing either.
     expect(dictionaries.map(entry => entry[0])).not.toContain(CONTEXT_NS)
     expect(CONTEXT_NS).toBe('conversation')
+  })
+
+  it('wires the reference surfaces so the session plane, chip activation, and snapshot probe pass (#75)', () => {
+    const remoteSessionReferenceResolver = { candidates: () => {} }
+    const sidebarRight = { openResource: () => {} }
+    const sessions = { list: { getSnapshot: () => ({ byId: {} }) } }
+    const { ctx } = recordedContext({
+      remote: { $on: () => () => {}, $host: { home: '/home/u' } },
+      remoteSessionReferenceResolver,
+      sidebarRight,
+      sessions,
+    })
+    apply(ctx)
+    expect(sessionReferenceFaceSupported()).toBe(true)
+    expect(sidebarRightFaceSupported()).toBe(true)
+    expect(sessionSnapshot()).toEqual({})
+  })
+
+  it('keeps the reference surfaces degraded when the host lacks them (#75)', () => {
+    const { ctx } = recordedContext()
+    apply(ctx)
+    expect(sessionReferenceFaceSupported()).toBe(false)
+    expect(sidebarRightFaceSupported()).toBe(false)
+    expect(sessionSnapshot()).toBeUndefined()
+  })
+
+  it('binds the reference and secretMask copy read-only, with the own-NS summary fallback (#75)', () => {
+    const { ctx, dictionaries, binds } = recordedContext()
+    apply(ctx)
+    // The file-open dialog's words are the host `reference` namespace's own
+    // (ui-reference) and the secret toggle's the host `secretMask`'s own
+    // (ui-secret-mask) — both read-only binds, no registration (a duplicate
+    // would shadow the host's copy). The summary line's fallback rides the
+    // plugin's own namespace, registered by the apply body.
+    expect(binds).toContain('reference')
+    expect(binds).toContain('secretMask')
+    expect(binds).toContain(NS)
+    expect(dictionaries.map(entry => entry[0])).not.toContain('reference')
+    expect(dictionaries.map(entry => entry[0])).not.toContain('secretMask')
   })
 
   it('wires the workspace-row verb and the agent-preset roster sources (issue #42)', () => {

@@ -52,6 +52,10 @@ import {
 } from './completion-core.ts'
 import { fileReferenceFace, fileReferenceFaceSupported } from './file-reference-face.ts'
 import type { SubagentShare } from './model-face.ts'
+import {
+  sessionReferenceFace, sessionReferenceFaceSupported, type SessionMentionCandidate,
+} from './session-reference-face.ts'
+import { hostHome, sessionSnapshot } from './sessions-face.ts'
 import { skillFace, type SkillEntry } from './skill-face.ts'
 import { NS } from './locales.ts'
 import type { MarkdownEditorHandle, MenuKeyHandler } from './markdown-editor.ts'
@@ -68,14 +72,15 @@ export const COMPLETION_FACE_ID = 'tool.completion'
 
 /**
  * The FaceGate definition: the popup face needs at least one data plane —
- * the command catalog for `/` or `remote.fileReferences` for `@`. A probe
- * miss (or a mid-life degrade) hides the popups wholesale; per-trigger
+ * the command catalog for `/`, or `remote.fileReferences` /
+ * `remote.sessionReferenceResolver` for `@`. A probe miss (or a mid-life
+ * degrade) hides the popups wholesale; per-trigger and per-plane
  * availability is checked at render (one plane can die alone).
  */
 export function completionFaceDefinition(): FaceDefinition {
   return {
     id: COMPLETION_FACE_ID,
-    probe: () => commandFaceSupported() || fileReferenceFaceSupported(),
+    probe: () => commandFaceSupported() || fileReferenceFaceSupported() || sessionReferenceFaceSupported(),
   }
 }
 
@@ -132,12 +137,15 @@ type CompletionRenderItem =
 /**
  * The `@` fetch state: the landed results carry their query so a probe that
  * moved on renders them as stale (SWR) instead of current, and carry their
- * session so a session switch never flashes the old workspace's files.
+ * session so a session switch never flashes the old workspace's files. The
+ * file and session candidates land as one batch (the native source reads
+ * both planes in parallel); a plane absent at fetch time lands empty.
  */
-interface LandedFiles {
+interface LandedBatch {
   readonly sessionId: SessionId
   readonly query: string
-  readonly results: readonly FileReferenceCandidate[]
+  readonly files: readonly FileReferenceCandidate[]
+  readonly sessions: readonly SessionMentionCandidate[]
 }
 
 /**
@@ -189,12 +197,13 @@ export function CompletionFace({
   const skills = skillFace()
   const skillEntries = useObservable(skills?.lexicons)
   const fileFace = fileReferenceFace()
+  const sessionFace = sessionReferenceFace()
 
   const [probe, setProbe] = useState<CompletionProbe | null>(null)
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
   const [fetching, setFetching] = useState(false)
-  const [landed, setLanded] = useState<LandedFiles | null>(null)
+  const [landed, setLanded] = useState<LandedBatch | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   // Mirrors keep the editor-seam handler and pick closures reading fresh
@@ -264,13 +273,42 @@ export function CompletionFace({
   const landedForProbe = landedValid && landed !== null && landed.query === probe?.query
   const view: CompletionView | null = useMemo(() => {
     if (probe === null) return null
-    if (probe.trigger === '/' ? command === undefined : fileFace === undefined) return null
+    if (probe.trigger === '/' ? command === undefined : fileFace === undefined && sessionFace === undefined) {
+      return null
+    }
     // Landed results answer the current query only; an older query's landed
-    // data shows as stale while the fresh fetch runs (SWR).
-    const files = fetching || !landedForProbe || landed === null ? null : landed.results
-    const staleFiles = fetching && landedValid && landed !== null ? landed.results : null
-    return assembleCompletionView({ probe, commandRows, catalogPending, skills: skillRoll, files, staleFiles, t })
-  }, [probe, command, fileFace, fetching, landedForProbe, landedValid, landed, commandRows, catalogPending, skillRoll, t])
+    // data shows as stale while the fresh fetch runs (SWR). A plane absent
+    // at fetch time landed empty: its group reads ready-empty and sheds.
+    const files = fileFace === undefined
+      ? []
+      : fetching || !landedForProbe || landed === null ? null : landed.files
+    const staleFiles = fileFace === undefined || !fetching || !landedValid || landed === null
+      ? null
+      : landed.files
+    const sessions = sessionFace === undefined || probe.quoted
+      ? []
+      : fetching || !landedForProbe || landed === null ? null : landed.sessions
+    const staleSessions = sessionFace === undefined || probe.quoted || !fetching || !landedValid || landed === null
+      ? null
+      : landed.sessions
+    return assembleCompletionView({
+      probe,
+      commandRows,
+      catalogPending,
+      skills: skillRoll,
+      files,
+      staleFiles,
+      sessions,
+      staleSessions,
+      sessionEnv: {
+        sessionId: sessionId ?? '',
+        now: Date.now(),
+        home: hostHome(),
+        summaries: sessionSnapshot(),
+      },
+      t,
+    })
+  }, [probe, command, fileFace, sessionFace, fetching, landedForProbe, landedValid, landed, commandRows, catalogPending, skillRoll, sessionId, t])
 
   const pending = view?.pending ?? false
   // The rendered item list and the flat row space the keyboard highlight
@@ -442,6 +480,13 @@ export function CompletionFace({
       insertSettling(skillInsertion(option.name))
       return
     }
+    // Session rows settle their canonical wire mention — the insertion is
+    // exactly the text the host's reference pipeline writes, so the T9 chip
+    // decorations fold it into a session chip the moment it lands.
+    if (option.origin === 'session') {
+      insertSettling(option.mention)
+      return
+    }
     // File rows: Tab drills into a directory — the open mention keeps the
     // token live and the descended listing opens (no dismissed memory,
     // no close); every other pick settles the reference with the native
@@ -562,23 +607,33 @@ export function CompletionFace({
     return () => { registerClose(null) }
   }, [close, registerClose])
 
-  // The `@` search: one fetch per live query, the previous results kept
-  // visible while the fresh one runs (native stale-while-revalidate).
+  // The `@` search: one batch per live query — both candidate planes in
+  // parallel (the native source reads them together), the previous results
+  // kept visible while the fresh one runs (native stale-while-revalidate).
+  // A quoted token skips the session query (native rule); an absent plane
+  // lands empty so its group sheds alone.
   useEffect(() => {
-    if (!visible || probe === null || probe.trigger !== '@' || fileFace === undefined || sessionId === undefined) {
+    if (!visible || probe === null || probe.trigger !== '@' || sessionId === undefined) {
       return undefined
     }
+    if (fileFace === undefined && sessionFace === undefined) return undefined
     const controller = new AbortController()
     inFlightRef.current?.abort()
     inFlightRef.current = controller
     setFetching(true)
-    void fileFace.search(sessionId, probe.query, controller.signal).then((results) => {
+    const filesPromise = fileFace === undefined
+      ? Promise.resolve([])
+      : fileFace.search(sessionId, probe.query, controller.signal)
+    const sessionsPromise = sessionFace === undefined || probe.quoted
+      ? Promise.resolve([])
+      : sessionFace.candidates(sessionId, probe.query, controller.signal)
+    void Promise.all([filesPromise, sessionsPromise]).then(([files, sessions]) => {
       if (controller.signal.aborted) return
       inFlightRef.current = null
-      setLanded({ sessionId, query: probe.query, results })
+      setLanded({ sessionId, query: probe.query, files, sessions })
       setFetching(false)
     }).catch(() => {
-      // The face resolves failures to []; a face-level surprise must not
+      // The faces resolve failures to []; a face-level surprise must not
       // leave a permanent pending group behind.
       if (!controller.signal.aborted) setFetching(false)
     })
@@ -587,7 +642,7 @@ export function CompletionFace({
       if (inFlightRef.current === controller) inFlightRef.current = null
       setFetching(false)
     }
-  }, [visible, probe, fileFace, sessionId])
+  }, [visible, probe, fileFace, sessionFace, sessionId])
 
   // Outside-pointerdown dismissal (the host MenuView's rule; the native
   // external-dismiss verb records the memory too — controller.dismiss()
@@ -693,7 +748,7 @@ function OptionButton({ item, active, onPick, highlight, t }: {
   const option = entry.option
   const marker = option.origin === 'command'
     ? option.row.name
-    : option.origin === 'skill'
+    : option.origin === 'skill' || option.origin === 'session'
       ? option.name
       : option.path
   let content: ReactNode
@@ -712,9 +767,12 @@ function OptionButton({ item, active, onPick, highlight, t }: {
         )}
       </>
     )
-  } else if (option.origin === 'skill') {
+  } else if (option.origin === 'skill' || option.origin === 'session') {
     content = (
       <>
+        {option.origin === 'session' && (
+          <span className={css.itemIcon} aria-hidden><ReferenceIconRegular kind="session" size={14} /></span>
+        )}
         <span className={css.itemName}>{option.name}</span>
         {option.description !== undefined && (
           <span className={css.itemDescription}>{option.description}</span>
