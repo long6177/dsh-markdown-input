@@ -33,6 +33,13 @@ const zh = {
   'image.openOriginal': '查看原图',
   'image.preview': '原图预览',
   'image.closePreview': '关闭原图预览',
+  // Pick-time image-limit rejections (issue #80) — the host `conversation`
+  // namespace's own lines copied verbatim, the fallback for a build whose
+  // dictionary misses them.
+  'image.unsupportedType': '仅支持 PNG、JPG、WebP、GIF 格式的图片',
+  'image.tooMany': '一条消息最多添加 {count} 张图片',
+  'image.fileTooLarge': '单张图片不能超过 {size}',
+  'image.totalTooLarge': '图片总大小超过 {size}，请移除部分图片',
   'composer.notice.dismiss': '关闭提示',
   'composer.fallback.notice': 'Markdown 输入区出现异常，已换回原生输入区；本次会话内不再重试，重启后恢复。',
   'permission.mode': '访问模式，当前：{name}',
@@ -254,6 +261,11 @@ const en: Record<ComposerKey, string> = {
   'image.openOriginal': 'View original',
   'image.preview': 'Original image preview',
   'image.closePreview': 'Close original image preview',
+  // Pick-time image-limit rejections (issue #80) — the host lines verbatim.
+  'image.unsupportedType': 'Only PNG, JPG, WebP, and GIF images are supported',
+  'image.tooMany': 'A message can include up to {count} images',
+  'image.fileTooLarge': 'Each image must be smaller than {size}',
+  'image.totalTooLarge': 'Images exceed {size} in total; remove some and try again',
   'composer.notice.dismiss': 'Dismiss notice',
   'composer.fallback.notice': 'The Markdown composer hit an error and fell back to the native input area; it will not retry this session, and resumes after a restart.',
   'permission.mode': 'Access mode, current: {name}',

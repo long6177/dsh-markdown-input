@@ -915,6 +915,75 @@ describe('task checkbox click (issue #48)', () => {
   })
 })
 
+describe('wheel chain (issue #80)', () => {
+  /** Mount the editor inside a conversation scroller host. */
+  function mountInScroller(): { handle: MarkdownEditorHandle, scroller: HTMLElement } {
+    const scroller = document.createElement('div')
+    scroller.setAttribute('data-conversation-scroll', '')
+    document.body.appendChild(scroller)
+    const host = document.createElement('div')
+    scroller.appendChild(host)
+    const handle = createMarkdownEditor({
+      parent: host, placeholder: 'ph', mode: 'render',
+      onSubmit: vi.fn(), onDocChange: vi.fn(), onFiles: vi.fn(() => true),
+    })
+    mounted.push(handle)
+    return { handle, scroller }
+  }
+
+  /** jsdom has no layout: pin the scroller metrics the listener reads. */
+  function metrics(element: HTMLElement, values: { scrollTop: number, clientHeight: number, scrollHeight: number }): void {
+    Object.defineProperty(element, 'scrollTop', { configurable: true, writable: true, value: values.scrollTop })
+    Object.defineProperty(element, 'clientHeight', { configurable: true, value: values.clientHeight })
+    Object.defineProperty(element, 'scrollHeight', { configurable: true, value: values.scrollHeight })
+  }
+
+  /** Dispatch a cancelable wheel event; true = the editor took it over. */
+  function wheel(element: HTMLElement, deltaY: number): boolean {
+    const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true })
+    element.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+
+  it('leaves the wheel alone without a conversation-scroll ancestor', () => {
+    const { handle } = mount()
+    metrics(handle.view.scrollDOM, { scrollTop: 0, clientHeight: 100, scrollHeight: 100 })
+    expect(wheel(handle.view.scrollDOM, 100)).toBe(false)
+  })
+
+  it('hands the wheel to the session scroller when the draft does not overflow', () => {
+    const { handle, scroller } = mountInScroller()
+    metrics(scroller, { scrollTop: 40, clientHeight: 600, scrollHeight: 2000 })
+    metrics(handle.view.scrollDOM, { scrollTop: 0, clientHeight: 100, scrollHeight: 100 })
+    expect(wheel(handle.view.scrollDOM, 120)).toBe(true)
+    expect(scroller.scrollTop).toBe(160)
+  })
+
+  it('keeps the wheel inside a long draft until it reaches an edge', () => {
+    const { handle, scroller } = mountInScroller()
+    metrics(scroller, { scrollTop: 0, clientHeight: 600, scrollHeight: 2000 })
+    const editor = handle.view.scrollDOM
+    metrics(editor, { scrollTop: 50, clientHeight: 100, scrollHeight: 400 })
+    // Room in both directions: the editor keeps the event.
+    expect(wheel(editor, 100)).toBe(false)
+    expect(wheel(editor, -100)).toBe(false)
+    expect(scroller.scrollTop).toBe(0)
+    // Pinned at the top, wheel up chains to the session scroller.
+    editor.scrollTop = 0
+    expect(wheel(editor, -60)).toBe(true)
+    expect(scroller.scrollTop).toBe(-60)
+    // Pinned at the bottom, wheel down chains too.
+    editor.scrollTop = 300
+    expect(wheel(editor, 80)).toBe(true)
+    expect(scroller.scrollTop).toBe(20)
+  })
+
+  it('ignores a zero-delta wheel', () => {
+    const { handle } = mountInScroller()
+    expect(wheel(handle.view.scrollDOM, 0)).toBe(false)
+  })
+})
+
 describe('claim helpers', () => {
   it('isLeadingSelection: only whitespace before the caret answers true', () => {
     const { handle } = mount()

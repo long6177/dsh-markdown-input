@@ -200,6 +200,46 @@ function placeholderOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
   return t(mode === 'render' ? 'composer.placeholder.render' : 'composer.placeholder.source')
 }
 
+/**
+ * The host attachment package's `ImageAttachmentLimits`, read structurally
+ * (the projection key is not in this build's merge table). Only the three
+ * pick-time limits and the media-type allowlist are consumed — pixels and
+ * dimensions are decode-time facts the host enforces at submit.
+ */
+export interface ImageLimitsView {
+  readonly maxImageBytes: number
+  readonly maxImagesPerMessage: number
+  readonly maxMessageImageBytes: number
+  readonly mediaTypes: readonly string[]
+}
+
+/**
+ * Narrow one `imageLimits` projection value, or undefined when the host does
+ * not serve it (the preflight then stays off — a missing projection must
+ * degrade to the pre-#80 behavior, never throw into the card).
+ * @param value - the projection value as the host serves it.
+ */
+export function imageLimitsOf(value: unknown): ImageLimitsView | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const limits = value as Record<string, unknown>
+  if (!Array.isArray(limits.mediaTypes)) return undefined
+  if (typeof limits.maxImageBytes !== 'number' || !Number.isFinite(limits.maxImageBytes)) return undefined
+  if (typeof limits.maxImagesPerMessage !== 'number' || !Number.isFinite(limits.maxImagesPerMessage)) return undefined
+  if (typeof limits.maxMessageImageBytes !== 'number' || !Number.isFinite(limits.maxMessageImageBytes)) return undefined
+  return {
+    maxImageBytes: limits.maxImageBytes,
+    maxImagesPerMessage: limits.maxImagesPerMessage,
+    maxMessageImageBytes: limits.maxMessageImageBytes,
+    mediaTypes: limits.mediaTypes.filter((type): type is string => typeof type === 'string'),
+  }
+}
+
+/** Byte count as user-facing megabytes (host `imageSizeText`, verbatim). */
+export function imageSizeText(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  return `${Number.isInteger(mb) ? String(mb) : mb.toFixed(1)}MB`
+}
+
 /** Mode → copy mapping: the visible label names the CURRENT mode. */
 function labelOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
   return t(mode === 'render' ? 'composer.mode.render' : 'composer.mode.source')
@@ -830,6 +870,11 @@ export function MarkdownComposer({
     (key: 'plan') => unknown
   const planState = planProjectionOf(readPlanProjection('plan'))
   const planActive = planChipVisible(planState)
+  // The attachment package's pick-time image limits (issue #80): the same
+  // `imageLimits` projection the host InputBar reads (`useProjection`), typed
+  // structurally because the key is outside this build's merge table.
+  const readImageLimits = useProjection as unknown as (key: 'imageLimits') => unknown
+  const imageLimits = imageLimitsOf(readImageLimits('imageLimits'))
   useEffect(() => {
     const claim = input.claim
     const claimed = input.phase === 'claimed' || input.phase === 'submitting'
@@ -1017,9 +1062,24 @@ export function MarkdownComposer({
   // workspace trigger posture (#42) joins it — the native `cardWorkspaceTrigger`
   // card is not an input until a workspace resolves, and the placeholder below
   // says what the click does instead.
+  //
+  // Issue #80 completes the native `disabled` formula (InputBar.tsx:140):
+  // a removed session, a missing session id (the composer's `inert`), an
+  // owner-raised composer block, and a continuable child whose parent is
+  // offline all lock the text face. The draft stays visible and read-only in
+  // every arm — the native bar's own posture. A block does NOT lock the model
+  // seat: choosing a model is one way out of the block.
+  const subagentShare = session?.subagent as {
+    readonly address?: { readonly mode?: unknown } | undefined
+    readonly parentAvailable?: unknown
+  } | null | undefined
+  const parentOffline = subagentShare?.address?.mode === 'continuable'
+    && subagentShare.parentAvailable !== true
+  const inputLocked = session?.removed === true || sessionId === undefined
+    || triggerPosture || composerBlock !== undefined || parentOffline
   useEffect(() => {
-    editorRef.current?.setEditable(!machineBusy && !triggerPosture)
-  }, [machineBusy, triggerPosture])
+    editorRef.current?.setEditable(!machineBusy && !inputLocked)
+  }, [machineBusy, inputLocked])
 
   // The session-switch/unlock focus (issue #74, the native bar's unlock
   // effect with sessionId in its deps): a session change or the machine
@@ -1029,9 +1089,9 @@ export function MarkdownComposer({
   // workspace trigger posture is not an editor surface: nothing is pulled
   // into it.
   useEffect(() => {
-    if (machineBusy || triggerPosture) return
+    if (machineBusy || inputLocked) return
     editorRef.current?.focus()
-  }, [machineBusy, triggerPosture, sessionId, editorHandle])
+  }, [machineBusy, inputLocked, sessionId, editorHandle])
 
   // Mode and placeholder live in compartments, so a switch keeps undo
   // history and scroll; the choice persists across page loads.
@@ -1135,9 +1195,48 @@ export function MarkdownComposer({
   // refusal releases the just-created drafts instead of leaking them).
   // Returns whether the intake was admitted — the paste seam consumes the
   // event only then, mirroring the paste handler's cancel-after-landing rule.
+  /**
+   * The pick-time image preflight's copy (issue #80): the host
+   * `conversation` namespace's own named keys when bound, the plugin's
+   * verbatim strings otherwise (a raw echoed key never reaches the banner).
+   */
+  function imageCopy(
+    key: 'image.unsupportedType' | 'image.tooMany' | 'image.fileTooLarge' | 'image.totalTooLarge',
+    params?: Record<string, unknown>,
+  ): string {
+    const host = contextLocale() as unknown as
+      ((name: string, values?: Record<string, unknown>) => string) | undefined
+    const hostText = host?.(key, params)
+    if (hostText !== undefined && hostText !== key) return hostText
+    return (t as unknown as (name: string, values?: Record<string, unknown>) => string)(key, params)
+  }
+
   function intakeFiles(files: readonly File[]): boolean {
     if (attachmentFace === undefined || sessionId === undefined || files.length === 0) return false
     if (session?.subagent != null || machineBusy) return false
+    // The native pick-time preflight (InputBar.tsx:208-239): the whole batch
+    // is refused before any draft exists, with the host's named copy. Only
+    // the image subset is limited; generic files stay unrestricted.
+    if (imageLimits !== undefined) {
+      const images = files.filter((file) => imageLimits.mediaTypes.includes(file.type))
+      if (images.length > 0) {
+        const heldImages = attachments.filter((attachment) => attachment.kind === 'image')
+        if (heldImages.length + images.length > imageLimits.maxImagesPerMessage) {
+          showBanner(imageCopy('image.tooMany', { count: imageLimits.maxImagesPerMessage }))
+          return false
+        }
+        if (images.some((file) => file.size > imageLimits.maxImageBytes)) {
+          showBanner(imageCopy('image.fileTooLarge', { size: imageSizeText(imageLimits.maxImageBytes) }))
+          return false
+        }
+        const totalBytes = heldImages.reduce((sum, attachment) => sum + attachment.file.size, 0)
+          + images.reduce((sum, file) => sum + file.size, 0)
+        if (totalBytes > imageLimits.maxMessageImageBytes) {
+          showBanner(imageCopy('image.totalTooLarge', { size: imageSizeText(imageLimits.maxMessageImageBytes) }))
+          return false
+        }
+      }
+    }
     try {
       const drafts = attachmentFace.createDrafts(sessionId, files) as ComposerAttachment[]
       if (!inputActionsRef.current.addAttachments(drafts.map((draft) => draft.id))) {
