@@ -61,6 +61,7 @@ import {
 import {
   STATS_NS, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
 } from './stats-pills-face.ts'
+import { installBusyEnterSource } from './submit-policy.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -272,6 +273,11 @@ export function apply(ctx: ClientContext): void {
     return resetEchoLocale
   }, 'markdown-input: echo text host copy')
   installStatsSettingsSource(ctx)
+  // The submission policy's busy-Enter preference (issue #79) reads the
+  // `ui-conversation` settings form through the configForms service the
+  // same lazy, capability-detected way: a host build without the service
+  // keeps the native default (queue — the pre-#79 behavior).
+  installBusyEnterSource(ctx)
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
   // (degrade.ts), which latches the takeover off for the page life and

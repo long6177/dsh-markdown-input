@@ -192,6 +192,61 @@ describe('createMarkdownEditor', () => {
     expect(handle.getText()).toBe('nihao')
   })
 
+  describe('accelerated chord (issue #79: Ctrl/Cmd+Enter)', () => {
+    it('marks the gesture accelerated on Ctrl+Enter without touching the text', () => {
+      const { handle, onSubmit } = mount()
+      handle.setText('hello')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+      expect(onSubmit).toHaveBeenCalledWith(true)
+      expect(handle.getText()).toBe('hello')
+    })
+
+    it('marks the gesture accelerated on Cmd+Enter (meta parity)', () => {
+      const { onSubmit } = mount()
+      fireEvent.keyDown(content(), { key: 'Enter', metaKey: true })
+      expect(onSubmit).toHaveBeenCalledWith(true)
+    })
+
+    it('plain Enter stays the unaccelerated gesture (#79 gesture pairing)', () => {
+      const { onSubmit } = mount()
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      expect(onSubmit).toHaveBeenCalledWith(false)
+    })
+
+    it('never sends a held-down accelerated Enter (the #74 repeat guard covers the chord)', () => {
+      const { handle, onSubmit } = mount()
+      handle.setText('hello')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true, repeat: true })
+      fireEvent.keyDown(content(), { key: 'Enter', metaKey: true, repeat: true })
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('an open menu owns the accelerated chord first (upstream arbitration order)', () => {
+      const { handle, onSubmit } = mount()
+      const menu = vi.fn((intent: string) => intent === 'pick')
+      handle.setMenuKeyHandler(menu)
+      handle.setText('hello')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(menu).toHaveBeenCalledWith('pick')
+      expect(onSubmit).not.toHaveBeenCalled()
+      // A declining menu (closed) hands the chord to the submit gesture.
+      handle.setMenuKeyHandler(vi.fn(() => false))
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(onSubmit).toHaveBeenCalledWith(true)
+    })
+
+    it('does not insert a newline on the accelerated chord inside a list item', () => {
+      // lang-markdown's Prec.high continuation must not claim the chord any
+      // more than it claims plain Enter (the alpha.16 regression class).
+      const { handle, onSubmit } = mount()
+      handle.setText('- alpha')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+      expect(handle.getText()).toBe('- alpha')
+    })
+  })
+
   describe('paste (T6 migration of the dock-path semantics)', () => {
     it('converts a rich paste at the caret and one undo step reverts it', () => {
       const { handle } = mount()

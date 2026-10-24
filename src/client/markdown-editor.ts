@@ -162,14 +162,17 @@ const renderListKeymap = keymap.of([
 /**
  * Editor command: Enter always submits (#46 removed the fence-newline
  * exception — the ADR-0001 key semantics are strict send again). IME
- * composition consumes the key entirely: no send, no stray newline.
+ * composition consumes the key entirely: no send, no stray newline under
+ * the composition. The accelerated chord (Ctrl/Cmd+Enter, issue #79) rides
+ * the same callback with `accelerated: true` — the submission policy
+ * resolves the gesture's delivery mode.
  */
-function enterCommand(submit: () => void): (view: EditorView) => boolean {
+function enterCommand(submit: (accelerated: boolean) => void): (view: EditorView) => boolean {
   return (view) => {
     // IME composition: the Enter that confirms candidates is fully consumed
     // here — no send, and no stray newline under the composition.
     if (view.composing) return true
-    submit()
+    submit(false)
     return true
   }
 }
@@ -220,8 +223,10 @@ export interface MarkdownEditorOptions {
   parent: HTMLElement
   placeholder: string
   mode: EditMode
-  /** Enter with non-composing input: send the message (fences included, #46). */
-  onSubmit(): void
+  /** Enter with non-composing input: send the message (fences included, #46).
+   * `accelerated` marks the Ctrl/Cmd+Enter chord (issue #79) — the delivery
+   * mode is the submission policy's call, not the editor's. */
+  onSubmit(accelerated: boolean): void
   /** The document text changed (draft surfaced to the component). */
   onDocChange(text: string): void
   /**
@@ -288,6 +293,12 @@ export interface MarkdownEditorHandle {
    * there, and a claim inserts over the whole document head).
    */
   isLeadingSelection(): boolean
+  /**
+   * The selection end offset (detect coordinates) — the span end a claim
+   * pick replaces over (the same range `claimSelection` rewrites, issue #79
+   * AC5's shell span).
+   */
+  selectionEnd(): number
   /**
    * Insert one claim token over the document head through the selection end
    * (the host beginCommand contract) and park the caret after the token;
@@ -455,6 +466,17 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
     },
   })
 
+  // The accelerated chord command (issue #79): Ctrl/Cmd+Enter rides the
+  // plain Enter's IME guard and hands an open menu its pick first (the
+  // upstream keymap's arbitration order), then submits with the accelerated
+  // gesture — the submission policy resolves the chord's delivery mode.
+  const acceleratedEnterCommand = (view: EditorView): boolean => {
+    if (view.composing) return true
+    if (runMenu('pick')(view)) return true
+    options.onSubmit(true)
+    return true
+  }
+
   const baseExtensions: Extension[] = [
     historyCompartment.of(history()),
     // markdownLanguage is the GFM-extended base (task lists included);
@@ -481,6 +503,13 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       // the alpha.16 regression. After the menu pick, precedence no longer
       // matters: the menu answers first, everywhere else Enter sends.
       { key: 'Enter', run: enterCommand(options.onSubmit) },
+      // The accelerated chord (issue #79): Mod-Enter covers Ctrl (and Meta
+      // where it is the platform chord); Meta-Enter keeps the win-key/meta
+      // parity the upstream `event.metaKey` arm honors. Modifier combos the
+      // upstream keymap excludes (alt, ctrl+meta, shifted chords) match no
+      // binding and fall through to nothing — the same visible no-op.
+      { key: 'Mod-Enter', run: acceleratedEnterCommand },
+      { key: 'Meta-Enter', run: acceleratedEnterCommand },
       // Backspace cancels an empty list-item or quote row in place (fourth
       // feedback round) — same precedence reason as Enter above:
       // lang-markdown binds Backspace to deleteMarkupBackward at Prec.high,
@@ -598,6 +627,7 @@ export function createMarkdownEditor(options: MarkdownEditorOptions): MarkdownEd
       const selection = view.state.selection.main
       return view.state.doc.sliceString(0, selection.from).trim() === ''
     },
+    selectionEnd: () => view.state.selection.main.to,
     claimSelection(token) {
       view.dispatch({
         changes: { from: 0, to: view.state.selection.main.to, insert: token },
