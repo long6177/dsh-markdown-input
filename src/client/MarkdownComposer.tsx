@@ -414,7 +414,6 @@ export function MarkdownComposer({
   // snapshot is assigned below, once the lock state is known.
   const submitPolicyRef = useRef({
     busyEnter,
-    sessionBound: sessionId !== undefined,
     queueRows: [] as ReturnType<typeof queueViewRows>,
     queueUpdate: undefined as ReturnType<typeof queueUpdateOf>,
     gate: {
@@ -1094,7 +1093,6 @@ export function MarkdownComposer({
   }
   submitPolicyRef.current = {
     busyEnter,
-    sessionBound: sessionId !== undefined,
     queueRows,
     queueUpdate,
     gate: steerQueueGate,
