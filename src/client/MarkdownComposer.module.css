@@ -400,12 +400,19 @@
   flex: 1;
   min-width: 0;
   min-height: 24px;
+  /* Multi-line objective editor (issue #80, the host InlineEditor geometry):
+     the auto-fit effect owns the height up to this cap, then the box scrolls,
+     and the resize grabber stays off a composer-inline draft. */
+  max-height: 127px;
+  overflow-y: auto;
+  resize: none;
   box-sizing: border-box;
   border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   border-radius: 6px;
   padding: 2px 6px;
   font: inherit;
   font-size: inherit;
+  line-height: 1.4;
   color: inherit;
   background: transparent;
   outline: none;
@@ -1297,6 +1304,19 @@
   color: var(--dsw-alias-border-l4, color-mix(in srgb, currentColor 35%, transparent));
   transition: color 100ms ease;
   pointer-events: none;
+}
+
+/* Keyboard reachability (issue #80): the trigger card is a focus target
+   (tabIndex 0 on the card root), and the dashed ring brightens while it
+   holds focus — the same visual language as hover, with the standard focus
+   ring color. */
+.card[data-workspace-trigger]:focus-visible {
+  outline: none;
+}
+
+.card[data-workspace-trigger]:focus-visible::after {
+  border-style: solid;
+  color: var(--dsw-alias-state-business-primary, color-mix(in srgb, currentColor 80%, #2470ff));
 }
 
 .card[data-workspace-trigger]:hover::after {

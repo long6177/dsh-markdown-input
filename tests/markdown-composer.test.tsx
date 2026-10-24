@@ -1564,6 +1564,46 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
       vi.stubGlobal('ResizeObserver', undefined)
     }
   })
+
+  it('carries the Esc+Esc shortcut on both stop tooltips (issue #80)', async () => {
+    /** jsdom lacks ResizeObserver; the host Tooltip sizes its bubble through one. */
+    class StaticResizeObserver {
+      constructor(private readonly callback: (entries: unknown[]) => void) {}
+      observe(target: Element): void {
+        this.callback([{ target, borderBoxSize: [{ inlineSize: 120, blockSize: 30 }] }])
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', StaticResizeObserver)
+    try {
+      // The primary stop arm on an ordinary running session with no draft.
+      installStopScope(fakeConversation())
+      const primary = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
+      await vi.waitFor(() => {
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip).toHaveAttribute('data-has-shortcut')
+        expect(tip?.textContent).toContain('Esc')
+        expect(tip?.getAttribute('aria-label')?.match(/Esc/gu)).toHaveLength(2)
+      })
+      primary.unmount()
+
+      // The dedicated stop on a running continuable child.
+      installStopScope(fakeConversation())
+      render(<MarkdownComposer {...chainProps({
+        session: stopSession({ subagent: { address: { mode: 'continuable' }, parentAvailable: true } }),
+      })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
+      await vi.waitFor(() => {
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip).toHaveAttribute('data-has-shortcut')
+        expect(tip?.getAttribute('aria-label')?.match(/Esc/gu)).toHaveLength(2)
+      })
+    } finally {
+      vi.stubGlobal('ResizeObserver', undefined)
+    }
+  })
 })
 
 describe('MarkdownComposer — submission policy (issue #79)', () => {

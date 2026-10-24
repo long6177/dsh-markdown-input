@@ -60,6 +60,8 @@ const zh = {
   'permission.auto.confirm.acknowledge': '我已了解这些风险，并愿意继续',
   'permission.auto.confirm.enable': '启用 Auto review',
   'permission.switchFailed': '权限切换失败：{message}',
+  'permission.unmatched': '宿主不提供 /permission 命令',
+  'permission.retry': '重试',
   // `+` command menu (tool row ①). Row faces mirror the host `command`
   // namespace copy verbatim; the trigger title mirrors `conversation.
   // input.commands`.
@@ -286,6 +288,8 @@ const en: Record<ComposerKey, string> = {
   'permission.auto.confirm.acknowledge': 'I understand these risks and want to continue',
   'permission.auto.confirm.enable': 'Enable Auto review',
   'permission.switchFailed': 'Permission switch failed: {message}',
+  'permission.unmatched': 'The host offers no /permission command',
+  'permission.retry': 'Retry',
   'command.menu.open': 'Add files or run commands',
   'command.menu.section.add': 'Add',
   'command.menu.section.commands': 'Commands',

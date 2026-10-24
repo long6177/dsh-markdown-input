@@ -46,7 +46,7 @@
  * render/source copy).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, DragEvent, MouseEvent, ReactNode } from 'react'
+import type { ChangeEvent, DragEvent, KeyboardEvent, MouseEvent, ReactNode } from 'react'
 import {
   fileExtension, fileSizeText, IconCloseOutlineMedium, IconCodeOutlineRegular, IconPaperclipOutlineMedium,
   IconWarningOutlineMedium, Tooltip,
@@ -950,6 +950,15 @@ export function MarkdownComposer({
   const triggerPosture = rowSupported && workspaceTriggerPosture({ blank, label: rowLabel })
   const openPicker = useCallback(() => { setPickerOpen(true) }, [])
   const closePicker = useCallback(() => { setPickerOpen(false) }, [])
+  // The trigger card's keyboard entry (issue #80): the native card is a
+  // focusable pick target (DraftEditor's workspace-trigger text face with
+  // tabIndex/onKeyDown); Enter and Space open the same pick menu the click
+  // does.
+  const onWorkspaceTriggerKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    openPicker()
+  }, [openPicker])
   // Native pick semantics: the card's blank session IS the session being moved,
   // so the reuse-or-create flow is the whole verb — no draft transfer (that is
   // `selectWorkspace`'s job for a non-blank session with something to carry).
@@ -1477,7 +1486,18 @@ export function MarkdownComposer({
           level mousedown hit area (#41) stays on the FACE: the dock row below
           is not editor surface. */}
       <div className={css.card} data-markdown-composer data-composer-card ref={cardRef}
-        {...triggerPosture ? { 'data-workspace-trigger': '' } : {}}
+        {...triggerPosture ? {
+          'data-workspace-trigger': '',
+          // Keyboard reachability (issue #80): the card itself is the pick
+          // target while no workspace resolves, so it takes focus and
+          // Enter/Space. The native card's text face carries the same
+          // tabIndex/haspopup/expanded/onKeyDown quartet.
+          tabIndex: 0,
+          'aria-haspopup': 'menu',
+          'aria-expanded': pickerOpen,
+          'aria-label': workspaceCopy?.('hero.chooseWorkspace'),
+          onKeyDown: onWorkspaceTriggerKeyDown,
+        } : {}}
         onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onMouseDown={onCardMouseDown}
         onClick={triggerPosture ? openPicker : undefined}
         onPointerDown={triggerPosture ? (event) => { event.stopPropagation() } : undefined}>
@@ -1696,6 +1716,7 @@ export function MarkdownComposer({
                 t={t}
                 locked={sessionId === undefined}
                 onError={showBanner}
+                focusEditor={() => { editorRef.current?.focus() }}
               />
             </FaceGate>
             {/* Plan chip (tool row, issue #34): the native PlanChip seat the
@@ -1740,13 +1761,19 @@ export function MarkdownComposer({
                 button — the native inline square glyph, disabled while the cancel
                 verb is missing. Mutually exclusive with the primary stop arm. */}
             {dedicatedStop && (
-              <button type="button" className={css.stopButton}
-                aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
-                disabled={stop === undefined} onClick={stopRunning}>
-                <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
-                  <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
-                </svg>
-              </button>
+              // The native dedicated stop rides the same Tooltip with the
+              // Esc+Esc shortcut keys (issue #80); the host's fixed-input
+              // service already binds the sequence.
+              <Tooltip label={t('composer.action.stop')} shortcutKeys={['Esc', 'Esc']}
+                side="top" delayMs={500} disabled={stop === undefined}>
+                <button type="button" className={css.stopButton}
+                  aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
+                  disabled={stop === undefined} onClick={stopRunning}>
+                  <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                    <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+                  </svg>
+                </button>
+              </Tooltip>
             )}
             {/* Send/stop semantics (native `primaryStops`): on a running ordinary
                 session the primary names stop while the composer is empty or
@@ -1763,6 +1790,7 @@ export function MarkdownComposer({
                 latch candidate the alpha.13 note flagged). */}
             <Tooltip label={submitLabel}
               side="top" delayMs={500}
+              shortcutKeys={primaryStops ? ['Esc', 'Esc'] : undefined}
               disabled={primaryStops ? stop === undefined : !canSubmit}>
               <button type="button" className={css.submitButton}
                 aria-label={submitLabel}

@@ -28,10 +28,9 @@ import { useObservable, type SessionId } from './conversation-face.ts'
 import { registerChainPopup, type ChainPopupSettle } from './chain-open.ts'
 import { en, NS, type ComposerKey } from './locales.ts'
 import {
-  permissionFace, permissionFaceHandle,
+  permissionFace,
   type PermissionSelection,
 } from './permission-face.ts'
-import { registerFace } from './face.ts'
 import css from './PermissionSelectFace.module.css'
 
 /** Machine value of the preset that requires the explicit risk gate. */
@@ -103,8 +102,18 @@ export interface PermissionSelectFaceProps {
   readonly t: PropsLocale<typeof NS>['t']
   /** Owner lock (session gone) — disables the pill like the native seat. */
   readonly locked: boolean
-  /** Card-banner outlet: a failed switch reports here, the pill stays usable. */
-  readonly onError: (text: string) => void
+  /**
+   * Card-banner outlet, kept for interface compatibility. Switch failures
+   * render IN PLACE since #80 (the native popup family's error/retry row),
+   * so nothing is reported through the banner.
+   */
+  readonly onError?: (text: string) => void
+  /**
+   * Return focus to the composer after a user-initiated dismissal (Escape,
+   * Shift+Tab, an outside press) — the native PopupSelectView's
+   * `dismiss({ focusComposer: true })`. Absent leaves focus where it was.
+   */
+  readonly focusEditor?: () => void
 }
 
 /** Resolve locale-owned copy for the shipped Auto option; preserve host copy for other presets. */
@@ -122,14 +131,8 @@ function optionDescription(
  * its data is absent.
  */
 export function PermissionSelectFace({
-  useProjection, sessionId, t, locked, onError,
+  useProjection, sessionId, t, locked, focusEditor,
 }: PermissionSelectFaceProps): ReactNode {
-  // The gate that mounts this body owns the probe; this is the lookup door
-  // to its handle — an unmatched write latches the face off through it.
-  const face = permissionFaceHandle()
-  const [degraded, setDegraded] = useState(false)
-  useEffect(() => face?.onDegrade(() => { setDegraded(true) }), [face])
-
   const selection = useProjection('permissions')
   const permission = permissionFace()
   const catalog = useObservable(permission?.catalog)?.value ?? null
@@ -137,6 +140,10 @@ export function PermissionSelectFace({
   const [open, setOpen] = useState(false)
   const [confirmation, setConfirmation] = useState<string | null>(null)
   const [acknowledged, setAcknowledged] = useState(false)
+  // The in-place switch failure (issue #80): the pill never degrades — a
+  // failed or unmatched write keeps the face and re-offers the write.
+  const [switchError, setSwitchError] = useState<string | null>(null)
+  const [failedPick, setFailedPick] = useState<string | null>(null)
   // The chain settle hook of THIS opening (issue #36): armed only by a chain
   // open (a typed `/per` → permission row), invoked only after an admitted
   // write. Dismissals and failures drop it unused, so a later direct pill
@@ -162,6 +169,8 @@ export function PermissionSelectFace({
     setOpen(false)
     setAcknowledged(false)
     setConfirmation(null)
+    setSwitchError(null)
+    setFailedPick(null)
   }, [catalog, confirmation, locked, selection])
 
   // Chain-open seam for the `+` command menu (tool row ①): while this popup
@@ -170,7 +179,7 @@ export function PermissionSelectFace({
   // The opener also arms the caller's settle hook (#36) for the popup's
   // lifetime: a successful write consumes the token a typed trigger opened
   // the chain from; the `+` menu passes none.
-  const canChain = !degraded && permission !== undefined && selection !== undefined && catalog !== null
+  const canChain = permission !== undefined && selection !== undefined && catalog !== null
   useEffect(() => {
     if (!canChain) return undefined
     return registerChainPopup('permission', (settle) => {
@@ -180,7 +189,7 @@ export function PermissionSelectFace({
     })
   }, [canChain])
 
-  if (degraded || permission === undefined || selection === undefined || catalog === null) return null
+  if (permission === undefined || selection === undefined || catalog === null) return null
   // A local alias so the closures below read the narrowed face (TS narrowing
   // does not reach into function declarations).
   const faceData = permission
@@ -227,40 +236,54 @@ export function PermissionSelectFace({
     settle?.()
   }
 
+  /**
+   * Write one preset. The popup stays open across the flight (a failure is
+   * reported in place, never by closing the surface), and only an admitted
+   * write closes it and settles a chain-open hook. A failed/unmatched write
+   * drops the hook — the draft token stays — and arms the retry row.
+   * The native pill never degrades: the command surface's absence is a
+   * retryable failure, not a dead face.
+   */
   function submit(id: string): void {
     if (sessionId === undefined) return
     setPick(id)
+    setSwitchError(null)
+    setFailedPick(null)
     void faceData.submit(sessionId, id)
       .then((result) => {
-        if (result.kind === 'unmatched') {
-          // The command surface is gone mid-life: latch the face off and
-          // hide the pill on the next frame (FaceGate honors the verdict).
-          // Nothing was written, so the chain token stays in the draft.
-          settleRef.current = null
-          face?.degrade('the host offers no /permission command')
-        } else if (result.kind === 'failed') {
-          // Host refusal: no consumption, and the popup is already gone —
-          // drop the hook so a later pill pick cannot settle this token.
-          settleRef.current = null
-          onError(t('permission.switchFailed', { message: result.message }))
-        } else {
+        if (result.kind === 'admitted') {
+          setOpen(false)
           settleSuccess()
+          return
         }
+        settleRef.current = null
+        setFailedPick(id)
+        setSwitchError(result.kind === 'unmatched'
+          ? t('permission.unmatched')
+          : t('permission.switchFailed', { message: result.message }))
       })
       .finally(() => { setPick(null) })
   }
 
+  /** Re-run the failed write in place (the popup's retry row). */
+  function retry(): void {
+    const id = failedPick
+    if (id === null) return
+    submit(id)
+  }
+
   const choose = (id: string): void => {
-    setOpen(false)
     if (id === selection.currentValue) {
       // The value in use is a settled pick too (no write): a chained open
       // still consumes its trigger token.
+      setOpen(false)
       settleSuccess()
       return
     }
     if (id === FULL_ACCESS || id === AUTO_REVIEW) {
       // The risk gate is a continuation, not a dismissal: the hook stays
       // armed for the confirmed write.
+      setOpen(false)
       setAcknowledged(false)
       setConfirmation(id)
       return
@@ -296,10 +319,15 @@ export function PermissionSelectFace({
         selectedId={currentValue}
         onSelect={choose}
         onClose={() => {
-          // Escape / outside pointerdown / blur close the popup plainly: the
-          // chain token stays in the draft and the unused hook is dropped.
+          // Escape / Shift+Tab / outside pointerdown close the popup: the
+          // chain token stays in the draft, the unused hook is dropped, and
+          // focus returns to the composer (issue #80; a selection-driven
+          // close is our own `setOpen(false)` and never reaches here).
           settleRef.current = null
           setOpen(false)
+          setSwitchError(null)
+          setFailedPick(null)
+          focusEditor?.()
         }}
         side="top"
         portal
@@ -330,6 +358,20 @@ export function PermissionSelectFace({
           </button>
         }
       />
+      {/* The in-place switch failure (issue #80): the host refusal or the
+          vanished command surface renders here, with the retry entry, while
+          the pill stays live and the popup stays open. */}
+      {switchError !== null && (
+        <div className={css.switchError} role="alert" data-permission-error>
+          <span className={css.switchErrorText}>{switchError}</span>
+          {failedPick !== null && (
+            <button type="button" className={css.switchRetry} data-permission-retry
+              onClick={() => { retry() }}>
+              {t('permission.retry')}
+            </button>
+          )}
+        </div>
+      )}
       {confirmation !== null && (
         <RiskConfirmation
           open

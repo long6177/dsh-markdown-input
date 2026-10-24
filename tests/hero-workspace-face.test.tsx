@@ -457,6 +457,31 @@ describe('workspace trigger posture', () => {
     void view
   })
 
+  it('is keyboard reachable: Enter and Space open the same pick menu', () => {
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: [] }], phase: 'ready' },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    // The native card carries the pick-target quartet on its text face; the
+    // takeover card carries it on its root.
+    expect(card()).toHaveAttribute('tabindex', '0')
+    expect(card()).toHaveAttribute('aria-haspopup', 'menu')
+    expect(card()).toHaveAttribute('aria-expanded', 'false')
+    expect(card()).toHaveAttribute('aria-label', copy['hero.chooseWorkspace'])
+    fireEvent.keyDown(card(), { key: 'Enter' })
+    expect(menuRows()).toHaveLength(1)
+    expect(card()).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('opens the pick menu on Space as well', () => {
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: [] }], phase: 'ready' },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.keyDown(card(), { key: ' ' })
+    expect(menuRows()).toHaveLength(1)
+  })
+
   it('does not focus the editor from a card mousedown while in the trigger posture', () => {
     const seats = hostSeats({ workspaces: { items: [], phase: 'ready' } })
     render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)

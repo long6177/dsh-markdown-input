@@ -42,14 +42,17 @@
  */
 import { MenuGroup, MenuSurface, observeStickyMenuGroups } from '@deepseek-ai/dsh-client-ui-primitives'
 import {
-  useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  Component, createElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type CSSProperties, type KeyboardEvent, type FocusEvent, type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
 import type {
-  ModelReasoningEffort, ModelSelectInjected, ModelSelection, SubagentShare,
+  ModelCatalogModel, ModelReasoningEffort, ModelSelectInjected, ModelSelection, SubagentShare,
 } from './model-face.ts'
-import { MODEL_NS, modelFaceHandle, modelLocale, modelSeatFace } from './model-face.ts'
+import {
+  MODEL_NS, modelFaceHandle, modelLabelSlotFace, modelLocale, modelSeatFace,
+  type ModelLabelSlotFace,
+} from './model-face.ts'
 import type { SessionId } from './conversation-face.ts'
 import { registerChainPopup, type ChainPopupSettle } from './chain-open.ts'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-ui-slots'
@@ -63,6 +66,67 @@ import { orderModelProviders } from './provider-order.ts'
 /** Local clsx stand-in: the vendored call sites join class strings with boolean guards. */
 function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
+}
+
+/** One model label render call (the host `renderModelLabel` signature). */
+export type ModelLabelRenderer = (
+  provider: { readonly id: string; readonly name: string },
+  model: ModelCatalogModel,
+  placement: 'trigger' | 'menu' | 'option',
+  selected: boolean,
+) => ReactNode
+
+/**
+ * A local fallback boundary for a hand-rendered label entry: a third-party
+ * component that relies on a renderer-synthesized standard seat throws here,
+ * and the catalog name stands in — the label never takes the card down
+ * (issue #80's recorded slot limitation).
+ */
+class ModelLabelBoundary extends Component<
+  { readonly fallback: string, readonly children: ReactNode },
+  { readonly failed: boolean }
+> {
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true }
+  }
+
+  state = { failed: false }
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children
+  }
+}
+
+/**
+ * The model label renderer (issue #80): read the winning
+ * `conversation.input.model.label` entry per render, subscribe to registry
+ * changes so a late badge registration repaints, and render the component with
+ * the owner props the host outlet passes. No entry → the catalog name.
+ */
+function useModelLabelRenderer(): ModelLabelRenderer {
+  const slot: ModelLabelSlotFace | undefined = modelLabelSlotFace()
+  const [, bump] = useState(0)
+  useEffect(() => {
+    if (slot === undefined) return undefined
+    return slot.subscribe(() => { bump((value) => value + 1) })
+  }, [slot])
+  return useCallback((provider, model, placement, selected) => {
+    const winner = slot?.winner()
+    if (winner === undefined) return model.name
+    const translate = winner.locale === undefined ? undefined : slot?.translate(winner.locale)
+    const Label = winner.component as (props: Record<string, unknown>) => ReactNode
+    return (
+      <ModelLabelBoundary fallback={model.name}>
+        {createElement(Label, {
+          provider,
+          model,
+          placement,
+          selected,
+          ...(translate === undefined ? {} : { t: translate }),
+        })}
+      </ModelLabelBoundary>
+    )
+  }, [slot])
 }
 
 /** Which pane the dropdown shows: the two-row root or one drilled-in list. */
@@ -85,8 +149,9 @@ const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
  * @returns the trigger and, while open, the two-level menu.
  */
 export function ModelSelect(
-  { locked, available, directory, load, select, t }:
-  ModelSelectInjected & { locked: boolean } & { t: TranslateNS<typeof MODEL_NS> },
+  { locked, available, directory, load, select, t, renderLabel = (_provider, model) => model.name }:
+  ModelSelectInjected & { locked: boolean } & { t: TranslateNS<typeof MODEL_NS> }
+  & { renderLabel?: ModelLabelRenderer },
 ) {
   const state = useSyncExternalStore(
     fn => directory.subscribe(fn),
@@ -265,7 +330,17 @@ export function ModelSelect(
     place()
     window.addEventListener('scroll', place, true)
     window.addEventListener('resize', place)
+    // Slot content can resize the card without a parent render (issue #80,
+    // the upstream `1b385d6e2a` patch after the label slot landed): a badge
+    // or a longer label changes the measured box, so the placement re-runs.
+    // jsdom has no ResizeObserver — the guard keeps the test path quiet.
+    let observer: ResizeObserver | undefined
+    if (typeof ResizeObserver !== 'undefined' && menuRef.current !== null) {
+      observer = new ResizeObserver(() => { place() })
+      observer.observe(menuRef.current)
+    }
     return () => {
+      observer?.disconnect()
       window.removeEventListener('scroll', place, true)
       window.removeEventListener('resize', place)
     }
@@ -492,6 +567,24 @@ export function ModelSelect(
     submit(selection)
   }
 
+  // The slot outlet parity (issue #80): the provider identity the label owner
+  // receives is the localized group projection, and the outlet's outer span
+  // carries the provider/model data attributes.
+  const providerOf = (group: { readonly id: string, readonly name: string }) => ({
+    id: group.id,
+    name: group.id === 'deepseek-account' ? t('provider.account') : group.name,
+  })
+  const labelOf = (
+    provider: { readonly id: string, readonly name: string },
+    model: ModelCatalogModel,
+    placement: 'trigger' | 'menu' | 'option',
+    selected: boolean,
+  ): ReactNode => (
+    <span data-provider-id={provider.id} data-model-id={model.id}>
+      {renderLabel(provider, model, placement, selected)}
+    </span>
+  )
+
   const waiting = state.current === null && state.status === 'loading'
   const modelLabel = waiting
     ? t('trigger.loading')
@@ -551,7 +644,11 @@ export function ModelSelect(
         }}
       >
         <IconDataOutlineRegular className={css.triggerIcon} size={16} />
-        <span className={css.triggerLabel}>{modelLabel}</span>
+        <span className={css.triggerLabel}>
+          {currentChoice === undefined
+            ? modelLabel
+            : labelOf(providerOf(currentChoice.group), currentChoice.model, 'trigger', true)}
+        </span>
         {effortLabel !== undefined && <span className={css.triggerEffort}>{effortLabel}</span>}
         {busy
           ? <StateDot state="ongoing" />
@@ -575,7 +672,11 @@ export function ModelSelect(
             <>
               <button ref={itemRef()} type="button" role="menuitem" className={css.cell} onClick={() => { drill('model') }}>
                 <span className={css.cellLabel}>{t('menu.model')}</span>
-                <span className={css.cellValue}>{modelLabel}</span>
+                <span className={css.cellValue}>
+                  {currentChoice === undefined
+                    ? modelLabel
+                    : labelOf(providerOf(currentChoice.group), currentChoice.model, 'menu', true)}
+                </span>
                 <IconChevronRightOutlineRegular className={css.cellChevron} />
               </button>
               {reasoning !== undefined && (
@@ -671,7 +772,7 @@ export function ModelSelect(
                             onClick={() => { choose({ provider: group.id, model: model.id }) }}
                           >
                             <span className={css.optionCopy}>
-                              <span className={css.modelName}>{model.name}</span>
+                              <span className={css.modelName}>{labelOf(providerOf(group), model, 'option', selected)}</span>
                             </span>
                             <span className={css.check}>
                               {pending?.provider === group.id && pending.model === model.id
@@ -772,10 +873,13 @@ export function ModelSelectFace({ sessionId, locked, subagent }: ModelSelectFace
   const face = modelFaceHandle()
   const [degraded, setDegraded] = useState(false)
   useEffect(() => face?.onDegrade(() => { setDegraded(true) }), [face])
+  // Hook order stays flat across the early returns below: the label slot
+  // subscriber is mounted even while the seat is absent.
+  const renderLabel = useModelLabelRenderer()
 
   const t = modelLocale()
   if (degraded || t === undefined || sessionId === undefined) return null
   const seat = modelSeatFace(sessionId, subagent)
   if (seat === undefined || !seat.available) return null
-  return <ModelSelect locked={locked} {...seat} t={t} />
+  return <ModelSelect locked={locked} {...seat} t={t} renderLabel={renderLabel} />
 }

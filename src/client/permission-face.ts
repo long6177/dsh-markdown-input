@@ -91,12 +91,29 @@ interface SessionsFace {
   binding(sessionId: SessionId): { readonly session: LiveSessionFace } | undefined
 }
 
+/** One connection generation identity (host `ConnectionHandle.generation`). */
+interface ConnectionGeneration {
+  getSnapshot(): { readonly id?: number } | undefined
+  subscribe(listener: () => void): () => void
+}
+
+/**
+ * Narrow face of the host `connection` service: the generation fence
+ * (issue #80). A catalog read belongs to the Host generation that issued it;
+ * a reconnect invalidates the displayed options and starts a fresh read.
+ */
+interface ConnectionFace {
+  readonly generation: ConnectionGeneration
+}
+
 /** The host service surfaces the face needs, resolved per call. */
 interface PermissionSurfaces {
   readonly presets: PermissionPresetsRemote
   /** Present when the `remote` service exposes forwarded events; refresh-on-change sheds without it. */
   readonly remoteEvents: RemoteEventFace | undefined
   readonly sessions: SessionsFace
+  /** Present when the host `connection` service exposes the generation fence. */
+  readonly connection: ConnectionFace | undefined
 }
 
 export type PermissionSource = () => PermissionSurfaces | undefined
@@ -128,10 +145,19 @@ export function installPermissionSource(ctx: ClientContext): void {
       if (typeof presets?.catalog !== 'function' || typeof sessions?.binding !== 'function') return undefined
       const remote = ctx.get('remote') as Partial<RemoteEventFace> | undefined
       const remoteEvents = typeof remote?.$on === 'function' ? (remote as RemoteEventFace) : undefined
+      // The generation fence is optional: without the connection service the
+      // face keeps the pre-#80 latest-read-wins behavior.
+      const connection = ctx.get('connection') as Partial<ConnectionFace> | undefined
+      const generation = connection?.generation
+      const connectionFace = generation !== undefined && generation !== null
+        && typeof generation.getSnapshot === 'function' && typeof generation.subscribe === 'function'
+        ? { generation } as ConnectionFace
+        : undefined
       return {
         presets: presets as PermissionPresetsRemote,
         remoteEvents,
         sessions: sessions as SessionsFace,
+        connection: connectionFace,
       }
     } catch {
       return undefined
@@ -191,6 +217,11 @@ function createFace(surfaces: PermissionSurfaces): PermissionFace {
   let snapshot: PermissionCatalogState = { value: null }
   const listeners = new Set<() => void>()
   let epoch = 0
+  // The connection-generation fence (issue #80, the host catalog directory's
+  // `syncGeneration`/`accepts`): every read names the generation that issued
+  // it, and a generation change hard-clears the displayed catalog.
+  let initialized = false
+  let generationId: number | undefined
   const store: ObservableSource<PermissionCatalogState> = {
     subscribe(listener: () => void): () => void {
       listeners.add(listener)
@@ -205,20 +236,55 @@ function createFace(surfaces: PermissionSurfaces): PermissionFace {
     snapshot = next
     for (const listener of [...listeners]) listener()
   }
+  /** The live Host generation, or undefined without the connection face. */
+  function currentGeneration(): number | undefined {
+    try {
+      return surfaces.connection?.generation.getSnapshot()?.id
+    } catch {
+      return undefined
+    }
+  }
+  /** Fence one read by its epoch and the generation that issued it. */
+  function accepts(readEpoch: number, readGeneration: number | undefined): boolean {
+    if (readEpoch !== epoch) return false
+    if (surfaces.connection === undefined) return true
+    return readGeneration === generationId && currentGeneration() === readGeneration
+  }
   function refresh(): void {
+    // A bound connection without a live generation has nothing to read (the
+    // read would race the reconnect); the pre-#80 path has no fence at all.
+    if (surfaces.connection !== undefined && generationId === undefined) return
     // Latest read wins: a slow stale settlement must not overwrite a newer
     // catalog (the same fence the host's catalog directory runs).
     const current = ++epoch
+    const issued = generationId
     void (async () => {
       try {
         const result = await surfaces.presets.catalog()
-        if (current !== epoch) return
+        if (!accepts(current, issued)) return
         publish({ value: result.ok ? result.value : null })
       } catch {
-        if (current !== epoch) return
+        if (!accepts(current, issued)) return
         publish({ value: null })
       }
     })()
+  }
+  /**
+   * Observe generation loss/replacement: only an actual change withdraws the
+   * displayed options; the first sync and a repeated same-generation
+   * notification leave them alone.
+   */
+  function syncGeneration(): void {
+    const next = currentGeneration()
+    if (initialized && next === generationId) return
+    const changed = initialized
+    initialized = true
+    generationId = next
+    epoch += 1
+    if (changed) publish({ value: null })
+    // A lost generation has nothing to read; the mount-time refresh and a
+    // later reconnect start the reads.
+    if (next !== undefined) refresh()
   }
   // The invalidation event re-reads; without the forwarded-event face the
   // catalog still refreshes on mount when empty and on explicit refreshes.
@@ -228,6 +294,14 @@ function createFace(surfaces: PermissionSurfaces): PermissionFace {
     } catch (error: unknown) {
       console.error('[markdown-input] permission catalog event subscription failed', error)
     }
+  }
+  if (surfaces.connection !== undefined) {
+    try {
+      surfaces.connection.generation.subscribe(() => { syncGeneration() })
+    } catch (error: unknown) {
+      console.error('[markdown-input] permission generation subscription failed', error)
+    }
+    syncGeneration()
   }
   async function submit(sessionId: SessionId, preset: string): Promise<PermissionSubmitResult> {
     try {
