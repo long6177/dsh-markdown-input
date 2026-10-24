@@ -64,7 +64,7 @@ import {
   installRosterRefreshSource, resetAgentPresetLocale, setAgentPresetLocale,
 } from './agent-preset-face.ts'
 import {
-  STATS_NS, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
+  STATS_NS, installChatSource, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
 } from './stats-pills-face.ts'
 import { installBusyEnterSource } from './submit-policy.ts'
 
@@ -305,6 +305,11 @@ export function apply(ctx: ClientContext): void {
     return resetEchoLocale
   }, 'markdown-input: echo text host copy')
   installStatsSettingsSource(ctx)
+  // The counts pill's window-fold fallback (issue #80) reads the session's
+  // chat snapshot through `uiConversation.binding(id).target('chat')` — the
+  // native ui-chat apply's own read. Without the service the pill keeps the
+  // projection-only behavior.
+  installChatSource(ctx)
   // The submission policy's busy-Enter preference (issue #79) reads the
   // `ui-conversation` settings form through the configForms service the
   // same lazy, capability-detected way: a host build without the service

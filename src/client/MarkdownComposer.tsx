@@ -1839,6 +1839,7 @@ export function MarkdownComposer({
           <FaceGate definition={statsPillsFaceDefinition(useProjection)}>
             <StatsPillsFace
               useProjection={useProjection as unknown as StatsPillsFaceProps['useProjection']}
+              sessionId={sessionId}
               copy={statsCopy}
             />
           </FaceGate>

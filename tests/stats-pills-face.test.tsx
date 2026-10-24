@@ -36,8 +36,8 @@ import {
 } from '../src/client/StatsPillsFace.tsx'
 import { resolveStatsCopy, type SessionStatsView, type StatsPillsCopy, type TokenUsageView } from '../src/client/stats-pills-core.ts'
 import {
-  installStatsSettingsSource, resetStatsLocale, resetStatsSettingsSource,
-  setStatsSettingsSource, statsSettingsStore,
+  installStatsSettingsSource, resetChatSource, resetStatsLocale, resetStatsSettingsSource,
+  setChatSource, setStatsSettingsSource, statsSettingsStore,
   type StatsSettingsStore,
 } from '../src/client/stats-pills-face.ts'
 import { en, zh } from '../src/client/locales.ts'
@@ -114,8 +114,22 @@ function mountPills(table: {
   usage?: TokenUsageView | null
   settings?: 'compact' | 'detailed' | 'loading'
   copy?: StatsPillsCopy
+  /** Settled chat nodes behind the window fold (absent = no chat target). */
+  nodes?: readonly unknown[]
 }, gateSeat: unknown = (key: string) => key): ReturnType<typeof render> {
   setStatsSettingsSource(() => table.settings === undefined ? undefined : settingsStore(table.settings))
+  // A stable snapshot reference (uSES requires it) behind the chat target.
+  const chatSnapshot = { legacy: { nodes: table.nodes } }
+  setChatSource(() => table.nodes === undefined
+    ? undefined
+    : {
+      binding: () => ({
+        target: () => ({
+          getSnapshot: () => chatSnapshot,
+          subscribe: () => () => {},
+        }),
+      }),
+    })
   return render(
     <FaceGate definition={statsPillsFaceDefinition(gateSeat)}>
       <StatsPillsFace
@@ -124,6 +138,7 @@ function mountPills(table: {
           if (key === 'tokenUsage') return table.usage
           return undefined
         }) as unknown as StatsProjectionReader}
+        sessionId={'s1'}
         copy={table.copy ?? EN_COPY}
       />
     </FaceGate>,
@@ -147,6 +162,7 @@ afterEach(() => {
   cleanup()
   resetStatsLocale()
   resetStatsSettingsSource()
+  resetChatSource()
   resetFaces()
 })
 
@@ -173,6 +189,49 @@ describe('StatsPillsFace detailed row', () => {
   it('hides the counts pill when the sessionStats projection is missing', () => {
     mountPills({ usage: USAGE })
     expect(pillTexts()).toEqual(['22.5M tok·Cache hit 99%'])
+  })
+
+  it('falls back to the settled chat window when the sessionStats projection is missing', () => {
+    // Issue #80: the native `projected ?? deriveStats(nodes)` fold — one
+    // assistant step over 1s of decode at 247 output tokens.
+    mountPills({
+      usage: USAGE,
+      nodes: [{
+        kind: 'assistant',
+        turn: 1,
+        timing: { stepStartTime: 0, firstTokenTime: 0, completedTime: 1_000 },
+        usage: { outputTokens: 247 },
+      }],
+    })
+    expect(pillTexts()).toEqual(['1 turns 1 steps·247 tok/s', '22.5M tok·Cache hit 99%'])
+  })
+
+  it('prefers the sessionStats projection over the window fold', () => {
+    mountPills({
+      stats: STATS,
+      usage: USAGE,
+      nodes: [{
+        kind: 'assistant',
+        turn: 9,
+        timing: { stepStartTime: 0, firstTokenTime: 0, completedTime: 1_000 },
+        usage: { outputTokens: 999 },
+      }],
+    })
+    expect(pillTexts()[0]).toBe('7 turns 160 steps·247 tok/s')
+  })
+
+  it('reads the fallback speed in compact mode too', () => {
+    mountPills({
+      settings: 'compact',
+      usage: USAGE,
+      nodes: [{
+        kind: 'assistant',
+        turn: 1,
+        timing: { stepStartTime: 0, firstTokenTime: 0, completedTime: 1_000 },
+        usage: { outputTokens: 247 },
+      }],
+    })
+    expect(pillTexts()).toEqual(['247 tok/s', 'Cache hit 99%'])
   })
 
   it('hides the usage pill when the tokenUsage projection is missing', () => {
