@@ -353,6 +353,10 @@ describe('takeover card dock row (issue #43)', () => {
     render(<MarkdownComposer {...cardProps({ pressure: FULL_PRESSURE })} />)
     const focus = vi.spyOn(HTMLElement.prototype, 'focus')
     try {
+      // The card's mount focus (#74) holds the text face; park focus on the
+      // body first so the assertion reads what the dock mousedown itself
+      // does.
+      if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
       const dock = document.querySelector('[data-markdown-dock]') as HTMLElement
       fireEvent.mouseDown(dock)
       expect(focus).not.toHaveBeenCalled()
