@@ -145,7 +145,7 @@ describe('MarkdownUserMessage', () => {
     expect(container.querySelector('li')).toHaveTextContent('第一项')
   })
 
-  it('delegates images to the host user-content factory and keeps file cards local', () => {
+  it('delegates every attachment to the host user-content factory in the original interleaved order (#77)', () => {
     const gallery = <div data-testid="images" />
     const renderFactorySlot = vi.fn(() => gallery)
     const loadImage = vi.fn(async () => 'blob:x')
@@ -156,18 +156,19 @@ describe('MarkdownUserMessage', () => {
             { type: 'text', text: '文件如下' },
             { type: 'image', attachment: { url: 'https://x/y.png' } },
             { type: 'file', attachment: { name: 'spec.md', bytes: 2048 } },
+            { type: 'image', attachment: { url: 'https://x/z.png' } },
           ]),
           loadImage,
           renderFactorySlot,
         } as unknown as ChatNodeViewProps<'user'>}
       />,
     )
-    // The images ride the host's own user-content factory (an images-only,
-    // text-less payload): the factory occurrence dispatches the native
-    // `conversation.chat.user.images` gallery with align 'end'. A chat-node
-    // seat cannot dispatch that slot directly — the factory owns the child
-    // declaration — so this is the one legal route back to the shipped
-    // gallery, with the seat's own `loadImage`.
+    // One factory occurrence carries ALL attachments in wire order (image
+    // and file alike): the native UserContent maps them one by one — images
+    // dispatch the gallery per attachment, file cards render between them —
+    // so the interleaved order the author sent survives. Counting all
+    // attachments (not images alone) is also what makes the host's compact
+    // tile rule fire: one image + one file must tile like two images.
     expect(renderFactorySlot).toHaveBeenCalledTimes(1)
     expect(renderFactorySlot).toHaveBeenCalledWith('conversation.chat.user.content', expect.objectContaining({
       loadImage,
@@ -175,25 +176,47 @@ describe('MarkdownUserMessage', () => {
       content: {
         text: '',
         extraBlocks: [],
-        attachments: [{ type: 'image', image: { attachment: { url: 'https://x/y.png' } } }],
+        attachments: [
+          { type: 'image', image: { attachment: { url: 'https://x/y.png' } } },
+          { type: 'file', file: { name: 'spec.md', bytes: 2048 } },
+          { type: 'image', image: { attachment: { url: 'https://x/z.png' } } },
+        ],
       },
     }))
     expect(view.getByTestId('images')).toBeInTheDocument()
-    expect(view.getByText('spec.md')).toBeInTheDocument()
+    // The file card is the factory's own render — nothing local anymore.
+    expect(view.queryByText('spec.md')).toBeNull()
   })
 
-  it('does not touch the host factory when the message has no images', () => {
+  it('does not touch the host factory when the message has no attachments', () => {
     const renderFactorySlot = vi.fn(() => null)
     const view = render(
       <MarkdownUserMessage
         {...{
-          ...seatProps('user', [{ type: 'text', text: '纯文字' }, { type: 'file', attachment: { name: 'a.md', bytes: 1 } }]),
+          ...seatProps('user', [{ type: 'text', text: '纯文字' }]),
           renderFactorySlot,
         } as unknown as ChatNodeViewProps<'user'>}
       />,
     )
     expect(renderFactorySlot).not.toHaveBeenCalled()
-    expect(view.getByText('a.md')).toBeInTheDocument()
+    expect(view.getByText('纯文字')).toBeInTheDocument()
+  })
+
+  it('keeps a foreign attachment block (no wire reference) as an extra block, not a card (#77)', () => {
+    const renderFactorySlot = vi.fn(() => null)
+    const view = render(
+      <MarkdownUserMessage
+        {...{
+          ...seatProps('user', [{ type: 'text', text: '看' }, { type: 'image' }, { type: 'file' }]),
+          renderFactorySlot,
+        } as unknown as ChatNodeViewProps<'user'>}
+      />,
+    )
+    // Wire data is untrusted: a block of image/file type without its
+    // attachment reference is not a card — the host's own fold parks it in
+    // the extra blocks (the JsonBlock face), and so does ours.
+    expect(renderFactorySlot).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-markdown-user-bubble]')?.textContent).toContain('message.extraBlock')
   })
 
   it('renders an empty message as nothing inside the bubble row', () => {

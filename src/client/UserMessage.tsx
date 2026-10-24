@@ -18,7 +18,7 @@
  */
 import { Children, Fragment, isValidElement, memo, useMemo, type ReactNode } from 'react'
 import {
-  FileTypeIcon, fileSizeText, JsonBlock, MarkdownText, ReferenceChip, UserTextRun,
+  JsonBlock, MarkdownText, ReferenceChip, UserTextRun,
   type MarkdownLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
@@ -97,32 +97,41 @@ export function composeUserMarkdown(
   return out
 }
 
-/** One content block of a user message, shaped for this projection. */
-interface ContentPart {
+/** One content block of a user message, read structurally (wire data). */
+interface ContentBlock {
   readonly type?: string
   readonly text?: string
-  readonly attachment?: { readonly name?: string, readonly bytes?: number }
+  readonly attachment?: unknown
 }
 
-/** Split content blocks into joined text, images, files, and the rest. */
+/**
+ * Split content blocks into joined text, the ordered attachment payload, and
+ * the rest — the host `MessageItem.contentParts` fold verbatim. ONE pass in
+ * wire order: images and files interleave into `attachments` exactly as the
+ * author sent them (#77 — the previous images/files split reordered them),
+ * and the all-attachment count is what drives the host's compact tile rule
+ * (one image + one file tiles like two images). A typed block without its
+ wire reference is not trusted as a card: it parks in `rest` like the
+ * host's own fold.
+ */
 export function contentParts(content: readonly unknown[]): {
   text: string
-  images: readonly UserImageBlock['attachment'][]
-  files: readonly ContentPart[]
+  attachments: readonly UserContentAttachment[]
   rest: readonly unknown[]
 } {
   const texts: string[] = []
-  const images: UserImageBlock['attachment'][] = []
-  const files: ContentPart[] = []
+  const attachments: UserContentAttachment[] = []
   const rest: unknown[] = []
   for (const block of content) {
-    const b = block as ContentPart
+    const b = block as ContentBlock
     if (b.type === 'text' && typeof b.text === 'string') texts.push(b.text)
-    else if (b.type === 'image' && b.attachment !== undefined) images.push((block as UserImageBlock).attachment)
-    else if (b.type === 'file') files.push(b)
-    else rest.push(block)
+    else if (b.type === 'image' && b.attachment !== undefined) {
+      attachments.push({ type: 'image', image: { attachment: (block as UserImageBlock).attachment } })
+    } else if (b.type === 'file' && b.attachment !== undefined) {
+      attachments.push({ type: 'file', file: b.attachment })
+    } else rest.push(block)
   }
-  return { text: texts.join(''), images, files, rest }
+  return { text: texts.join(''), attachments, rest }
 }
 
 /**
@@ -135,7 +144,7 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
   node, loadImage, renderFactorySlot, t,
 }: ChatNodeViewProps<MarkdownSeatKind>) {
   const data = node.data
-  const { text, images, files, rest } = contentParts(data.content)
+  const { text, attachments, rest } = contentParts(data.content)
   // Stable per locale revision: a fresh object identity would rebuild
   // MarkdownText's caches per render (host parity).
   const labels = useMemo(() => markdownLabels(t), [t])
@@ -144,42 +153,28 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
   return (
     <div className={css.row} data-markdown-user-message>
       <div className={css.stack}>
-        {(images.length > 0 || files.length > 0) && (
-          <div className={css.attachmentRow} data-message-attachments>
-            {images.length > 0 && renderFactorySlot('conversation.chat.user.content', {
-              // Images-only, text-less payload: the text keeps rendering in
-              // this seat's Markdown bubble, the factory occurrence renders
-              // just the native attachment row and dispatches the shipped
-              // `conversation.chat.user.images` gallery (align 'end') with
-              // this seat's `loadImage`. A `conversation.chat.node` entry
-              // cannot dispatch that slot directly — the host's
-              // `conversation.chat.user.content` factory owns its child
-              // declaration, and chat-node renderers receive no `renderSlot`
-              // seat — so the factory occurrence is the one legal route back
-              // to the native gallery (mirrors ui-chat UserContent.tsx).
-              content: {
-                text: '',
-                extraBlocks: [],
-                attachments: images.map(attachment => ({
-                  type: 'image',
-                  image: { attachment },
-                })) satisfies readonly UserContentAttachment[],
-              },
-              loadImage,
-              facts: {},
-              interactive: true,
-            })}
-            {files.map((file, index) => (
-              <span key={index} className={css.fileCard} title={file.attachment?.name}>
-                <FileTypeIcon className={css.fileIcon} path={file.attachment?.name ?? ''} />
-                <span className={css.fileContent}>
-                  <span className={css.fileName}>{file.attachment?.name}</span>
-                  <span className={css.fileMeta}>{fileSizeText(file.attachment?.bytes ?? 0)}</span>
-                </span>
-              </span>
-            ))}
-          </div>
-        )}
+        {attachments.length > 0 && renderFactorySlot('conversation.chat.user.content', {
+          // All attachments in wire order, text-less payload: the text keeps
+          // rendering in this seat's Markdown bubble, the factory occurrence
+          // renders just the native attachment row — images dispatch the
+          // shipped `conversation.chat.user.images` gallery per attachment
+          // (align 'end'), file cards render between them with the native
+          // extension-badge + size meta — and `compact` counts every
+          // attachment the way the native fold does. A
+          // `conversation.chat.node` entry cannot dispatch those slots
+          // directly — the host's `conversation.chat.user.content` factory
+          // owns its child declaration, and chat-node renderers receive no
+          // `renderSlot` seat — so the factory occurrence is the one legal
+          // route back to the native gallery (mirrors ui-chat UserContent).
+          content: {
+            text: '',
+            extraBlocks: [],
+            attachments,
+          },
+          loadImage,
+          facts: {},
+          interactive: true,
+        })}
         {(text !== '' || rest.length > 0) && (
           <div className={css.bubble} data-markdown-user-bubble>
             {composeUserMarkdown(text, labels, referenceLabels, skillNames)}
