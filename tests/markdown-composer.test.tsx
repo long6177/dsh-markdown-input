@@ -310,6 +310,25 @@ describe('MarkdownComposer', () => {
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
   })
 
+  it('sends one message when Enter lands twice before the host settles (#74)', async () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const view = render(<MarkdownComposer {...chainProps({ draft: '一发', inputActions })} />)
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      // A second physical press inside the send pipeline's window (the
+      // machine detaches back to plain in a blink, so the phase guard alone
+      // passes it): the in-flight gate holds it — one setDraft, one submit.
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+      expect(inputActions.submit).toHaveBeenCalledTimes(1)
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the icon-only seats localized: the copy follows the active language', () => {
     const zhT = ((key: keyof typeof zh, params?: Record<string, string>) =>
       zh[key].replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`)
@@ -394,6 +413,32 @@ describe('MarkdownComposer', () => {
     fireEvent.click(seatNamed(en['composer.action.submit']))
     await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith('- a'))
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('cuts the undo history at the accepted send so Ctrl+Z cannot resurrect sent text (#74)', async () => {
+    // The mount seed and the accepted send's clear are adjacent same-range
+    // dispatches; only clock separation keeps them in separate undo groups
+    // (the production gap is real seconds). Date alone is faked — the
+    // submit hop and waitFor keep their real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const view = render(<MarkdownComposer {...chainProps({ draft: '已发送的话', inputActions })} />)
+      expect(content().textContent).toContain('已发送的话')
+      vi.advanceTimersByTime(600)
+      fireEvent.click(seatNamed(en['composer.action.submit']))
+      await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+      // The host accepted the send and cleared the machine draft; the seed
+      // applies the clear and the commit point cuts the whole undo stack.
+      view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+      await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+      fireEvent.keyDown(content(), { key: 'z', ctrlKey: true })
+      // The placeholder alone: the sent text did not come back.
+      expect(content().textContent).toBe(en['composer.placeholder.render'])
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
