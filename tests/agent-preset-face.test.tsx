@@ -16,8 +16,10 @@ import {
   type AgentPresetFaceProps,
 } from '../src/client/AgentPresetFace.tsx'
 import {
-  agentPresetsRemoteFace, resetAgentPresetsSource, setAgentPresetsSource,
-  type AgentPresetsRemoteFace,
+  agentPresetsRemoteFace, developerToolsEnabledOf, developerToolsStore,
+  DEVELOPER_TOOLS_NAMESPACE, installDeveloperToolsSource, resetAgentPresetsSource,
+  resetDeveloperToolsSource, setAgentPresetsSource,
+  type AgentPresetsRemoteFace, type DeveloperToolsSnapshot,
 } from '../src/client/agent-preset-face.ts'
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
@@ -107,6 +109,7 @@ afterEach(() => {
   cleanup()
   resetFaces()
   resetAgentPresetsSource()
+  resetDeveloperToolsSource()
 })
 
 describe('AgentPresetFace visibility', () => {
@@ -268,6 +271,67 @@ describe('resolveAgentPresetsRemote', () => {
     // A throwing resolver (sealed globals, exotic host builds) reads as absent.
     setAgentPresetsSource(() => { throw new Error('sealed') })
     expect(agentPresetsRemoteFace()).toBeUndefined()
+  })
+})
+
+describe('developer tools settings source (the native gate signal, #78)', () => {
+  /** A configForms service double carrying the given namespaces. */
+  function configForms(forms: Record<string, unknown>): { get(namespace: string): unknown } {
+    return { get: (namespace: string) => forms[namespace] }
+  }
+
+  /** A snapshot-store form double (the shape configForms hands out). */
+  function storeForm(snapshot: DeveloperToolsSnapshot | undefined) {
+    let current = snapshot
+    const listeners = new Set<() => void>()
+    return {
+      getSnapshot: () => current,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      set: (next: DeveloperToolsSnapshot) => {
+        current = next
+        for (const listener of [...listeners]) listener()
+      },
+    }
+  }
+
+  it('reads the enabled field off the snapshot, defaulting to off (the native ?? false)', () => {
+    expect(developerToolsEnabledOf(undefined)).toBe(false)
+    expect(developerToolsEnabledOf({})).toBe(false)
+    expect(developerToolsEnabledOf({ value: undefined })).toBe(false)
+    expect(developerToolsEnabledOf({ value: { enabled: true } })).toBe(true)
+    expect(developerToolsEnabledOf({ value: { enabled: false } })).toBe(false)
+  })
+
+  it('resolves the ui-settings form through configForms, capability-detected', () => {
+    const form = storeForm({ value: { enabled: true } })
+    installDeveloperToolsSource({ get: (key: string) =>
+      key === 'configForms' ? configForms({ [DEVELOPER_TOOLS_NAMESPACE]: form }) : undefined } as never)
+    expect(developerToolsStore()).toBe(form)
+    resetDeveloperToolsSource()
+    expect(developerToolsStore()).toBeUndefined()
+  })
+
+  it('reads an absent service, an absent form, or a half-shaped form as absent', () => {
+    // No configForms service at all.
+    installDeveloperToolsSource({ get: () => undefined } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // The service answers, the namespace has no form.
+    installDeveloperToolsSource({ get: (key: string) =>
+      key === 'configForms' ? configForms({}) : undefined } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // A form without the snapshot-store face is not a form.
+    installDeveloperToolsSource({ get: (key: string) =>
+      key === 'configForms' ? configForms({ [DEVELOPER_TOOLS_NAMESPACE]: { getSnapshot: () => undefined } }) : undefined } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // Sealed globals: a throwing probe is absence, never a crash.
+    installDeveloperToolsSource({ get: () => { throw new Error('sealed') } } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // Uninstalled (the fresh-page shape).
+    resetDeveloperToolsSource()
+    expect(developerToolsStore()).toBeUndefined()
   })
 })
 

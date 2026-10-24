@@ -22,9 +22,25 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { AgentPresetOption } from './agent-preset-core.ts'
+import type { ObservableSource } from './conversation-face.ts'
 
 /** The host namespace the preset seat's display copy lives in (ui-agent-preset's locale NS). */
 export const AGENT_PRESET_NS = 'settings.agentPreset'
+
+/**
+ * The host settings namespace carrying the Developer-tools preference
+ * (`ui-settings/src/developer-tools-settings.ts`): the form's `enabled`
+ * field is the gate the native seat filters its menu by.
+ */
+export const DEVELOPER_TOOLS_NAMESPACE = 'ui-settings'
+
+/**
+ * The host settings namespace whose roster document the seat follows
+ * (`settings-store.ts:17`, the native `AGENT_PRESET_SETTINGS_NS`): a
+ * `settings/document-updated` for THIS namespace (and only this one) is a
+ * roster change worth a re-read.
+ */
+export const AGENT_PRESET_SETTINGS_NS = 'agent-preset-registry'
 
 /** The bound host translate as the seat consumes it (untyped: the namespace is outside this build's merge table). */
 export type AgentPresetLocaleTranslate = (key: string, params?: Record<string, unknown>) => string
@@ -134,4 +150,86 @@ export function installAgentPresetsSource(ctx: ClientContext): void {
  */
 export function resetAgentPresetsSource(): void {
   source = () => undefined
+}
+
+/**
+ * Structural view of the Developer-tools form snapshot — exactly the field
+ * the native gate reads (`ui-settings/src/client/developer-tools.ts:16`).
+ */
+export interface DeveloperToolsSnapshot {
+  readonly value?: { readonly enabled?: boolean } | undefined
+}
+
+/** The Developer-tools form as the face consumes it (a bare snapshot store). */
+export type DeveloperToolsStore = ObservableSource<DeveloperToolsSnapshot>
+
+/**
+ * The Developer-tools preference one snapshot selects, the native observable
+ * face's own reading (`developer-tools.ts:16`): `value?.enabled ?? false` —
+ * a form whose document has not landed yet reads OFF, exactly as the native
+ * seat sees it. An absent store reads the same way, so a host build without
+ * the settings service keeps the gate closed (the tool presets stay hidden
+ * unless the host can confirm they are wanted).
+ * @param snapshot - the form snapshot, if the service is present.
+ */
+export function developerToolsEnabledOf(snapshot: DeveloperToolsSnapshot | undefined): boolean {
+  return snapshot?.value?.enabled ?? false
+}
+
+export type DeveloperToolsSource = () => DeveloperToolsStore | undefined
+
+let developerToolsSource: DeveloperToolsSource = () => undefined
+
+/**
+ * Bind the Developer-tools source (the client apply does this once; the thunk
+ * resolves per call so boot order stays free).
+ * @param resolve - lazy resolver; `undefined` = the service is absent.
+ */
+export function setDeveloperToolsSource(resolve: DeveloperToolsSource): void {
+  developerToolsSource = resolve
+}
+
+/**
+ * The `ui-settings` form, or undefined while the configForms service is
+ * absent — the seat then runs the gate closed (see
+ * {@link developerToolsEnabledOf}). Read per call (a render) so a service
+ * that materializes later is still found; a throwing `ctx.get` reads as
+ * absent — a render must never be the thing that throws into the card.
+ */
+export function developerToolsStore(): DeveloperToolsStore | undefined {
+  try {
+    return developerToolsSource()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Install the lazy resolver on the client root context (called once from the
+ * plugin apply). The form is capability-detected, the `installStatsSettingsSource`
+ * idiom one namespace over: a service without the `get` face, or a form
+ * without the snapshot-store face, reads as absent.
+ * @param ctx - client root context.
+ */
+export function installDeveloperToolsSource(ctx: ClientContext): void {
+  setDeveloperToolsSource(() => {
+    const forms = ctx.get('configForms') as { get?(namespace: string): unknown } | undefined
+    if (forms === undefined || forms === null || typeof forms.get !== 'function') return undefined
+    const form = forms.get(DEVELOPER_TOOLS_NAMESPACE) as
+      | (DeveloperToolsStore & Record<string, unknown>)
+      | undefined
+    if (form === undefined || form === null) return undefined
+    if (typeof form.getSnapshot !== 'function' || typeof form.subscribe !== 'function') {
+      return undefined
+    }
+    return form as DeveloperToolsStore
+  })
+}
+
+/**
+ * Test seam: drop the source so a fresh test sees no settings service. Never
+ * call in plugin code — the binding is page-lifetime by design.
+ */
+export function resetDeveloperToolsSource(): void {
+  developerToolsSource = () => undefined
 }
