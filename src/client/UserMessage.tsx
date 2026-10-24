@@ -38,7 +38,18 @@ export type MarkdownSeatKind = 'user' | 'steering'
 /** Chat-seat copy for the Markdown chrome (same keys the host passes down). */
 function markdownLabels(t: ChatNodeViewProps<MarkdownSeatKind>['t']): MarkdownLabels {
   return {
-    code: { copyLabel: t('copy'), copiedLabel: t('copied') },
+    code: {
+      copyLabel: t('copy'),
+      copiedLabel: t('copied'),
+      // The fence toolbar's own labels (#77): without them CodeBlock sheds
+      // the card + wrap/unwrap toggle and falls back to the bare copy
+      // banner. Same `chat` keys the host's markdown-labels fold uses.
+      toolbarLabels: {
+        codeLabel: t('codeBlock.title'),
+        wrapLabel: t('codeBlock.wrap'),
+        unwrapLabel: t('codeBlock.unwrap'),
+      },
+    },
     footnotes: t('markdown.footnotes'),
   }
 }

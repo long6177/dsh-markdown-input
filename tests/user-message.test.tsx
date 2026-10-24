@@ -230,6 +230,22 @@ describe('MarkdownUserMessage', () => {
     expect(t).toHaveBeenCalledWith('copy')
     expect(t).toHaveBeenCalledWith('markdown.footnotes')
   })
+
+  it('arms code fences with the toolbar labels — wrap/unwrap ride the same seat (#77)', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '```ts\nconst a = 1\n```' }])} />,
+    )
+    // The label keys resolve through the chat `t` seat (the host `chat`
+    // dictionary's own keys, copied verbatim into the plugin fallback).
+    expect(t).toHaveBeenCalledWith('codeBlock.title')
+    expect(t).toHaveBeenCalledWith('codeBlock.wrap')
+    expect(t).toHaveBeenCalledWith('codeBlock.unwrap')
+    // The fence renders as the toolbar card: language label plus the wrap
+    // toggle (the mock `t` echoes keys, so the labels read as the keys).
+    const toggle = container.querySelector('[data-code-wrap] button[aria-pressed]')
+    expect(toggle).not.toBeNull()
+    expect(toggle).toHaveAttribute('aria-label', 'codeBlock.wrap')
+  })
 })
 
 describe('MarkdownUserMessage copy actions (#33)', () => {
