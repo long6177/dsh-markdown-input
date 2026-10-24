@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest'
 import {
   assembleCompletionView, detectCompletion, formatFileMention, guardAllowsProbe,
   sameProbeIdentity, skillInsertion,
-  type CompletionProbe, type FileReferenceCandidate,
+  type CompletionProbe, type FileReferenceCandidate, type SessionMentionCandidate,
 } from '../src/client/completion-core.ts'
 import type { CommandMenuRow } from '../src/client/command-rows.ts'
 import { en, zh } from '../src/client/locales.ts'
@@ -296,5 +296,139 @@ describe('assembleCompletionView — @ trigger', () => {
       staleFiles: null, t: tZh,
     })
     expect(view?.groups[0]?.entries).toHaveLength(1)
+  })
+})
+
+describe('assembleCompletionView — @ session mentions (#75)', () => {
+  const NOW = 1_700_000_000_000
+  const env = {
+    sessionId: 's1',
+    now: NOW,
+    home: '/home/u',
+    summaries: {
+      child: { origin: 'subagent', parentSessionId: 's1', updatedAt: NOW - 5 * 60_000 },
+      childAlias: { origin: 'subagent', parentId: 's1', updatedAt: NOW - 5 * 60_000 },
+      other: { origin: 'subagent', parentSessionId: 'elsewhere', updatedAt: NOW - 3_600_000 },
+    },
+  } as const
+  const sessions: readonly SessionMentionCandidate[] = [
+    {
+      sessionId: 's2', label: 's2', displayTitle: '重构子任务', cwd: '/home/u/work',
+      sameWorkspace: true, createdAt: NOW - 5 * 60_000, mention: '@[重构子任务](dsh-session:c2hvb3Q)',
+    },
+    {
+      sessionId: 's3', label: '远端会话', cwd: '/else/where', sameWorkspace: false,
+      createdAt: NOW - 26 * 3_600_000, mention: '@[远端会话](dsh-session:b3RoZXI)',
+    },
+    {
+      sessionId: 's4', label: 's4', sameWorkspace: false,
+      createdAt: NOW - 30_000, mention: '@[s4](dsh-session:cw)',
+    },
+  ]
+
+  it('orders file candidates, then the subagents of the session, then other sessions, with native sections', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: '', position: 'inline', start: 2, end: 3 }),
+      commandRows: null, skills: null, files: [{ path: 'a.md', kind: 'file' }], staleFiles: null,
+      sessions: [
+        { ...sessions[2]!, sessionId: 's5' },
+        { ...sessions[0]!, sessionId: 'child' },
+        { ...sessions[1]!, sessionId: 's3' },
+      ],
+      staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    expect(view?.groups.map((group) => group.id)).toEqual(['file', 'session'])
+    const rows = view?.groups[1]?.entries ?? []
+    expect(rows.map((entry) => entry.section)).toEqual(['子智能体', '对话', '对话'])
+    expect(rows.map((entry) => (entry.option as { name: string }).name))
+      .toEqual(['重构子任务', 's4', '远端会话'])
+  })
+
+  it('detects subagents through the parentSessionId field or its upstream parentId alias', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: '', position: 'inline', start: 2, end: 3 }),
+      commandRows: null, skills: null, files: [], staleFiles: null,
+      sessions: [
+        { ...sessions[0]!, sessionId: 'child' },
+        { ...sessions[0]!, sessionId: 'childAlias' },
+        { ...sessions[0]!, sessionId: 'other' },
+        { ...sessions[0]!, sessionId: 'unlisted' },
+      ],
+      staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    const sections = view?.groups.find((group) => group.id === 'session')?.entries.map((entry) => entry.section) ?? []
+    expect(sections).toEqual(['子智能体', '子智能体', '对话', '对话'])
+  })
+
+  it('describes a row with its age, joined with the workspace when it differs', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: '', position: 'inline', start: 2, end: 3 }),
+      commandRows: null, skills: null, files: [], staleFiles: null,
+      sessions: [sessions[0]!, sessions[1]!, sessions[2]!],
+      staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    const descriptions = view?.groups.find((group) => group.id === 'session')?.entries.map((entry) => (entry.option as { description: string }).description) ?? []
+    // The subagent reads its summary's update time (5 minutes ago); the
+    // same-workspace row names no location; the other workspace abbreviates
+    // its home path; an unlisted cross-workspace session marks the missing
+    // cwd and ages from its creation time.
+    expect(descriptions[0]).toBe('5分钟')
+    expect(descriptions[1]).toBe('/else/where · 1天')
+    expect(descriptions[2]).toBe('（无工作目录） · 刚刚')
+  })
+
+  it('marks a cross-workspace candidate with no recorded cwd', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: '', position: 'inline', start: 2, end: 3 }),
+      commandRows: null, skills: null, files: [], staleFiles: null,
+      sessions: [{ ...sessions[1]!, cwd: undefined }],
+      staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    const option = view?.groups.find((group) => group.id === 'session')?.entries[0]?.option as { description: string }
+    expect(option.description).toBe('（无工作目录） · 1天')
+  })
+
+  it('keeps the wire mention as the pick payload', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: '', position: 'inline', start: 2, end: 3 }),
+      commandRows: null, skills: null, files: [], staleFiles: null,
+      sessions: [sessions[0]!],
+      staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    const option = view?.groups.find((group) => group.id === 'session')?.entries[0]?.option as { origin: string; mention: string }
+    expect(option.origin).toBe('session')
+    expect(option.mention).toBe('@[重构子任务](dsh-session:c2hvb3Q)')
+  })
+
+  it('omits the session group when the plane landed nothing', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: 'a', position: 'inline', start: 2, end: 4 }),
+      commandRows: null, skills: null, files: [{ path: 'a.md', kind: 'file' }], staleFiles: null,
+      sessions: [], staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    expect(view?.groups.map((group) => group.id)).toEqual(['file'])
+    expect(view?.pending).toBe(false)
+  })
+
+  it('keeps stale session rows visible while the batch refines', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: 'ab', position: 'inline', start: 2, end: 4 }),
+      commandRows: null, skills: null, files: null, staleFiles: [{ path: 'a.md', kind: 'file' }],
+      sessions: null, staleSessions: [sessions[0]!], sessionEnv: env, t: tZh,
+    })
+    expect(view?.groups[0]?.status).toBe('pending')
+    expect(view?.groups[1]?.entries).toHaveLength(1)
+    expect(view?.pending).toBe(true)
+  })
+
+  it('keeps the resolver candidate order (the host ranks, the popup does not)', () => {
+    const view = assembleCompletionView({
+      probe: probe({ trigger: '@', query: '重', position: 'inline', start: 2, end: 4 }),
+      commandRows: null, skills: null, files: [], staleFiles: null,
+      sessions: [sessions[1]!, sessions[0]!],
+      staleSessions: null, sessionEnv: env, t: tZh,
+    })
+    expect(view?.groups.find((group) => group.id === 'session')?.entries.map((entry) => (entry.option as { name: string }).name))
+      .toEqual(['远端会话', '重构子任务'])
   })
 })

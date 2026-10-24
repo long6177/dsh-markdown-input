@@ -43,6 +43,10 @@ import { installPermissionSource } from './permission-face.ts'
 import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
 import { installSkillSource } from './skill-face.ts'
 import { installFileReferenceSource } from './file-reference-face.ts'
+import { installSessionReferenceSource } from './session-reference-face.ts'
+import { installSessionsSource } from './sessions-face.ts'
+import { installSidebarRightSource } from './sidebar-right-face.ts'
+import { installReferenceLocales } from './reference-locale.ts'
 import { TakeoverCard } from './composer-card.tsx'
 import { CONTEXT_NS, resetContextLocale, setContextLocale } from './context-meter-face.ts'
 import { ECHO_TEXT_NS, resetEchoLocale, setEchoLocale } from './echo-text-face.ts'
@@ -158,6 +162,17 @@ export function apply(ctx: ClientContext): void {
   // `remote.fileReferences` namespace the same lazy way; without it the
   // popup face hides and typed `@` stays plain text.
   installFileReferenceSource(ctx)
+  // The reference surfaces (#75) read their host planes the same lazy way:
+  // the `@` popup's session mentions (`remote.sessionReferenceResolver`),
+  // the sessions snapshot (subagent facts, cwd, ages), the right-sidebar
+  // navigation controller (file/skill chip previews), and the reference/
+  // secretMask copy bindings. Each probes alone — a host build missing one
+  // degrades exactly that surface (no session group, display-only chips,
+  // fallback words) while the rest of the card stays.
+  installSessionReferenceSource(ctx)
+  installSessionsSource(ctx)
+  installSidebarRightSource(ctx)
+  installReferenceLocales(ctx)
   // The tool-row ① command menu reads the host `remote.commands` catalog
   // RPCs the same lazy way; a missed wiring here latches the face off for
   // the page life and the tool row silently stays on the paperclip
@@ -321,6 +336,15 @@ export function apply(ctx: ClientContext): void {
         key,
         priority: -1,
         locale: 'chat',
+        // The session scope's binding key rides the inject positionally (the
+        // native keyed-entry mechanism — the renderer passes the sessionId
+        // as the first argument): it is what scopes the bubble's chip
+        // activations (#75). The declared `ChatNodeInjected` face carries
+        // only hook factories, so the widened inject is cast — the runtime
+        // merges whatever the inject returns into the seat's props.
+        inject: ((sessionId: unknown) => ({
+          sessionId: typeof sessionId === 'string' ? sessionId : undefined,
+        })) as never,
       }, MarkdownUserMessage))
     }
     // The submission echo's text run (#77): the keyed `conversation.user.

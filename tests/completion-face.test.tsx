@@ -27,6 +27,10 @@ import { CompletionFace, completionFaceDefinition, type CompletionFaceProps } fr
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetFeedbackSource, setFeedbackSource } from '../src/client/feedback-face.ts'
 import { resetFileReferenceFace, setFileReferenceSource } from '../src/client/file-reference-face.ts'
+import {
+  resetSessionReferenceFace, setSessionReferenceSource, type SessionMentionCandidate,
+} from '../src/client/session-reference-face.ts'
+import { resetSessionsSource, setSessionsSource } from '../src/client/sessions-face.ts'
 import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 import { createMarkdownEditor, type CompletionProbeListener, type MarkdownEditorHandle, type MenuKeyHandler } from '../src/client/markdown-editor.ts'
 import type { CompletionProbe } from '../src/client/completion-core.ts'
@@ -94,6 +98,11 @@ interface MountOptions {
   guard?: 'plain' | 'claimed' | 'frozen'
   fileResults?: readonly { path: string, kind: 'file' | 'directory' }[]
   fileSearch?: ReturnType<typeof vi.fn>
+  /** Landed session-mention candidates; absent = the plane is not installed. */
+  sessionResults?: readonly SessionMentionCandidate[]
+  sessionSearch?: ReturnType<typeof vi.fn>
+  /** The host session-list snapshot (`byId`) the row facts read. */
+  sessionsById?: Record<string, unknown>
   executeResult?: unknown
   /** Landed skill roll; absent = the lexicon read stays pending (skeleton). */
   skills?: readonly { name: string, description?: string, modelInvocable?: boolean }[]
@@ -132,6 +141,20 @@ function mountFace(options: MountOptions = {}) {
     ],
   }))
   setFileReferenceSource(() => ({ fileReferences: { list: fileSearch } }))
+  const sessionSearch = options.sessionSearch ?? vi.fn(() => Promise.resolve({
+    ok: true,
+    value: options.sessionResults ?? [],
+  }))
+  if ('sessionResults' in options || options.sessionSearch !== undefined) {
+    setSessionReferenceSource(() => ({ sessionReferenceResolver: { candidates: sessionSearch } }))
+  }
+  if (options.sessionsById !== undefined) {
+    setSessionsSource(() => ({
+      get: (key: string) => (key === 'sessions'
+        ? { list: { getSnapshot: () => ({ byId: options.sessionsById }) } }
+        : undefined),
+    }))
+  }
   const { editor, editorRef, handler, emit, dispatch } = stubEditor()
   const containerRef = { current: null as HTMLElement | null }
   const props = {
@@ -153,7 +176,7 @@ function mountFace(options: MountOptions = {}) {
       </FaceGate>
     </div>,
   )
-  return { view, onError, onPickFiles, registerClose, onOpen, handler, emit, dispatch, fileSearch, commandExecute, editor }
+  return { view, onError, onPickFiles, registerClose, onOpen, handler, emit, dispatch, fileSearch, sessionSearch, commandExecute, editor }
 }
 
 function listbox(): HTMLElement | null {
@@ -193,6 +216,8 @@ afterEach(() => {
   resetFeedbackSource()
   resetSkillFace()
   resetFileReferenceFace()
+  resetSessionReferenceFace()
+  resetSessionsSource()
   resetModelFace()
   resetPermissionFace()
   resetChainPopups()
@@ -373,6 +398,80 @@ describe('CompletionFace @ popup', () => {
     await waitFor(() => expect(listbox()).toBeNull())
     // A fresh query reopens (its fetch stays pending here: the skeleton).
     await openAt(emit, 'src')
+  })
+})
+
+describe('CompletionFace @ session mentions (#75)', () => {
+  const minute = 60_000
+  const mention = (id: string, label: string): string => `@[${label}](dsh-session:${btoa(JSON.stringify(id)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')})`
+
+  it('lists session rows after the file rows under the native sections', async () => {
+    const now = Date.now()
+    const { emit } = mountFace({
+      fileResults: [{ path: 'a.md', kind: 'file' }],
+      sessionResults: [
+        {
+          sessionId: 's2', label: 's2', displayTitle: '重构子任务', cwd: '/w',
+          sameWorkspace: true, createdAt: now - 5 * minute,
+          mention: mention('s2', '重构子任务'),
+        },
+        {
+          sessionId: 's3', label: '远端会话', cwd: '/else/where', sameWorkspace: false,
+          createdAt: now - 26 * 3_600_000, mention: mention('s3', '远端会话'),
+        },
+      ],
+      sessionsById: {
+        s2: { origin: 'subagent', parentSessionId: 's1', updatedAt: now - 5 * minute },
+      },
+    })
+    await openAt(emit)
+    await waitFor(() => expect(options()).toHaveLength(3))
+    expect(sectionTitles()).toEqual(['文件与文件夹', '子智能体', '对话'])
+    const subagentRow = options().find((row) => row.getAttribute('data-completion-option') === '重构子任务')
+    expect(subagentRow?.textContent).toContain('重构子任务')
+    expect(subagentRow?.textContent).toContain('5分钟')
+    const otherRow = options().find((row) => row.getAttribute('data-completion-option') === '远端会话')
+    expect(otherRow?.textContent).toContain('/else/where · 1天')
+  })
+
+  it('picks a session row by inserting its wire mention over the token span', async () => {
+    const wire = mention('s2', '重构子任务')
+    const { emit, dispatch } = mountFace({
+      fileResults: [],
+      sessionResults: [{
+        sessionId: 's2', label: 's2', displayTitle: '重构子任务', sameWorkspace: true,
+        createdAt: Date.now(), mention: wire,
+      }],
+    })
+    await openAt(emit)
+    await waitFor(() => expect(options()).toHaveLength(1))
+    const row = options().find((el) => el.getAttribute('data-completion-option') === '重构子任务')!
+    fireEvent.mouseDown(row, { cancelable: true })
+    expect(dispatch).toHaveBeenCalledTimes(1)
+    const spec = dispatch.mock.calls[0]![0] as { changes: { from: number; to: number; insert: string } }
+    expect(spec.changes).toEqual({ from: 2, to: 5, insert: wire })
+    expect(listbox()).toBeNull()
+  })
+
+  it('skips the session query on an open quoted token (native rule)', async () => {
+    const { emit, sessionSearch } = mountFace({
+      sessionResults: [],
+    })
+    await act(async () => {
+      emit(probe({ trigger: '@', query: 'src', quoted: true, start: 2, end: 6 }))
+    })
+    await waitFor(() => expect(sessionSearch).not.toHaveBeenCalled())
+    // Only the file group answers a quoted token.
+    expect(sectionTitles()).toEqual(['文件与文件夹'])
+  })
+
+  it('keeps the file group whole when the session plane is absent', async () => {
+    const { emit } = mountFace({
+      fileResults: [{ path: 'a.md', kind: 'file' }],
+    })
+    await openAt(emit)
+    await waitFor(() => expect(options()).toHaveLength(1))
+    expect(sectionTitles()).toEqual(['文件与文件夹'])
   })
 })
 

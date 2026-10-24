@@ -29,9 +29,12 @@
  * dropped). Stale-while-revalidate is a data shape here: a pending group
  * keeps its previous results visible while the fresh fetch runs.
  */
-import { rankByName } from '@deepseek-ai/dsh-client-ui-primitives'
+import { rankByName, relativeTime } from '@deepseek-ai/dsh-client-ui-primitives'
+import { abbreviateHomePath } from '@deepseek-ai/dsh-util-workspace-path'
 import type { CommandMenuRow } from './command-rows.ts'
 import type { SkillEntry } from './skill-face.ts'
+import type { SessionMentionCandidate } from './session-reference-face.ts'
+import type { SessionSummaryLike } from './sessions-face.ts'
 import type { ComposerKey } from './locales.ts'
 
 /** The two trigger characters the popups track. */
@@ -193,10 +196,19 @@ export type CompletionOption =
     /** The parent directory, empty at the workspace root. */
     readonly parent: string
   }
+  | {
+    readonly origin: 'session'
+    /** The canonical wire mention this pick inserts (candidate.mention verbatim). */
+    readonly mention: string
+    /** The row's display name (the durable display title, else the label). */
+    readonly name: string
+    /** The workspace location and/or the relative age (native description). */
+    readonly description: string
+  }
 
 /** One displayed candidate with its group and optional section title. */
 export interface CompletionEntry {
-  readonly group: 'command' | 'skill' | 'file'
+  readonly group: 'command' | 'skill' | 'file' | 'session'
   /** Translated section title; a change between neighbours renders a title row. */
   readonly section?: string
   readonly option: CompletionOption
@@ -204,7 +216,7 @@ export interface CompletionEntry {
 
 /** One candidate group as the MenuView renders it. */
 export interface CompletionGroupView {
-  readonly id: 'command' | 'skill' | 'file'
+  readonly id: 'command' | 'skill' | 'file' | 'session'
   readonly status: 'ready' | 'pending'
   /**
    * Source-group title (指令/技能), rendered when no entry carries a section
@@ -238,7 +250,87 @@ export interface CompletionViewInput {
   readonly files: readonly FileReferenceCandidate[] | null
   /** Previous results kept visible while the fresh fetch runs (SWR). */
   readonly staleFiles: readonly FileReferenceCandidate[] | null
-  readonly t: (key: ComposerKey) => string
+  /**
+   * Landed session-mention candidates for the live query (null while the
+   * batch is pending); empty when the plane is absent, the token is quoted
+   * (native: no session query on an open quote), or nothing matched.
+   * Undefined reads as null (callers predating the session plane).
+   */
+  readonly sessions?: readonly SessionMentionCandidate[] | null
+  /** Previous session candidates kept visible while the fresh fetch runs. */
+  readonly staleSessions?: readonly SessionMentionCandidate[] | null
+  /** The display environment of the session rows (see {@link SessionRowEnvironment}). */
+  readonly sessionEnv?: SessionRowEnvironment
+  readonly t: (key: ComposerKey, params?: Record<string, unknown>) => string
+}
+
+/**
+ * The display environment the session rows read (the native source's fold
+ * inputs): the owning session (the subagent linkage compares parents
+ * against it), the render clock, the user's home (path abbreviation), and
+ * the host session-list snapshot (`byId`) the ages and subagent facts come
+ * from — absent snapshots degrade every row to its candidate-borne facts.
+ */
+export interface SessionRowEnvironment {
+  readonly sessionId: string
+  readonly now: number
+  readonly home?: string
+  readonly summaries?: Readonly<Record<string, SessionSummaryLike | undefined>>
+}
+
+/** Whether a candidate is a subagent of the session the popup serves. */
+function isSubagentOf(candidate: SessionMentionCandidate, env: SessionRowEnvironment): boolean {
+  const summary = env.summaries?.[candidate.sessionId]
+  if (summary === undefined || summary === null || summary.origin !== 'subagent') return false
+  // The upstream source reads its own `parentId` spelling while the typed
+  // field is `parentSessionId` (a src/lib drift at rc.2) — real hosts
+  // answer either, so both are read.
+  const parent = summary.parentSessionId ?? summary.parentId
+  return typeof parent === 'string' && parent === env.sessionId
+}
+
+/**
+ * Project host session candidates into display entries: subagents of the
+ * served session under their section, then the other sessions (native row
+ * order, resolver ranking preserved). The description names the workspace
+ * only when it differs from the current one, joined with the row's age.
+ */
+function projectSessions(
+  candidates: readonly SessionMentionCandidate[],
+  env: SessionRowEnvironment,
+  t: (key: ComposerKey, params?: Record<string, unknown>) => string,
+): CompletionEntry[] {
+  const subagentSection = t('completion.section.subagents')
+  const sessionSection = t('completion.section.sessions')
+  const describe = (candidate: SessionMentionCandidate): string => {
+    const summary = env.summaries?.[candidate.sessionId]
+    const at = typeof summary?.updatedAt === 'number' ? summary.updatedAt : candidate.createdAt
+    const { unit, n } = relativeTime(at, env.now)
+    const age = unit === 'now' ? t('completion.time.now') : t(`completion.time.${unit}`, { n })
+    // Candidates are ranked by workspace affinity, so the location only
+    // tells the user something when it is not the workspace they are in.
+    const location = candidate.sameWorkspace
+      ? undefined
+      : candidate.cwd === undefined ? t('completion.candidate.noCwd') : abbreviateHomePath(candidate.cwd, env.home)
+    return location === undefined ? age : `${location} · ${age}`
+  }
+  const entryOf = (candidate: SessionMentionCandidate, child: boolean): CompletionEntry => ({
+    group: 'session',
+    section: child ? subagentSection : sessionSection,
+    option: {
+      origin: 'session',
+      mention: candidate.mention,
+      name: candidate.displayTitle ?? candidate.label,
+      description: describe(candidate),
+    },
+  })
+  const entries: CompletionEntry[] = []
+  const others: CompletionEntry[] = []
+  for (const candidate of candidates) {
+    const child = isSubagentOf(candidate, env)
+    ;(child ? entries : others).push(entryOf(candidate, child))
+  }
+  return [...entries, ...others]
 }
 
 /** Project host candidates into display entries, dropping unformattable paths. */
@@ -276,6 +368,12 @@ function projectFiles(
  */
 export function assembleCompletionView(input: CompletionViewInput): CompletionView | null {
   const { probe, commandRows, skills, files, staleFiles, t } = input
+  // Undefined reads as an ABSENT plane (empty, group omitted): callers
+  // without a session plane predate the session group. An explicit `null`
+  // is the caller's pending marker (the fetch is in flight, nothing stale).
+  const sessions = input.sessions === undefined ? [] : input.sessions
+  const staleSessions = input.staleSessions === undefined ? null : input.staleSessions
+  const sessionEnv: SessionRowEnvironment = input.sessionEnv ?? { sessionId: '', now: 0 }
   if (probe.trigger === '/') {
     if (commandRows === null) return null
     const commandGroup: CompletionGroupView = probe.query === ''
@@ -319,8 +417,9 @@ export function assembleCompletionView(input: CompletionViewInput): CompletionVi
     const groups = [commandGroup, skillGroup]
     return { groups, pending: groups.some((group) => group.status === 'pending') }
   }
-  if (files === null && staleFiles === null) {
-    // No landed results and nothing stale: the pending skeleton is the group.
+  if (files === null && staleFiles === null && sessions === null && staleSessions === null) {
+    // No landed results and nothing stale on either plane: the pending
+    // skeleton is the one group (the native single-MenuView shape).
     return {
       groups: [{ id: 'file', status: 'pending', entries: [] }],
       pending: true,
@@ -328,11 +427,24 @@ export function assembleCompletionView(input: CompletionViewInput): CompletionVi
   }
   const source = files ?? staleFiles ?? []
   const section = t('completion.section.files')
-  const entries = projectFiles(source, probe.quoted, section)
   const groups: CompletionGroupView[] = [{
     id: 'file',
     status: files === null ? 'pending' : 'ready',
-    entries,
+    entries: projectFiles(source, probe.quoted, section),
   }]
+  // The session group rides the same batch (the native source reads both
+  // planes in parallel). `null` sessions with nothing stale mean the fetch
+  // is in flight — its own pending skeleton; a landed empty list (plane
+  // absent, quoted token, no matches) omits the group whole.
+  const sessionSource = sessions ?? staleSessions ?? []
+  if (sessions === null && staleSessions === null) {
+    groups.push({ id: 'session', status: 'pending', entries: [] })
+  } else if (sessionSource.length > 0) {
+    groups.push({
+      id: 'session',
+      status: files === null ? 'pending' : 'ready',
+      entries: projectSessions(sessionSource, sessionEnv, t),
+    })
+  }
   return { groups, pending: groups.some((group) => group.status === 'pending') }
 }

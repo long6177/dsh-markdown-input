@@ -40,3 +40,30 @@ describe('user-message bubble container contract (#77 echo handoff)', () => {
     expect(rule).toContain('max-width: min(calc(var(--dsh-chat-content-width, 748px) * 0.702), 82%)')
   })
 })
+
+describe('user-message reference summary CSS contract (#75)', () => {
+  it('speaks the host referenceSummary class values so the summary reads as the native line', () => {
+    // The host MessageItem.module.css .referenceSummary fold, verbatim:
+    // tertiary label color at the secondary content metrics.
+    const rule = ruleOf(bubbleCss, '.referenceSummary')
+    expect(rule).toContain('color: var(--dsw-alias-label-tertiary)')
+    expect(rule).toContain('font-size: var(--dsh-content-font-size-secondary, 13px)')
+    expect(rule).toContain('line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px))')
+  })
+})
+
+describe('secret mask CSS contract (#75)', () => {
+  const secretCss = readSheet('../src/client/user-text-projection.module.css')
+
+  it('speaks the host SecretText values — monospace box, painted-over mask, control pairing', () => {
+    // The host SecretText.module.css fold, verbatim: the mask keeps the
+    // characters for copying but paints asterisk tiles over them.
+    const secret = ruleOf(secretCss, '.secret')
+    expect(secret).toContain('font-family: var(--ds-font-family-code)')
+    expect(secret).toContain('font-size: 0.875em')
+    const mask = ruleOf(secretCss, '.mask')
+    expect(mask).toContain('-webkit-text-fill-color: transparent')
+    expect(mask).toContain('background-color: currentColor')
+    expect(mask).toContain('mask: url("data:image/svg+xml')
+  })
+})
