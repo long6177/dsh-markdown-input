@@ -1318,6 +1318,13 @@ export function MarkdownComposer({
   // so the identity read here is stable across renders and the face's effect
   // never resubscribes.
   const presetRefresh = agentPresetRefreshSubscribe()
+  // #78: the preset seat judges its OWN availability — the roster verbs and
+  // the projection hook, the same two facts its FaceGate probes. The
+  // workspace row's capability verdict no longer takes it down: the native
+  // hero's two seats are independent slot occupants, and a workspace-less
+  // chain entry still offers the preset switch when ITS data plane is there.
+  const presetSeatPossible = agentPresetsRemote !== undefined
+    && typeof useProjection === 'function'
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
   // the binding (registerFace latches per id, so a first render before apply's
@@ -1406,14 +1413,14 @@ export function MarkdownComposer({
             top, the native `heroWorkspaceRow` mirrored — the workspace
             chip+menu and the preset seat are siblings of the same row
             container (gap 2px, align-items center), not two stacked card
-            children. The row mounts whenever the row's capability verdict
-            holds; a face whose gate is absent (roster service, projection
-            key) leaves the line to the other seat instead of dangling. The
-            row's two halves are still independent faces: the workspace chip
-            (and the trigger posture it owns) hides whole when the list hook,
-            the copy, or the reuse-or-create verb is missing, the preset seat
-            when the roster or the projection is. */}
-        {rowSupported && (
+            children. #78: the line mounts when EITHER seat is available —
+            each judges its own data plane, the native slot shape — and a
+            face whose gate is absent leaves the line to the other seat
+            instead of dangling. The workspace chip (and the trigger posture
+            it owns) hides whole when the list hook, the copy, or the
+            reuse-or-create verb is missing; the preset seat when the roster
+            or the projection is. */}
+        {(rowSupported || presetSeatPossible) && (
           <div className={css.heroRow} data-markdown-hero-row="">
             {rowSupported && workspaceCopy !== undefined && (
               <WorkspaceRowFace

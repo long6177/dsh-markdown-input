@@ -18,7 +18,7 @@
  * row that appears is the end-to-end evidence.
  */
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, render, waitFor } from '@testing-library/react'
 import type { Context } from '@deepseek-ai/cordis'
 // The renderer types come from the package's published `./client` face (they
 // re-export the scoped-slots types); the VALUE comes from the checkout's
@@ -33,6 +33,7 @@ import { commonEn } from './host-locale/common-en.ts'
 import { conversationEn } from './host-locale/conversation-en.ts'
 import { MarkdownComposer, MARKDOWN_TAKEOVER } from '../src/client/MarkdownComposer.tsx'
 import { resetContextLocale, setContextLocale } from '../src/client/context-meter-face.ts'
+import { resetAgentPresetsSource, setAgentPresetsSource } from '../src/client/agent-preset-face.ts'
 import { resetFaces } from '../src/client/face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { en as markdownInputEn } from '../src/client/locales.ts'
@@ -106,7 +107,7 @@ interface ChainSeats {
  * composer, and the chain entry records its own standard props and renders the
  * real card.
  */
-function makeHost(seats: ChainSeats[]): {
+function makeHost(seats: ChainSeats[], options: { withWorkspaces?: boolean } = {}): {
   host: SlotRendererHost
   install: (id: string) => void
 } {
@@ -219,10 +220,14 @@ function makeHost(seats: ChainSeats[]): {
     factoryOf: () => undefined,
     isFactoryLive: () => false,
     // The GLOBAL standard sources: ui-session's and ui-workspace's root
-    // contributions, in the shape `provideRoot` installs.
+    // contributions, in the shape `provideRoot` installs. `withWorkspaces:
+    // false` models a chain entry the workspace list hook never reached
+    // (#78: the preset seat must survive exactly this).
     root: observable<StandardSourceBinding>({
       key: undefined,
-      hooks: { workspaces: observable(WORKSPACES), sessions: observable(SESSIONS) },
+      hooks: options.withWorkspaces === false
+        ? { sessions: observable(SESSIONS) }
+        : { workspaces: observable(WORKSPACES), sessions: observable(SESSIONS) },
       keyedHooks: {},
       props: {},
     }),
@@ -238,8 +243,8 @@ function makeHost(seats: ChainSeats[]): {
  * when it dispatches its first session-scope child (the same ordering the
  * host's own renderer suite uses).
  */
-function mountHost(seats: ChainSeats[]): void {
-  const harness = makeHost(seats)
+function mountHost(seats: ChainSeats[], options: { withWorkspaces?: boolean } = {}): void {
+  const harness = makeHost(seats, options)
   harness.install('s1')
   render(createSlotRenderer().renderRoot(harness.host, {}))
 }
@@ -257,6 +262,7 @@ afterEach(() => {
   cleanup()
   resetContextLocale()
   resetWorkspaceVerbSource()
+  resetAgentPresetsSource()
   resetFaces()
   resetGoalFace()
 })
@@ -303,5 +309,34 @@ describeWhenHarness('conversation.composer chain standard seats (#42 reachabilit
     // The chip is the live picker control (not the trigger-posture face): the
     // row resolved a title, so the card stays an ordinary composer.
     expect(document.querySelector('[data-markdown-workspace-row] button')).not.toBeDisabled()
+  })
+
+  it('keeps the preset seat on the line when the workspace seats never arrive (#78)', async () => {
+    // AC4 end-to-end: the workspace list hook missing (no ui-workspace root
+    // contribution) kills the workspace row alone. The preset seat, whose
+    // roster verbs and projection key are intact, keeps its place on the
+    // hero line — the two seats judge their own availability, the native
+    // slot shape.
+    const seats: ChainSeats[] = []
+    installApplySeams()
+    setAgentPresetsSource(() => ({
+      list: () => Promise.resolve({
+        ok: true as const,
+        value: { presets: [{ id: 'standard', isDefault: true }] },
+      }),
+      select: () => Promise.resolve({ ok: true as const, value: undefined }),
+    }))
+    mountHost(seats, { withWorkspaces: false })
+    await waitFor(() => {
+      expect(document.querySelector('[data-markdown-agent-preset]')).not.toBeNull()
+    })
+    // The workspace row is gone; the line it used to own now carries the
+    // preset seat alone.
+    expect(document.querySelector('[data-markdown-workspace-row]')).toBeNull()
+    const heroRow = document.querySelector('[data-markdown-hero-row]')
+    expect(heroRow).not.toBeNull()
+    expect(heroRow).toContainElement(document.querySelector('[data-markdown-agent-preset]'))
+    // The chip names the deployment default through the roster it read.
+    expect(document.querySelector('[data-markdown-agent-preset]')?.textContent).toContain('standard')
   })
 })

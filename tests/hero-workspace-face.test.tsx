@@ -540,11 +540,35 @@ describe('hero line — one row for both seats (issue #42 alpha.12 feedback)', (
     expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
   })
 
-  it('mounts no hero line at all when the workspace row capability is missing', () => {
+  it('mounts no hero line at all when neither seat is available', () => {
+    // No verb (the workspace row's verdict fails) and no roster (the preset
+    // gate stays off): the line would be an empty flex box, so it stays off.
     const seats = hostSeats({ withVerb: false })
     render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
     expect(document.querySelector('[data-markdown-hero-row]')).toBeNull()
     expect(row()).toBeNull()
+  })
+
+  it('still mounts the preset seat on the hero line when the workspace row capability is missing (#78)', async () => {
+    // AC4: the two seats judge their own availability. The workspace row's
+    // verdict failing (no reuse-or-create verb) hides the workspace chip
+    // alone — the preset seat, whose roster and projection are intact, keeps
+    // its place on the line.
+    setAgentPresetsSource(() => roster)
+    const seats = hostSeats({ withVerb: false })
+    render(
+      <MarkdownComposer
+        {...chainProps({ session: blankSession(), projection: { agentPreset: null } })}
+        {...seats.props}
+      />,
+    )
+    expect(row()).toBeNull()
+    const heroRow = document.querySelector('[data-markdown-hero-row]')
+    expect(heroRow).not.toBeNull()
+    await waitFor(() => {
+      expect(document.querySelector('[data-markdown-agent-preset]')).not.toBeNull()
+    })
+    expect(heroRow).toContainElement(document.querySelector('[data-markdown-agent-preset]'))
   })
 })
 
