@@ -48,18 +48,18 @@ export type QueueEchoAttachment =
   | { readonly type: 'image'; readonly value?: { readonly previewUrl?: string } }
   | { readonly type: 'file'; readonly value?: QueueFileRef }
 
-/** One durable queued row (the inbox `next-turn` item's structural face). */
+/**
+ * One durable queued row (the inbox `next-turn` item's structural face).
+ * The wire item is a `UserMessage`: id, content, custom, source. There is
+ * deliberately no `placement` field here — a placement belongs to the local
+ * submission echo (`QueueSubmissionEcho`), and the native steer gate tests
+ * `queue.length > 0` rather than any per-row placement.
+ */
 export interface QueueRow {
   readonly id: string
   readonly content: readonly QueueContentBlock[]
   /** Producer source; composer sends carry `kind: 'user'` plus `rpcId`. */
   readonly source?: { readonly kind?: string; readonly rpcId?: unknown }
-  /**
-   * Native wire field the runtime placeholder formula reads
-   * (`placement === 'queued'`, native InputBar's canSteerQueue); absent or
-   * foreign placements never qualify.
-   */
-  readonly placement?: string
 }
 
 /** One local submission echo (the session snapshot's `pendingSubmissions`). */

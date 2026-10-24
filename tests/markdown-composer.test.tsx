@@ -1761,7 +1761,7 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     bindBusyEnter('steer')
     render(<MarkdownComposer {...chainProps({
       session: { running: true, subagent: null, pendingSubmissions: [] },
-      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }], placement: 'queued' }],
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }] }],
     })} />)
     fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
     await waitFor(() => expect(shell.steerQueue).toHaveBeenCalledTimes(1))
@@ -1780,8 +1780,8 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     render(<MarkdownComposer {...chainProps({
       session: { running: true, subagent: null, pendingSubmissions: [] },
       queue: [
-        { id: 'm1', content: [{ type: 'text', text: '第一条' }], placement: 'queued' },
-        { id: 'm2', content: [{ type: 'text', text: '第二条' }], placement: 'queued' },
+        { id: 'm1', content: [{ type: 'text', text: '第一条' }] },
+        { id: 'm2', content: [{ type: 'text', text: '第二条' }] },
       ],
     })} />)
     fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
@@ -1796,15 +1796,15 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     // Idle session: no steering, no queue verb — the machine's empty no-op.
     const idle = render(<MarkdownComposer {...chainProps({
       session: { running: false, subagent: null },
-      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }], placement: 'queued' }],
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }] }],
     })} />)
     fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
     expect(shell.steerQueue).not.toHaveBeenCalled()
     idle.unmount()
-    // Rows without the durable queued placement never qualify (the native
-    // wire test the placeholder already reads).
+    // A non-continuable child address closes the steering arm (real wire
+    // signal, the native `steeringAvailable` gate).
     render(<MarkdownComposer {...chainProps({
-      session: { running: true, subagent: null },
+      session: { running: true, subagent: { address: { mode: 'supervised' } } },
       queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }] }],
     })} />)
     fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
@@ -2065,32 +2065,59 @@ describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issu
   it('swaps the placeholder to the steer-queue copy while running with queued rows', () => {
     const session = { running: true, subagent: null }
     const queue: readonly QueueRow[] = [
-      { id: 'q1', content: [{ type: 'text', text: 'queued' }], placement: 'queued' },
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
     ]
     render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
     // Native ladder: steering a queue outranks plan mode.
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
   })
 
-  it('keeps the plan placeholder when the queued rows carry no queued placement (native wire test)', () => {
+  it('reads the native queue length, not a non-existent placement field (AC4 wire parity)', () => {
+    // The inbox `next-turn` wire item is `UserMessage` — id/content/source
+    // only. The native `canSteerQueue` tests `queue.length > 0`; a row with
+    // no `placement` is a real queued row and still opens the gate.
     const session = { running: true, subagent: null }
     const queue: readonly QueueRow[] = [
       { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
     ]
     render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
-    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.plan'])
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
   })
 
   it('offers the steer hint to a running continuable child too (AC4 real-signal parity)', () => {
     // The native canSteerQueue gate reads steeringAvailable — a continuable
     // child address steers (the per-row buttons already say so); the hint
     // must never promise less than the chord delivers.
-    const session = { running: true, subagent: { address: { mode: 'continuable' } } }
+    const session = {
+      running: true,
+      // `parentAvailable` true is the online parent: the #80 lock arm would
+      // otherwise read an absent field as offline and close the gate.
+      subagent: { address: { mode: 'continuable' }, parentAvailable: true },
+    }
     const queue: readonly QueueRow[] = [
-      { id: 'q1', content: [{ type: 'text', text: 'queued' }], placement: 'queued' },
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
     ]
     render(<MarkdownComposer {...chainProps({ session, queue })} />)
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
+  })
+
+  it('hides the steer hint and refuses the chord while the input is locked (native !locked arm)', async () => {
+    const shell = {
+      state: { subscribe: () => () => {}, getSnapshot: () => ({ draftRev: 0 }) },
+      submit: vi.fn(),
+      steerQueue: vi.fn(),
+      beginCommand: vi.fn(() => false),
+    }
+    setConversationSource(() => fakeConversation({ shell }))
+    const session = { running: true, subagent: null, removed: true }
+    const queue: readonly QueueRow[] = [
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
+    ]
+    render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
+    // The gate stays shut: the plan arm keeps the placeholder.
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.plan'])
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    expect(shell.steerQueue).not.toHaveBeenCalled()
   })
 
   it('keeps the render-mode copy in the default arm', () => {
