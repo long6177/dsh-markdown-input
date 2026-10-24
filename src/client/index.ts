@@ -60,7 +60,8 @@ import {
   WORKSPACE_ADD_NS, installWorkspaceAddSource, resetWorkspaceAddLocale, setWorkspaceAddLocale,
 } from './workspace-add.ts'
 import {
-  AGENT_PRESET_NS, installAgentPresetsSource, resetAgentPresetLocale, setAgentPresetLocale,
+  AGENT_PRESET_NS, installAgentPresetsSource, installDeveloperToolsSource,
+  resetAgentPresetLocale, setAgentPresetLocale,
 } from './agent-preset-face.ts'
 import {
   STATS_NS, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
@@ -210,6 +211,11 @@ export function apply(ctx: ClientContext): void {
   // its composition switch — the same lazy way; without the registry the seat
   // hides whole while the workspace row (and the text face) stay.
   installAgentPresetsSource(ctx)
+  // The preset seat's Developer-tools gate (#78) reads the host `ui-settings`
+  // form through the configForms service the same lazy, capability-detected
+  // way (the stats-pills installer idiom): without it the gate reads off, the
+  // native observable face's own default, and the tool presets stay hidden.
+  installDeveloperToolsSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // The vendored picker's copy is the verbatim ui-model-selection dictionary
   // under the plugin's own namespace; the bound translate rides

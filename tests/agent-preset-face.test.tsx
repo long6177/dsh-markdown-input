@@ -86,6 +86,7 @@ function renderFace(overrides: {
   sessionId?: string | undefined
   onError?: (message: string) => void
   translate?: ((key: BuiltInPresetCopyKey) => string) | undefined
+  developerTools?: DeveloperToolsStore | undefined
 } = {}) {
   return render(
     <AgentPresetFace
@@ -95,6 +96,7 @@ function renderFace(overrides: {
       translate={overrides.translate}
       copy={copy}
       onError={overrides.onError ?? (() => {})}
+      developerTools={overrides.developerTools}
     />,
   )
 }
@@ -103,6 +105,42 @@ function renderFace(overrides: {
 type AgentPresetRemote = {
   list: AgentPresetsRemoteFace['list']
   select: AgentPresetsRemoteFace['select']
+}
+
+/** A settable Developer-tools form double (the shape configForms hands out). */
+function devToolsStore(enabled: boolean | undefined): DeveloperToolsStore & {
+  set: (enabled: boolean | undefined) => void
+} {
+  let snapshot: DeveloperToolsSnapshot | undefined = { value: { enabled } }
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set: (next: boolean | undefined) => {
+      snapshot = { value: { enabled: next } }
+      for (const listener of [...listeners]) listener()
+    },
+  }
+}
+
+/** A roster carrying the two tool presets plus the standard trio of the other fixtures. */
+const TOOL_ROSTER: AgentPresetRemote = {
+  list: () => Promise.resolve({
+    ok: true,
+    value: {
+      presets: [
+        { id: 'standard', isDefault: true },
+        { id: 'ptc' },
+        { id: 'minimal' },
+        { id: 'cordis', name: 'Creator mode', description: 'Build plugins by talking.' },
+        { id: 'mine' },
+      ],
+    },
+  }),
+  select: ROSTER.select,
 }
 
 afterEach(() => {
@@ -225,6 +263,81 @@ describe('AgentPresetFace menu', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(menuRows()).toHaveLength(0)
     expect(chip()).toHaveAttribute('aria-expanded', 'false')
+  })
+})
+
+describe('AgentPresetFace developer-tools gate (#78)', () => {
+  it('hides the tool presets from the menu when developer tools are off, keeping the rest', async () => {
+    renderFace({ remote: TOOL_ROSTER, developerTools: devToolsStore(false) })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    const labels = menuRows().map(row => row.textContent)
+    expect(labels).toHaveLength(3)
+    expect(labels.some(text => text?.includes('standard'))).toBe(true)
+    expect(labels.some(text => text?.includes('Creator mode'))).toBe(true)
+    expect(labels.some(text => text?.includes('mine'))).toBe(true)
+    expect(labels.some(text => text?.includes('ptc'))).toBe(false)
+    expect(labels.some(text => text?.includes('minimal'))).toBe(false)
+  })
+
+  it('offers every healthy row while developer tools are on', async () => {
+    renderFace({ remote: TOOL_ROSTER, developerTools: devToolsStore(true) })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(5)
+  })
+
+  it('keeps the current mode named on a disabled chip without opening a picker when all options are hidden', async () => {
+    // Upstream `components.client.spec.tsx:121`: the current tool preset still
+    // labels the chip (unfiltered list), but the menu never opens.
+    const toolsOnly: AgentPresetRemote = {
+      list: () => Promise.resolve({ ok: true, value: { presets: [{ id: 'ptc' }, { id: 'minimal' }] } }),
+      select: ROSTER.select,
+    }
+    renderFace({
+      remote: toolsOnly,
+      projection: { agentPreset: 'minimal' },
+      developerTools: devToolsStore(false),
+    })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    expect(chip()).toHaveTextContent('minimal')
+    expect(chip()).toBeDisabled()
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(chip()).toHaveAttribute('aria-expanded', 'false')
+    expect(menuRows()).toHaveLength(0)
+  })
+
+  it('keeps a named custom row overriding a development id when developer tools are off', async () => {
+    const override: AgentPresetRemote = {
+      list: () => Promise.resolve({ ok: true, value: { presets: [{ id: 'ptc', name: 'My workflow' }] } }),
+      select: ROSTER.select,
+    }
+    renderFace({ remote: override, developerTools: devToolsStore(false) })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(1)
+    expect(menuRows()[0]?.textContent).toContain('My workflow')
+  })
+
+  it('closes the menu immediately when developer tools turn off', async () => {
+    const tools = devToolsStore(true)
+    renderFace({ remote: TOOL_ROSTER, developerTools: tools })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(5)
+    tools.set(false)
+    await waitFor(() => { expect(menuRows()).toHaveLength(0) })
+    expect(chip()).toHaveAttribute('aria-expanded', 'false')
+    // Turning them back on does not re-open the menu by itself.
+    tools.set(true)
+    expect(menuRows()).toHaveLength(0)
+  })
+
+  it('reads an absent developer-tools store as off (the native ?? false)', async () => {
+    renderFace({ remote: TOOL_ROSTER, developerTools: undefined })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(3)
   })
 })
 

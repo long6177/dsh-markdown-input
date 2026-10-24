@@ -43,10 +43,12 @@ import {
 import {
   agentPresetCurrentId, agentPresetDisplayName, agentPresetMenuItems,
   agentPresetOptions, agentPresetProjectionOf, agentPresetRefusal,
-  agentPresetSeatVisible, presetDisplayText,
+  agentPresetSeatVisible, agentPresetVisibleOptions, presetDisplayText,
   type AgentPresetOption, type AgentPresetSeatCopy, type PresetTranslate,
 } from './agent-preset-core.ts'
-import type { AgentPresetsRemoteFace } from './agent-preset-face.ts'
+import { useObservable } from './conversation-face.ts'
+import type { AgentPresetsRemoteFace, DeveloperToolsStore } from './agent-preset-face.ts'
+import { developerToolsEnabledOf } from './agent-preset-face.ts'
 import type { FaceDefinition } from './face.ts'
 import css from './MarkdownComposer.module.css'
 
@@ -91,6 +93,13 @@ export interface AgentPresetFaceProps {
   readonly copy: AgentPresetSeatCopy
   /** Report a refusal or a roster-read failure through the card's banner. */
   readonly onError: (message: string) => void
+  /**
+   * The host Developer-tools form (#78), the native gate's signal
+   * (`AgentPresetSeat.tsx:32`): the tool presets (`ptc`, `minimal`) leave the
+   * menu while it reads off. Undefined (no configForms service) reads off
+   * too — the native observable face's own `?? false`.
+   */
+  readonly developerTools?: DeveloperToolsStore
 }
 
 /** Loaded roster state: absent while loading, then either options or a reason. */
@@ -166,10 +175,23 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
     ? agentPresetCurrentId({ projection: projection ?? null, options, defaults: roster.defaults })
     : undefined
   const currentName = agentPresetDisplayName(options, currentId, props.translate)
-  const menuItems = useMemo(
-    () => agentPresetMenuItems(options, props.translate, props.copy.noDescription),
-    [options, props.translate, props.copy.noDescription],
+  // The Developer-tools gate (#78), the native display-layer filter
+  // (`AgentPresetSeat.tsx:105-108`): the MENU reads the filtered rows, the
+  // chip label and the seat's own visibility keep the full healthy list — a
+  // current tool preset still names itself on a chip that no longer offers it.
+  const developerTools = developerToolsEnabledOf(useObservable(props.developerTools))
+  const visibleOptions = useMemo(
+    () => agentPresetVisibleOptions(options, developerTools),
+    [options, developerTools],
   )
+  const menuItems = useMemo(
+    () => agentPresetMenuItems(visibleOptions, props.translate, props.copy.noDescription),
+    [visibleOptions, props.translate, props.copy.noDescription],
+  )
+  // The native close-on-shrink effect (`AgentPresetSeat.tsx:110-112`): the
+  // menu closes the moment its last visible row disappears (a Developer-tools
+  // flip among them) and stays closed when the rows return.
+  useEffect(() => { setOpen(false) }, [developerTools, visibleOptions.length])
 
   const onSelect = useCallback((id: string) => {
     setOpen(false)
@@ -204,7 +226,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
   return (
     <div className={css.agentPreset} data-markdown-agent-preset>
       <Menu
-        open={open}
+        open={open && visibleOptions.length > 0}
         anchor={null}
         getAnchorRect={getAnchorRect}
         items={menuItems.map(item => ({
@@ -229,7 +251,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
         aria-haspopup="menu"
         aria-expanded={open}
         title={props.copy.seatHint}
-        disabled={busy}
+        disabled={busy || visibleOptions.length === 0}
         onClick={() => { setOpen(value => !value) }}
       >
         <IconAgentPresetOutlineRegular className={css.agentPresetGlyph} size={16} />
