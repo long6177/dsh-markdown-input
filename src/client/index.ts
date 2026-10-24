@@ -61,7 +61,7 @@ import {
 } from './workspace-add.ts'
 import {
   AGENT_PRESET_NS, installAgentPresetsSource, installDeveloperToolsSource,
-  resetAgentPresetLocale, setAgentPresetLocale,
+  installRosterRefreshSource, resetAgentPresetLocale, setAgentPresetLocale,
 } from './agent-preset-face.ts'
 import {
   STATS_NS, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
@@ -216,6 +216,12 @@ export function apply(ctx: ClientContext): void {
   // way (the stats-pills installer idiom): without it the gate reads off, the
   // native observable face's own default, and the tool presets stay hidden.
   installDeveloperToolsSource(ctx)
+  // The preset seat's roster refresh (#78) fans one listener out over the
+  // native signals — the transport reset, the preset-registry settings write
+  // (filtered by namespace), and the two settings forms' changes. Every edge
+  // is capability-detected at subscribe time; a host with none of them keeps
+  // the pre-#78 one-mounting-read behavior.
+  installRosterRefreshSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // The vendored picker's copy is the verbatim ui-model-selection dictionary
   // under the plugin's own namespace; the bound translate rides

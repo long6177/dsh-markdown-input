@@ -57,7 +57,9 @@ import type {
 import type { PropsLocale, PropsRuntime, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
 import { AgentPresetFace, agentPresetFaceDefinition } from './AgentPresetFace.tsx'
-import { agentPresetLocale, agentPresetsRemoteFace, developerToolsStore } from './agent-preset-face.ts'
+import {
+  agentPresetLocale, agentPresetRefreshSubscribe, agentPresetsRemoteFace, developerToolsStore,
+} from './agent-preset-face.ts'
 import { resolveAgentPresetCopy } from './agent-preset-core.ts'
 import { CommandMenuFace } from './CommandMenuFace.tsx'
 import { commandFaceDefinition } from './command-face.ts'
@@ -1296,6 +1298,10 @@ export function MarkdownComposer({
   // form, read per render like the roster verbs — an absent service leaves
   // the gate off (the native observable face's own default).
   const presetDeveloperTools = developerToolsStore()
+  // The preset seat's roster-refresh subscription (#78): bound once by apply,
+  // so the identity read here is stable across renders and the face's effect
+  // never resubscribes.
+  const presetRefresh = agentPresetRefreshSubscribe()
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
   // the binding (registerFace latches per id, so a first render before apply's
@@ -1418,6 +1424,7 @@ export function MarkdownComposer({
                 copy={agentPresetCopy}
                 onError={showBanner}
                 developerTools={presetDeveloperTools}
+                subscribeRefresh={presetRefresh}
               />
             </FaceGate>
           </div>

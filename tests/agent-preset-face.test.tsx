@@ -16,9 +16,11 @@ import {
   type AgentPresetFaceProps,
 } from '../src/client/AgentPresetFace.tsx'
 import {
-  agentPresetsRemoteFace, developerToolsEnabledOf, developerToolsStore,
-  DEVELOPER_TOOLS_NAMESPACE, installDeveloperToolsSource, resetAgentPresetsSource,
-  resetDeveloperToolsSource, setAgentPresetsSource,
+  AGENT_PRESET_SETTINGS_NS, agentPresetRefreshSubscribe, agentPresetsRemoteFace,
+  developerToolsEnabledOf, developerToolsStore,
+  DEVELOPER_TOOLS_NAMESPACE, installDeveloperToolsSource, installRosterRefreshSource,
+  resetAgentPresetsSource,
+  resetDeveloperToolsSource, resetRosterRefreshSource, setAgentPresetsSource,
   type AgentPresetRefreshSubscribe,
   type AgentPresetsRemoteFace, type DeveloperToolsSnapshot,
 } from '../src/client/agent-preset-face.ts'
@@ -425,6 +427,103 @@ describe('AgentPresetFace roster refresh (#78)', () => {
     refresh.fire()
     await waitFor(() => { expect(onError).toHaveBeenCalledWith('roster unavailable') })
     expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
+  })
+})
+
+describe('installRosterRefreshSource (the four refresh signals, #78)', () => {
+  /** A configForms double whose forms record their subscribers. */
+  function formsWith(forms: Record<string, { subscribe?: (listener: () => void) => () => void }>): {
+    get(namespace: string): unknown
+  } {
+    return { get: (namespace: string) => forms[namespace] }
+  }
+
+  /** A remote double that records `$on` subscriptions per event. */
+  function remoteDouble() {
+    const subs: Record<string, Array<(...args: unknown[]) => void>> = {}
+    return {
+      $on: (event: string, listener: (...args: unknown[]) => void) => {
+        ;(subs[event] ??= []).push(listener)
+        return () => {
+          subs[event] = (subs[event] ?? []).filter(item => item !== listener)
+        }
+      },
+      fire: (event: string, ...args: unknown[]) => {
+        for (const listener of [...(subs[event] ?? [])]) listener(...args)
+      },
+    }
+  }
+
+  it('fires the listener on a transport reset', () => {
+    const remote = remoteDouble()
+    installRosterRefreshSource({
+      get: (key: string) => key === 'remote' ? remote : undefined,
+    } as never)
+    const subscribe = agentPresetRefreshSubscribe()
+    expect(subscribe).toBeTypeOf('function')
+    const listener = vi.fn()
+    const dispose = subscribe?.(listener)
+    remote.fire('connection/reset')
+    expect(listener).toHaveBeenCalledTimes(1)
+    dispose?.()
+    remote.fire('connection/reset')
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('filters settings/document-updated to the preset-registry namespace', () => {
+    const remote = remoteDouble()
+    installRosterRefreshSource({
+      get: (key: string) => key === 'remote' ? remote : undefined,
+    } as never)
+    const listener = vi.fn()
+    const dispose = agentPresetRefreshSubscribe()?.(listener)
+    // The wire payload: [namespace, revision] — the same shape the native
+    // apply test emits (`apply.client.spec.ts:446`).
+    remote.fire('settings/document-updated', 'agent-preset-registry', 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    remote.fire('settings/document-updated', 'llm-deepseek', 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    remote.fire('settings/document-updated', 'ui-settings', 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    dispose?.()
+  })
+
+  it('subscribes the two settings forms and detaches on dispose', () => {
+    const uiSettings = { subscribe: vi.fn(() => () => {}) }
+    const registry = { subscribe: vi.fn(() => () => {}) }
+    const remote = remoteDouble()
+    installRosterRefreshSource({
+      get: (key: string) => key === 'remote' ? remote
+        : key === 'configForms' ? formsWith({
+            [DEVELOPER_TOOLS_NAMESPACE]: uiSettings,
+            [AGENT_PRESET_SETTINGS_NS]: registry,
+          })
+        : undefined,
+    } as never)
+    const listener = vi.fn()
+    const dispose = agentPresetRefreshSubscribe()?.(listener)
+    expect(uiSettings.subscribe).toHaveBeenCalledWith(listener)
+    expect(registry.subscribe).toHaveBeenCalledWith(listener)
+    // Every edge detached at once: the dispose is the whole teardown.
+    const uiDisposals = uiSettings.subscribe.mock.results[0]?.value
+    const registryDisposals = registry.subscribe.mock.results[0]?.value
+    expect(typeof uiDisposals).toBe('function')
+    expect(typeof registryDisposals).toBe('function')
+    dispose?.()
+    expect(uiSettings.subscribe).toHaveBeenCalledTimes(1)
+    resetRosterRefreshSource()
+    expect(agentPresetRefreshSubscribe()).toBeUndefined()
+  })
+
+  it('degrades to a bare dispose without any signal face', () => {
+    installRosterRefreshSource({ get: () => undefined } as never)
+    const listener = vi.fn()
+    const dispose = agentPresetRefreshSubscribe()?.(listener)
+    expect(typeof dispose).toBe('function')
+    dispose?.()
+    // Sealed globals: a throwing probe is silence, never a crash.
+    installRosterRefreshSource({ get: () => { throw new Error('sealed') } } as never)
+    expect(typeof agentPresetRefreshSubscribe()?.(() => {})).toBe('function')
   })
 })
 

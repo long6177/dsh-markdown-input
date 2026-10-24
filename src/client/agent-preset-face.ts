@@ -243,3 +243,79 @@ export function installDeveloperToolsSource(ctx: ClientContext): void {
 export function resetDeveloperToolsSource(): void {
   developerToolsSource = () => undefined
 }
+
+/** Narrow face of the host `remote` service's forwarded-event subscription. */
+interface RosterRefreshEvents {
+  $on(event: 'connection/reset' | 'settings/document-updated', listener: (...args: unknown[]) => void): () => void
+}
+
+let refreshSubscribe: AgentPresetRefreshSubscribe | undefined
+
+/**
+ * The roster-refresh subscription, or undefined before apply installs it —
+ * the seat then keeps its one-mounting-read behavior.
+ */
+export function agentPresetRefreshSubscribe(): AgentPresetRefreshSubscribe | undefined {
+  return refreshSubscribe
+}
+
+/**
+ * Install the roster-refresh subscription (#78) on the client root context
+ * (called once from the plugin apply). The subscription fans one listener out
+ * over the native refresh signals, each capability-detected at subscribe time
+ * so boot order stays free:
+ *
+ * 1. `remote.$on('connection/reset')` — a reconnect can land on a host whose
+ *    roster changed under the browser (the native apply's own comment);
+ * 2. `remote.$on('settings/document-updated')` — the forwarded settings
+ *    write, FILTERED to the preset-registry namespace (an unrelated
+ *    namespace moves nothing — the native test rules out the blanket
+ *    refresh);
+ * 3. the `ui-settings` form's own changes (the Developer-tools gate's store);
+ * 4. the `agent-preset-registry` form's own changes (the roster document).
+ *
+ * A host build without the remote event face or the configForms service
+ * sheds the missing edges alone; a seat with no edges at all simply never
+ * refreshes — the pre-#78 behavior, never a crash.
+ * @param ctx - client root context.
+ */
+export function installRosterRefreshSource(ctx: ClientContext): void {
+  refreshSubscribe = (listener: () => void): (() => void) => {
+    const disposers: Array<() => void> = []
+    try {
+      const remote = ctx.get('remote') as Partial<RosterRefreshEvents> | undefined
+      if (remote !== undefined && remote !== null && typeof remote.$on === 'function') {
+        const events = remote as RosterRefreshEvents
+        disposers.push(events.$on('connection/reset', listener))
+        disposers.push(events.$on('settings/document-updated', (...args: unknown[]) => {
+          if (args[0] === AGENT_PRESET_SETTINGS_NS) listener()
+        }))
+      }
+    } catch {
+      // Sealed globals / exotic builds: the transport edges shed alone.
+    }
+    try {
+      const forms = ctx.get('configForms') as { get?(namespace: string): unknown } | undefined
+      if (forms !== undefined && forms !== null && typeof forms.get === 'function') {
+        for (const namespace of [DEVELOPER_TOOLS_NAMESPACE, AGENT_PRESET_SETTINGS_NS]) {
+          const form = forms.get(namespace) as (ObservableSource<unknown> & Record<string, unknown>) | undefined
+          if (form === undefined || form === null || typeof form.subscribe !== 'function') continue
+          disposers.push((form as ObservableSource<unknown>).subscribe(listener))
+        }
+      }
+    } catch {
+      // The settings edges shed alone, never into the card.
+    }
+    return () => {
+      for (const dispose of disposers) dispose()
+    }
+  }
+}
+
+/**
+ * Test seam: drop the subscription so a fresh test sees no refresh edges.
+ * Never call in plugin code — the binding is page-lifetime by design.
+ */
+export function resetRosterRefreshSource(): void {
+  refreshSubscribe = undefined
+}
