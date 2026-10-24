@@ -26,7 +26,9 @@ import type { ObservableSource, SessionId } from './conversation-face.ts'
 /**
  * One skill entry as the host catalog delivers it. The chip decorations read
  * only `name`; the completion popup (T10) additionally reads the discovery
- * copy when the host provides it.
+ * copy when the host provides it; the chip activation (#75) reads the
+ * entry's `SKILL.md` path when the provider supplied one (the native
+ * `SkillEntry.path` is optional — a pathless entry opens nothing).
  */
 export interface SkillEntry {
   /** Kebab-case identifier referenced as `/name`. */
@@ -35,6 +37,8 @@ export interface SkillEntry {
   readonly description?: string
   /** False when the skill is user-invocation-only (native userOnly marker). */
   readonly modelInvocable?: boolean
+  /** Absolute SKILL.md path, when supplied by a filesystem provider. */
+  readonly path?: string
 }
 
 /** Per-session lexicon caches as one publishable snapshot. */
@@ -48,6 +52,13 @@ export interface SkillFace {
   readonly lexicons: ObservableSource<SkillLexiconState>
   /** Fetch the session's lexicon unless already cached (mount warm-up). */
   ensure(sessionId: SessionId): void
+  /**
+   * The session's full catalog, cached or freshly fetched (the chip
+   * activation's read, #75): resolves the cached entries, or one shared
+   * fetch that also publishes the lexicon store. A failed read resolves
+   * `undefined` and leaves the session uncached (a later call retries).
+   */
+  catalog(sessionId: SessionId): Promise<readonly SkillEntry[] | undefined>
 }
 
 /** Narrow face of the host `remote.skills` namespace. */
@@ -117,7 +128,7 @@ export function skillFace(): SkillFace | undefined {
 
 function createFace(surfaces: SkillSurfaces): SkillFace {
   let snapshot: SkillLexiconState = { value: new Map() }
-  const inFlight = new Set<SessionId>()
+  const inFlight = new Map<SessionId, Promise<readonly SkillEntry[] | undefined>>()
   const listeners = new Set<() => void>()
   const store: ObservableSource<SkillLexiconState> = {
     subscribe(listener: () => void): () => void {
@@ -132,19 +143,33 @@ function createFace(surfaces: SkillSurfaces): SkillFace {
     snapshot = next
     for (const listener of [...listeners]) listener()
   }
-  function ensure(sessionId: SessionId): void {
-    if (snapshot.value.has(sessionId) || inFlight.has(sessionId)) return
-    inFlight.add(sessionId)
-    void (async () => {
+  /** One shared read per session: concurrent callers ride the same promise. */
+  function read(sessionId: SessionId): Promise<readonly SkillEntry[] | undefined> {
+    const existing = inFlight.get(sessionId)
+    if (existing !== undefined) return existing
+    const promise = (async (): Promise<readonly SkillEntry[] | undefined> => {
       try {
         const result = await surfaces.skills.list({ sessionId })
-        inFlight.delete(sessionId)
-        if (!result.ok) return // uncached: the `/` arm stays plain, a later ensure retries
+        if (!result.ok) return undefined // uncached: the `/` arm stays plain, a later read retries
         publish({ value: new Map(snapshot.value).set(sessionId, result.value.skills) })
+        return result.value.skills
       } catch {
+        return undefined
+      } finally {
         inFlight.delete(sessionId)
       }
     })()
+    inFlight.set(sessionId, promise)
+    return promise
+  }
+  function ensure(sessionId: SessionId): void {
+    if (snapshot.value.has(sessionId) || inFlight.has(sessionId)) return
+    void read(sessionId)
+  }
+  async function catalog(sessionId: SessionId): Promise<readonly SkillEntry[] | undefined> {
+    const cached = snapshot.value.get(sessionId)
+    if (cached !== undefined) return cached
+    return read(sessionId)
   }
   function dropSession(sessionId: SessionId): void {
     if (!snapshot.value.has(sessionId)) return
@@ -171,7 +196,7 @@ function createFace(surfaces: SkillSurfaces): SkillFace {
       console.error('[markdown-input] skill lexicon event subscription failed', error)
     }
   }
-  return { lexicons: store, ensure }
+  return { lexicons: store, ensure, catalog }
 }
 
 /**

@@ -124,6 +124,19 @@ const zh = {
   'completion.drill.key': 'Tab',
   'completion.drill.aria': '进入目录',
   'completion.skill.userOnly': '仅用户',
+  // `@` session-mention rows (#75). The section titles, the no-cwd marker,
+  // and the relative-time words are the host `ui-reference` namespace's own
+  // copy verbatim (`reference` NS), shipped here as the popup's own fallback
+  // keys — the same posture as `completion.section.files` above.
+  'completion.section.subagents': '子智能体',
+  'completion.section.sessions': '对话',
+  'completion.candidate.noCwd': '（无工作目录）',
+  'completion.time.now': '刚刚',
+  'completion.time.minutes': '{n}分钟',
+  'completion.time.hours': '{n}小时',
+  'completion.time.days': '{n}天',
+  'completion.time.months': '{n}个月',
+  'completion.time.years': '{n}年',
   // Queue strip (issue #30). The native composer's queue dock renders inside
   // the fallback bar, which the takeover hides (overlay election), so the
   // card rebuilds it; keys mirror the host `conversation` namespace copy
@@ -199,6 +212,19 @@ const zh = {
   'workspace.menu.addWorkspace': '添加工作区…',
   'workspace.folderError.title': '无法打开文件夹',
   'workspace.folderError.retry': '重新选择',
+  // Reference surfaces (#75) — the host words copied verbatim as the
+  // fallback keys the reference-locale folds resolve through. The file-open
+  // dialog's lines are the host `reference` namespace's own (ui-reference);
+  // the summary line's are the host `chat` namespace's own (ui-chat,
+  // rendered by the host UserContent fold too).
+  'fileOpen.title': '无法打开文件',
+  'fileOpen.failed': '无法打开“{path}”，请重试或关闭此提示',
+  'fileOpen.close': '关闭',
+  'fileOpen.retry': '重试',
+  'secret.reveal': '显示密钥',
+  'secret.hide': '隐藏密钥',
+  'message.referenceSummary': '引用会话 · {labels}',
+  'message.referenceSeparator': '、',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -303,6 +329,17 @@ const en: Record<ComposerKey, string> = {
   'completion.drill.key': 'Tab',
   'completion.drill.aria': 'Browse folder',
   'completion.skill.userOnly': 'user-only',
+  // `@` session-mention rows (#75) — the host `ui-reference` lines verbatim
+  // (see the zh block above for the fold).
+  'completion.section.subagents': 'Subagents',
+  'completion.section.sessions': 'Sessions',
+  'completion.candidate.noCwd': '(no cwd)',
+  'completion.time.now': 'now',
+  'completion.time.minutes': '{n}min',
+  'completion.time.hours': '{n}h',
+  'completion.time.days': '{n}d',
+  'completion.time.months': '{n}mo',
+  'completion.time.years': '{n}y',
   'queue.count': '{n} queued messages',
   'queue.sending': 'Sending…',
   'queue.edit': 'Edit queued message',
@@ -358,6 +395,16 @@ const en: Record<ComposerKey, string> = {
   'workspace.menu.addWorkspace': 'Add workspace…',
   'workspace.folderError.title': 'Couldn’t open folder',
   'workspace.folderError.retry': 'Choose again',
+  // Reference surfaces (#75) — the host lines verbatim (see the zh block
+  // above for the fold).
+  'fileOpen.title': 'Couldn’t open file',
+  'fileOpen.failed': 'Couldn’t open “{path}”. Try again or close this message.',
+  'fileOpen.close': 'Close',
+  'fileOpen.retry': 'Retry',
+  'secret.reveal': 'Show secret',
+  'secret.hide': 'Hide secret',
+  'message.referenceSummary': 'Referenced session · {labels}',
+  'message.referenceSeparator': ', ',
 }
 
 export { zh, en }

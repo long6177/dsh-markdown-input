@@ -9,12 +9,16 @@
  *
  * Why a vendored projection instead of the host's `conversation.user.text`
  * factory: upstream 0.2.1-rc.2 removed `projectUserText` and moved reference
- * recognition into a host data-layer rule registry that, at rc.2, only knows
- * session and whitespace rules — adopting the host pipeline would silently
- * drop the `@file` / `/skill` inline chips. The vendored grammar (rc.0
- * `projectUserText`) renders over the still-public `UserTextRun` /
- * `ReferenceChip` primitives; retire it if the host's rules grow file/skill
- * recognition.
+ * recognition into a host data-layer rule registry (at rc.2 it runs the
+ * file/folder, skill, secret, and session rules) — but that registry
+ * evaluates on the `conversation.user.text` factory, and this seat replaces
+ * the `conversation.chat.node` renderer one layer up, where the factory
+ * never runs. Adopting the host pipeline wholesale would therefore render
+ * nothing here; instead the projection stays vendored over the still-public
+ * `UserTextRun` / `ReferenceChip` primitives and rebuilds the data layer's
+ * capabilities itself (activation via #75's faces, secrets via the vendored
+ * scanner). Retire the vendored grammar if the host ever serves the
+ * chat-node seats through that factory.
  */
 import { Children, Fragment, isValidElement, memo, useMemo, type ReactNode } from 'react'
 import {
@@ -27,8 +31,10 @@ import type {
 import type { UserTextNodeProps } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import { MessageActions } from './MessageActions.tsx'
 import { echoLocale } from './echo-text-face.ts'
+import { referenceActions } from './reference-actions-face.ts'
+import { referenceSummaryLineCopy } from './reference-locale.ts'
+import { ActivatableFileChip, SecretSpan, projectUserText, type UserTextReferences } from './user-text-projection.tsx'
 import { hardenSoftBreaks } from './user-markdown.ts'
-import { projectUserText } from './user-text-projection.tsx'
 import css from './UserMessage.module.css'
 
 /** Raw image block of a user message, typed as the host's own fold does. */
@@ -60,7 +66,14 @@ function markdownLabels(t: ChatNodeViewProps<MarkdownSeatKind>['t']): MarkdownLa
 
 /** Is this projected piece a reference chip (vs a plain text run)? */
 function isChip(piece: ReactNode): boolean {
-  return isValidElement(piece) && piece.type === ReferenceChip
+  // The activatable file chip (#75) renders its chip and retry dialog as a
+  // fragment — it partitions like a chip, not like a run.
+  return isValidElement(piece) && (piece.type === ReferenceChip || piece.type === ActivatableFileChip)
+}
+
+/** Is this projected piece a masked credential (partitions inline like a chip)? */
+function isSecret(piece: ReactNode): boolean {
+  return isValidElement(piece) && piece.type === SecretSpan
 }
 
 /** Plain-run text sits directly inside the projection's run elements. */
@@ -82,13 +95,17 @@ export function composeUserMarkdown(
   labels: MarkdownLabels,
   referenceLabels: readonly string[],
   skillNames: readonly string[],
+  references?: UserTextReferences,
+  interactive = false,
 ): ReactNode {
   if (text === '') return null
-  const projected = projectUserText(text, referenceLabels, skillNames)
+  const projected = projectUserText(text, referenceLabels, skillNames, references, interactive)
   const pieces = Children.toArray(
     isValidElement(projected) && projected.type === Fragment ? projected.props.children : [projected],
   )
-  if (!pieces.some(isChip)) return <MarkdownText text={hardenSoftBreaks(text)} labels={labels} />
+  if (!pieces.some((piece) => isChip(piece) || isSecret(piece))) {
+    return <MarkdownText text={hardenSoftBreaks(text)} labels={labels} />
+  }
 
   const out: ReactNode[] = []
   let run: string[] = []
@@ -100,7 +117,7 @@ export function composeUserMarkdown(
     }
   }
   for (const piece of pieces) {
-    if (isChip(piece)) {
+    if (isChip(piece) || isSecret(piece)) {
       flush()
       // Array children need keys; the composition is static per message.
       out.push(<Fragment key={out.length}>{piece}</Fragment>)
@@ -152,12 +169,16 @@ export function contentParts(content: readonly unknown[]): {
 /**
  * The Markdown-rendered user message bubble. The host serves both the `user`
  * and `steering` keys with one component (identical node data), and so do we.
+ * The session identity rides the registration's inject (the renderer passes
+ * the session scope's binding key positionally, the native keyed-entry
+ * mechanism) — it is what scopes the chip activations' preview addresses;
+ * without it the chips stay display-only.
  * @param props - keyed chat renderer seat for the `user`/`steering` node kinds.
  * @returns the right-aligned bubble with attachments, Markdown text, and chips.
  */
 export const MarkdownUserMessage = memo(function MarkdownUserMessage({
-  node, loadImage, renderFactorySlot, t,
-}: ChatNodeViewProps<MarkdownSeatKind>) {
+  node, loadImage, renderFactorySlot, t, sessionId,
+}: ChatNodeViewProps<MarkdownSeatKind> & { readonly sessionId?: string | undefined }): ReactNode {
   const data = node.data
   const { text, attachments, rest } = contentParts(data.content)
   // Stable per locale revision: a fresh object identity would rebuild
@@ -165,6 +186,13 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
   const labels = useMemo(() => markdownLabels(t), [t])
   const referenceLabels = data.referenceLabels ?? []
   const skillNames = data.skillNames ?? []
+  // Per-call composition of the capability-detected faces: a host without
+  // the preview planes (or without the injected session id) degrades every
+  // chip to its display-only span.
+  const references = useMemo(
+    () => referenceActions(sessionId),
+    [sessionId],
+  )
   return (
     <div className={css.row} data-markdown-user-message>
       <div className={css.stack}>
@@ -192,10 +220,20 @@ export const MarkdownUserMessage = memo(function MarkdownUserMessage({
         })}
         {(text !== '' || rest.length > 0) && (
           <div className={css.bubble} data-markdown-user-bubble>
-            {composeUserMarkdown(text, labels, referenceLabels, skillNames)}
+            {composeUserMarkdown(text, labels, referenceLabels, skillNames, references, true)}
             {rest.map((block, index) => (
               <JsonBlock key={index} label={t('message.extraBlock')} payload={block} truncatedLabel={total => t('json.truncated', { total })} />
             ))}
+          </div>
+        )}
+        {/* The reference summary line (#75): the native UserContent's fold —
+            a plain copy line (not a chip list) inside the stack, after the
+            bubble, in the host chat namespace's own words with the plugin's
+            verbatim fallback. It never enters the copy action (the copy is
+            the raw wire text). */}
+        {referenceLabels.length > 0 && (
+          <div className={css.referenceSummary} data-reference-summary>
+            {referenceSummaryLineCopy(t, referenceLabels)}
           </div>
         )}
       </div>

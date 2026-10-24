@@ -1453,6 +1453,7 @@ export function MarkdownComposer({
           loadImage={queueImageLoad}
           t={t}
           onError={showBanner}
+          sessionId={sessionId}
         />
         {dragging && canIntake && (
           <div className={css.dropOverlay} data-markdown-dropzone>{t('composer.dropHere')}</div>

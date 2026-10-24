@@ -59,3 +59,12 @@
   list-style-position: outside;
   padding-left: 2em;
 }
+
+/* The reference summary line (#75): the host MessageItem.module.css
+   .referenceSummary class values verbatim — a tertiary-label copy line at
+   the secondary content metrics, inside the stack after the bubble. */
+.referenceSummary {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  line-height: calc(18px + var(--dsh-content-font-delta-secondary, 0px));
+}

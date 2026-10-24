@@ -9,10 +9,30 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { MarkdownUserMessage, type MarkdownSeatKind } from '../src/client/UserMessage.tsx'
 import { installClipboardStub } from './clipboard-stub.ts'
+import { resetReferenceLocale, setSummaryLocale } from '../src/client/reference-locale.ts'
+import { resetSessionsSource, setSessionsSource } from '../src/client/sessions-face.ts'
+import { resetSidebarRightFace, setSidebarRightSource } from '../src/client/sidebar-right-face.ts'
+import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 
 const t = vi.fn((key: string) => key)
 
 afterEach(cleanup)
+
+/** Bind the reference-activation faces with a recording sidebar controller. */
+function bindActivationHosts(openResource: ReturnType<typeof vi.fn>): void {
+  setSidebarRightSource(() => ({ sidebarRight: { openResource } }))
+  setSessionsSource(() => ({
+    get: (key: string) => (key === 'sessions'
+      ? { list: { getSnapshot: () => ({ byId: { s1: { cwd: '/w' } } }) } }
+      : undefined),
+  }))
+}
+
+afterEach(() => {
+  resetSidebarRightFace()
+  resetSkillFace()
+  resetSessionsSource()
+})
 
 /**
  * Fabricate the keyed seat for one node kind. The host serves `user` and
@@ -248,6 +268,115 @@ describe('MarkdownUserMessage', () => {
   })
 })
 
+describe('MarkdownUserMessage chip activation (#75)', () => {
+  it('renders file chips as buttons and opens the session-scoped preview', () => {
+    const openResource = vi.fn()
+    bindActivationHosts(openResource)
+    const { container } = render(
+      <MarkdownUserMessage {...{ ...seatProps('user', [{ type: 'text', text: '@notes/file.md 看看' }]), sessionId: 's1' }} />,
+    )
+    const chip = container.querySelector('button[data-ref-chip="file"]')
+    expect(chip).not.toBeNull()
+    fireEvent.click(chip!)
+    expect(openResource).toHaveBeenCalledWith('dsh-resource://file/session/s1/notes/file.md')
+  })
+
+  it('renders skill chips as buttons and previews the catalog path', async () => {
+    const openResource = vi.fn()
+    bindActivationHosts(openResource)
+    setSkillSource(() => ({
+      skills: {
+        list: vi.fn(() => Promise.resolve({
+          ok: true,
+          value: { skills: [{ name: 'plan', path: '/w/skills/plan/SKILL.md' }] },
+        })),
+      },
+      remoteEvents: undefined,
+    }))
+    const { container } = render(
+      <MarkdownUserMessage
+        {...{
+          ...seatProps('user', [{ type: 'text', text: '/plan 列一下' }], { skillNames: ['plan'] }),
+          sessionId: 's1',
+        }}
+      />,
+    )
+    const chip = container.querySelector('button[data-ref-chip="skill"]')
+    expect(chip).not.toBeNull()
+    fireEvent.click(chip!)
+    await vi.waitFor(() => expect(openResource).toHaveBeenCalledWith('dsh-resource://file/session/s1/skills/plan/SKILL.md'))
+  })
+
+  it('keeps chips display-only when the activation planes are absent', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '@notes/file.md 看看' }], { sessionId: 's1' })} />,
+    )
+    expect(container.querySelector('button[data-ref-chip]')).toBeNull()
+    expect(container.querySelector('[data-ref-chip="file"]')).not.toBeNull()
+  })
+
+  it('keeps chips display-only without a session identity', () => {
+    bindActivationHosts(vi.fn())
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '@notes/file.md 看看' }])} />,
+    )
+    expect(container.querySelector('button[data-ref-chip]')).toBeNull()
+  })
+})
+
+describe('MarkdownUserMessage reference summary line (#75)', () => {
+  it('renders the joined labels under the bubble when the node carries them', () => {
+    const { container } = render(
+      <MarkdownUserMessage
+        {...seatProps('user', [{ type: 'text', text: '@a.md @b 会话 看看' }], { referenceLabels: ['a.md', 'b 会话'] })}
+      />,
+    )
+    // The mock `t` echoes keys, so the fold falls through to the plugin's
+    // verbatim fallback copy (the host chat words) with the zh separator.
+    const summary = container.querySelector('[data-reference-summary]')
+    expect(summary).not.toBeNull()
+    expect(summary?.textContent).toBe('引用会话 · a.md、b 会话')
+    // The summary sits after the bubble inside the stack (native userStack order).
+    expect(summary?.previousElementSibling).toBe(container.querySelector('[data-markdown-user-bubble]'))
+  })
+
+  it('renders no summary line without labels', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '纯文字' }])} />,
+    )
+    expect(container.querySelector('[data-reference-summary]')).toBeNull()
+  })
+
+  it('prefers the host chat words when the seat answers', () => {
+    const hostT = vi.fn((key: string, params?: Record<string, unknown>) =>
+      key === 'message.referenceSummary' ? `host 摘要 ${String(params?.labels)}` : key)
+    const { container } = render(
+      <MarkdownUserMessage
+        {...{ ...seatProps('user', [{ type: 'text', text: '看看' }], { referenceLabels: ['x.md'] }), t: hostT }}
+      />,
+    )
+    expect(container.querySelector('[data-reference-summary]')?.textContent).toBe('host 摘要 x.md')
+  })
+
+  it('resolves the fallback through the bound plugin dictionary (en words on an en page)', () => {
+    setSummaryLocale(((key: string, params?: Record<string, unknown>) => {
+      if (key === 'message.referenceSummary') return `Referenced session · ${String(params?.labels)}`
+      if (key === 'message.referenceSeparator') return ', '
+      return String(key)
+    }) as never)
+    try {
+      const { container } = render(
+        <MarkdownUserMessage
+          {...seatProps('user', [{ type: 'text', text: '看看' }], { referenceLabels: ['x.md', 'y.md'] })}
+        />,
+      )
+      expect(container.querySelector('[data-reference-summary]')?.textContent).toBe('Referenced session · x.md, y.md')
+    } finally {
+      resetReferenceLocale()
+    }
+  })
+})
+
 describe('MarkdownUserMessage copy actions (#33)', () => {
   /** Stub the clipboard with a recording write; restores on afterEach. */
   let writeText: ReturnType<typeof vi.fn>
@@ -298,6 +427,21 @@ describe('MarkdownUserMessage copy actions (#33)', () => {
     })
     // Native parity: the copy is contentParts().text — the raw user text.
     expect(writeText).toHaveBeenCalledWith('@notes/file.md 看看这个')
+  })
+
+  it('copies the raw wire text even when a credential draws masked (#75)', async () => {
+    const secret = 'sk-abc123def456ghijklmn'
+    const view = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: `token ${secret} here` }])} />,
+    )
+    expect(view.container.querySelector('[data-secret]')).not.toBeNull()
+    await act(async () => {
+      fireEvent.click(view.getByRole('button', { name: 'copy' }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // Masking changes only the drawn text — the copy keeps the credential.
+    expect(writeText).toHaveBeenCalledWith(`token ${secret} here`)
   })
 
   it('mounts the same action row for a queued steering message', () => {
