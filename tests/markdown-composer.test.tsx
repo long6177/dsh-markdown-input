@@ -7,8 +7,10 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
-import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
-import { installConversationSource, setConversationSource } from '../src/client/conversation-face.ts'
+import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
+import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, mergeRestoredDraft, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
+import { installConversationSource, resetImageLightbox, setConversationSource, setImageLightbox } from '../src/client/conversation-face.ts'
+import { resetBusyEnterSource, setBusyEnterSource } from '../src/client/submit-policy.ts'
 import { resetCommandFace, setCommandSource } from '../src/client/command-face.ts'
 import { resetGoalFace } from '../src/client/goal-face.ts'
 import { onTakeoverDegrade, resetTakeoverDegradation, takeoverDegraded } from '../src/client/degrade.ts'
@@ -29,13 +31,16 @@ interface FakeDraft {
   kind: 'file' | 'image'
   id: string
   file: File
+  previewUrl?: string
 }
 
 function fakeConversation(options: {
-  uploads?: Record<string, { status: string, loaded?: number }>
+  uploads?: Record<string, { status: string, loaded?: number, total?: number }>
   notice?: { level: 'info' | 'error'; text: string; seq: number } | null
   drafts?: readonly FakeDraft[]
   block?: { reason: string }
+  /** Opt-in shell members (issue #79): the runtime submit plane the card probes. */
+  shell?: Record<string, unknown>
 } = {}) {
   const drafts = options.drafts ?? []
   const created: FakeDraft[] = []
@@ -66,6 +71,7 @@ function fakeConversation(options: {
     input: {
       shell: vi.fn(() => ({
         notices: { subscribe: () => () => {}, getSnapshot: () => noticeSnapshot },
+        ...(options.shell ?? {}),
       })),
     },
     blocks: {
@@ -87,7 +93,9 @@ function chainProps(overrides: {
   claim?: { readonly name: string; readonly token: string; readonly hint?: string }
   goal?: unknown
   plan?: unknown
+  imageLimits?: unknown
   queue?: readonly QueueRow[]
+  sessionId?: string
   inputActions?: Partial<Record<'setDraft' | 'submit', ReturnType<typeof vi.fn>>>
 } = {}): MarkdownComposerProps {
   const inputActions = {
@@ -110,10 +118,13 @@ function chainProps(overrides: {
   const projectionValues: Record<string, unknown> = {
     goal: overrides.goal ?? null,
     plan: overrides.plan,
+    imageLimits: overrides.imageLimits,
   }
   return {
     matched: MARKDOWN_TAKEOVER,
-    sessionId: 's1',
+    // `'sessionId' in overrides` keeps an explicit undefined (no session)
+    // distinct from the default s1 — the #80 inert arm needs that case.
+    sessionId: 'sessionId' in overrides ? overrides.sessionId : 's1',
     session: overrides.session,
     useInput: (selector: (state: typeof inputState) => unknown) => selector(inputState),
     inputActions: inputActions as unknown as MarkdownComposerProps['inputActions'],
@@ -154,6 +165,13 @@ function pasteHtml(html: string): void {
   })
 }
 
+/** Paste plain text at the caret (the default paste path, CM6's own). */
+function pastePlain(text: string): void {
+  fireEvent.paste(content(), {
+    clipboardData: { getData: (type: string) => type === 'text/plain' ? text : '' },
+  })
+}
+
 beforeEach(() => {
   window.localStorage.clear()
 })
@@ -161,10 +179,12 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   setConversationSource(() => undefined)
+  resetImageLightbox()
   resetSkillFace()
   resetCommandFace()
   resetModelFace()
   resetGoalFace()
+  resetBusyEnterSource()
   window.localStorage.clear()
   resetFaces()
   resetTakeoverDegradation()
@@ -310,6 +330,25 @@ describe('MarkdownComposer', () => {
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
   })
 
+  it('sends one message when Enter lands twice before the host settles (#74)', async () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const view = render(<MarkdownComposer {...chainProps({ draft: '一发', inputActions })} />)
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      // A second physical press inside the send pipeline's window (the
+      // machine detaches back to plain in a blink, so the phase guard alone
+      // passes it): the in-flight gate holds it — one setDraft, one submit.
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+      expect(inputActions.submit).toHaveBeenCalledTimes(1)
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps the icon-only seats localized: the copy follows the active language', () => {
     const zhT = ((key: keyof typeof zh, params?: Record<string, string>) =>
       zh[key].replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`)
@@ -394,6 +433,128 @@ describe('MarkdownComposer', () => {
     fireEvent.click(seatNamed(en['composer.action.submit']))
     await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith('- a'))
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('cuts the undo history at the accepted send so Ctrl+Z cannot resurrect sent text (#74)', async () => {
+    // The mount seed and the accepted send's clear are adjacent same-range
+    // dispatches; only clock separation keeps them in separate undo groups
+    // (the production gap is real seconds). Date alone is faked — the
+    // submit hop and waitFor keep their real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const view = render(<MarkdownComposer {...chainProps({ draft: '已发送的话', inputActions })} />)
+      expect(content().textContent).toContain('已发送的话')
+      vi.advanceTimersByTime(600)
+      fireEvent.click(seatNamed(en['composer.action.submit']))
+      await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+      // The host accepted the send and cleared the machine draft; the seed
+      // applies the clear and the commit point cuts the whole undo stack.
+      view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+      await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+      fireEvent.keyDown(content(), { key: 'z', ctrlKey: true })
+      // The placeholder alone: the sent text did not come back.
+      expect(content().textContent).toBe(en['composer.placeholder.render'])
+      view.unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('merges a failure-restored draft with the text typed during the flight (#74)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const view = render(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    expect(content().textContent).toContain('第一句')
+    fireEvent.click(seatNamed(en['composer.action.submit']))
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    // Accepted: the machine cleared the draft, the surface follows.
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+    await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+    // The user keeps typing while the flight is out.
+    pastePlain('第二句')
+    expect(content().textContent).toBe('第二句')
+    // The send fails: the failed draft comes back over the typed text —
+    // merged, never overwritten, and the merged text IS the draft now.
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenLastCalledWith('第一句\n\n第二句'))
+    expect(content().textContent).toContain('第一句')
+    expect(content().textContent).toContain('第二句')
+    view.unmount()
+  })
+
+  it('keeps a pure in-flight append whole when the failed draft comes back (#74)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const view = render(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    fireEvent.click(seatNamed(en['composer.action.submit']))
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '', inputActions })} />)
+    await waitFor(() => expect(content().textContent).toBe(en['composer.placeholder.render']))
+    // The retyped text happens to start with the failed draft (the pure
+    // append shape the upstream retainSuffixOf retains): it survives whole.
+    pastePlain('第一句')
+    pastePlain('第二句')
+    expect(content().textContent).toBe('第一句第二句')
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '第一句', inputActions })} />)
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenLastCalledWith('第一句第二句'))
+    expect(content().textContent).toBe('第一句第二句')
+    view.unmount()
+  })
+
+  it('a session switch retires the editing window: the new session draft seeds (#74)', () => {
+    const view = render(<MarkdownComposer {...chainProps({ draft: '' })} />)
+    pastePlain('旧会话的话')
+    expect(content().textContent).toBe('旧会话的话')
+    // Switching sessions retires touched/mirror state — the new session's
+    // draft seeds fresh instead of being dropped as user edits (and the
+    // old text must not merge into it).
+    view.rerender(<MarkdownComposer {...chainProps({ draft: '新会话的草稿', sessionId: 's2' })} />)
+    expect(content().textContent).toBe('新会话的草稿')
+  })
+
+  it('focuses the editor on session switches and when the machine unlocks (#74)', async () => {
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus')
+    try {
+      const view = render(<MarkdownComposer {...chainProps()} />)
+      // The mount beat: the card lands with the text face live.
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+      focus.mockClear()
+      // A busy phase is not an editor surface: no focus is pulled into it.
+      view.rerender(<MarkdownComposer {...chainProps({ phase: 'adjudicating' })} />)
+      focus.mockClear()
+      // The unlock beat (a send settled, the machine left the busy phase):
+      // the editor takes the focus back, like the native bar's unlock
+      // effect.
+      view.rerender(<MarkdownComposer {...chainProps()} />)
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+      focus.mockClear()
+      // The session-switch beat: a new session's card focuses its editor.
+      view.rerender(<MarkdownComposer {...chainProps({ sessionId: 's2' })} />)
+      await waitFor(() => expect(document.activeElement).toBe(content()))
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+})
+
+describe('mergeRestoredDraft (#74 failure restore over in-flight edits)', () => {
+  it('keeps a pure in-flight append whole (the retainSuffixOf parity)', () => {
+    expect(mergeRestoredDraft('第一句', '第一句第二句')).toBe('第一句第二句')
+  })
+
+  it('joins diverged text after the restored draft (the submission-order separator)', () => {
+    expect(mergeRestoredDraft('第一句', '第二句')).toBe('第一句\n\n第二句')
+  })
+
+  it('fills an emptied editor with the restored draft', () => {
+    expect(mergeRestoredDraft('第一句', '')).toBe('第一句')
+  })
+
+  it('returns the editor text when it already equals the restore', () => {
+    expect(mergeRestoredDraft('第一句', '第一句')).toBe('第一句')
+  })
+
+  it('an empty restore never touches the editor text', () => {
+    expect(mergeRestoredDraft('', '第二句')).toBe('第二句')
   })
 })
 
@@ -530,6 +691,112 @@ describe('MarkdownComposer attachments', () => {
     expect(inputActions.addAttachments).toHaveBeenCalledWith(['d0'])
   })
 
+  describe('image limits (issue #80)', () => {
+    const LIMITS = {
+      maxImageBytes: 4 * 1024 * 1024,
+      maxImagesPerMessage: 2,
+      maxMessageImageBytes: 6 * 1024 * 1024,
+      mediaTypes: ['image/png', 'image/jpeg'],
+    }
+
+    function image(bytes = 8, name = 'a.png', type = 'image/png'): File {
+      return new File([new Uint8Array(bytes)], name, { type })
+    }
+
+    function banner(container: HTMLElement): HTMLElement | null {
+      return container.querySelector('[data-markdown-banner]')
+    }
+
+    it('refuses too many picked images before any draft exists', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(
+        <MarkdownComposer {...chainProps({ imageLimits: LIMITS, inputActions })} />,
+      )
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image(), image()] } })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(inputActions.addAttachments).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('A message can include up to 2 images')
+    })
+
+    it('counts the images already in the rail toward the per-message limit', () => {
+      const conversation = fakeConversation({
+        drafts: [{ kind: 'image', id: 'd0', file: image() }],
+      })
+      setConversationSource(() => conversation)
+      const { container } = render(<MarkdownComposer {...chainProps({
+        imageLimits: LIMITS, attachmentIds: ['d0'],
+      })} />)
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image()] } })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('A message can include up to 2 images')
+    })
+
+    it('refuses an oversized image on drop with the named copy', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const { container } = render(<MarkdownComposer {...chainProps({ imageLimits: LIMITS })} />)
+      fireEvent.drop(container.querySelector('[data-markdown-composer]') as HTMLElement, {
+        dataTransfer: { files: [image(5 * 1024 * 1024)] },
+      })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('Each image must be smaller than 4MB')
+    })
+
+    it('refuses a pasted batch over the total budget', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const { container } = render(<MarkdownComposer {...chainProps({ imageLimits: LIMITS })} />)
+      fireEvent.paste(content(), {
+        clipboardData: {
+          items: [{ kind: 'file' }, { kind: 'file' }],
+          files: [image(3.5 * 1024 * 1024), image(3.5 * 1024 * 1024)],
+          getData: () => '',
+        },
+      })
+      expect(conversation.createDrafts).not.toHaveBeenCalled()
+      expect(banner(container)?.textContent).toContain('Images exceed 6MB in total; remove some and try again')
+    })
+
+    it('admits a batch within every limit', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(
+        <MarkdownComposer {...chainProps({ imageLimits: LIMITS, inputActions })} />,
+      )
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image()] } })
+      expect(conversation.createDrafts).toHaveBeenCalledTimes(1)
+      expect(inputActions.addAttachments).toHaveBeenCalledWith(['d0', 'd1'])
+    })
+
+    it('leaves generic files unrestricted', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(
+        <MarkdownComposer {...chainProps({ imageLimits: LIMITS, inputActions })} />,
+      )
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [new File([new Uint8Array(20 * 1024 * 1024)], 'big.bin')] } })
+      expect(conversation.createDrafts).toHaveBeenCalledTimes(1)
+    })
+
+    it('skips the preflight when the host serves no imageLimits projection', () => {
+      const conversation = fakeConversation()
+      setConversationSource(() => conversation)
+      const inputActions = { addAttachments: vi.fn(() => true) }
+      const { container } = render(<MarkdownComposer {...chainProps({ inputActions })} />)
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(input, { target: { files: [image(), image(), image()] } })
+      expect(conversation.createDrafts).toHaveBeenCalledTimes(1)
+    })
+  })
+
   it('refuses intake while busy: the drop placeholder never appears', () => {
     const conversation = fakeConversation()
     setConversationSource(() => conversation)
@@ -547,6 +814,82 @@ describe('MarkdownComposer attachments', () => {
     expect(container.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('false')
     const plain = render(<MarkdownComposer {...chainProps()} />)
     expect(plain.container.querySelector('.cm-content')?.getAttribute('contenteditable')).toBe('true')
+  })
+
+  it('shows the upload progress fraction while a file uploads with a known total (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File(['x'.repeat(100)], 'a.txt') }],
+      uploads: { d0: { status: 'uploading', loaded: 50, total: 100 } },
+    })
+    setConversationSource(() => conversation)
+    const { container, getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    expect(getByText(en['composer.file.uploading'])).toBeInTheDocument()
+    const bar = container.querySelector<HTMLElement>('[data-markdown-upload-progress]')
+    expect(bar).not.toBeNull()
+    expect(bar?.style.width).toBe('50%')
+  })
+
+  it('keeps the upload state text-only while the total is unknown (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File(['x'], 'a.txt') }],
+      uploads: { d0: { status: 'uploading', loaded: 4 } },
+    })
+    setConversationSource(() => conversation)
+    const { container, getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    expect(getByText(en['composer.file.uploading'])).toBeInTheDocument()
+    expect(container.querySelector('[data-markdown-upload-progress]')).toBeNull()
+  })
+
+  it('shows the extension badge and size on a ready file chip (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'file', id: 'd0', file: new File([new Uint8Array(2048)], 'a.txt') }],
+      uploads: { d0: { status: 'ready' } },
+    })
+    setConversationSource(() => conversation)
+    const { getByText } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    // Native FileCard ready meta: extension badge + size ("TXT 2.0KB").
+    expect(getByText('TXT 2.0KB')).toBeInTheDocument()
+  })
+
+  it('opens the original-image preview from a draft thumbnail and closes it (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'image', id: 'd0', file: new File(['x'], 'pic.png'), previewUrl: 'blob:pic' }],
+    })
+    setConversationSource(() => conversation)
+    setImageLightbox(ImageLightbox)
+    const { container, getByRole } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    const thumb = container.querySelector('[data-markdown-attachments] img') as HTMLElement
+    const opener = thumb.closest('button')
+    expect(opener).not.toBeNull()
+    expect(opener).toHaveAttribute('title', en['image.openOriginal'])
+    fireEvent.click(opener as HTMLElement)
+    const dialog = getByRole('dialog')
+    expect(dialog).toHaveAttribute('aria-label', en['image.preview'])
+    expect(dialog.querySelector('img')).toHaveAttribute('src', 'blob:pic')
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
+  })
+
+  it('keeps the draft thumbnail display-only while the lightbox face is absent (#77)', () => {
+    const conversation = fakeConversation({
+      drafts: [{ kind: 'image', id: 'd0', file: new File(['x'], 'pic.png'), previewUrl: 'blob:pic' }],
+    })
+    setConversationSource(() => conversation)
+    const { container } = render(
+      <MarkdownComposer {...chainProps({ attachmentIds: ['d0'] })} />,
+    )
+    const thumb = container.querySelector('[data-markdown-attachments] img')
+    expect(thumb).not.toBeNull()
+    // No lightbox capability: the chip degrades to a plain image, no button.
+    expect(thumb?.closest('button')).toBeNull()
   })
 })
 
@@ -913,6 +1256,125 @@ describe('MarkdownComposer — queue strip (issue #30)', () => {
     expect(getByText('排队补充')).toBeInTheDocument()
     expect(queryByRole('button', { name: en['queue.remove'] })).toBeNull()
   })
+
+  it('renders the durable row’s thumbnails and file chips beside the preview (#77)', async () => {
+    const conversation = fakeConversation()
+    const imageUrl = vi.fn(async () => 'blob:queued')
+    // installScope plus the uiConversation face the queue thumbs resolve
+    // through (the native dock's loadImage inject path).
+    installConversationSource({
+      get: (name: string) => name === 'sessions'
+        ? { scope: () => ({ get: (n: string) => n === 'conversation' ? conversation : undefined }) }
+        : name === 'uiConversation' ? { imageUrl } : undefined,
+    } as never)
+    const { container, findByAltText, getByText } = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [{
+        id: 'm1',
+        content: [
+          { type: 'text', text: '看 @notes/file.md 这张' },
+          { type: 'image', attachment: { attachmentId: 'att-1' } },
+          { type: 'file', attachment: { attachmentId: 'f1', name: 'spec.md', bytes: 2048 } },
+        ],
+        source: { kind: 'user', rpcId: 'r1' },
+      }],
+    })} />)
+    // The durable image resolves through the session-authorized loader and
+    // renders as a 1:1 thumbnail with the native alt label.
+    expect(await findByAltText(en['queue.image'])).toHaveAttribute('src', 'blob:queued')
+    expect(imageUrl).toHaveBeenCalledWith('s1', { attachmentId: 'att-1' })
+    // The file chip: icon + name + size (the native QueueFile shape).
+    const strip = document.querySelector('[data-markdown-queue]') as HTMLElement
+    expect(getByText('spec.md')).toBeInTheDocument()
+    expect(strip.textContent).toContain('2.0KB')
+    // The reference chip rides the preview (the vendored projection), and
+    // the text blocks no longer carry `[type]` markers.
+    expect(strip.querySelector('[data-ref-chip="file"]')).not.toBeNull()
+    expect(strip.textContent).not.toContain('[image]')
+  })
+
+  it('degrades the durable thumbnails to placeholders without the image face (#77)', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { container } = render(<MarkdownComposer {...chainProps({
+      session: queueSession(),
+      queue: [{
+        id: 'm1',
+        content: [{ type: 'text', text: '带图' }, { type: 'image', attachment: { attachmentId: 'att-1' } }],
+        source: { kind: 'user', rpcId: 'r1' },
+      }],
+    })} />)
+    const strip = container.querySelector('[data-markdown-queue]') as HTMLElement
+    // The row stays, the thumbnail slot stays, only the bytes do not load.
+    expect(strip.querySelector('img')).toBeNull()
+    expect(strip.querySelector('span[aria-hidden]')).not.toBeNull()
+  })
+
+  it('renders the sending echo’s attachments straight from the preview URLs (#77)', () => {
+    const conversation = fakeConversation()
+    installScope(conversation)
+    const { getByAltText, getByText } = render(<MarkdownComposer {...chainProps({
+      session: queueSession({
+        pendingSubmissions: [{
+          requestId: 'r9',
+          placement: 'queued',
+          time: 0,
+          text: '还在路上',
+          attachments: [
+            { type: 'image', value: { previewUrl: 'blob:echo' } },
+            { type: 'file', value: { attachmentId: 'f1', name: 'a.txt', bytes: 8 } },
+          ],
+        }],
+      }),
+    })} />)
+    // The echo's local preview URL is the submitter's — rendered directly,
+    // no loader round-trip (native pendingQueue parity).
+    expect(getByAltText(en['queue.image'])).toHaveAttribute('src', 'blob:echo')
+    expect(getByText('a.txt')).toBeInTheDocument()
+    expect(getByText(en['queue.sending'])).toBeInTheDocument()
+  })
+})
+
+describe('MarkdownComposer — input locking (issue #80)', () => {
+  /** The native `disabled` formula's session arms. */
+  function lockSession(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return { running: false, subagent: null, removed: false, ...overrides }
+  }
+
+  it('locks the text face when the session was removed', async () => {
+    render(<MarkdownComposer {...chainProps({ session: lockSession({ removed: true }) })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('locks the text face while an owner composer block is raised', async () => {
+    setConversationSource(() => fakeConversation({ block: { reason: '等待审批' } }))
+    render(<MarkdownComposer {...chainProps({ session: lockSession() })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('locks the text face when a continuable child\'s parent is offline', async () => {
+    render(<MarkdownComposer {...chainProps({
+      session: lockSession({ subagent: { address: { mode: 'continuable' }, parentAvailable: false } }),
+    })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('keeps the text face editable when the continuable parent is available', async () => {
+    render(<MarkdownComposer {...chainProps({
+      session: lockSession({ subagent: { address: { mode: 'continuable' }, parentAvailable: true } }),
+    })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'true'))
+  })
+
+  it('locks the text face without a session id (the native inert arm)', async () => {
+    render(<MarkdownComposer {...chainProps({ session: lockSession(), sessionId: undefined })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'false'))
+  })
+
+  it('keeps an ordinary session editable', async () => {
+    render(<MarkdownComposer {...chainProps({ session: lockSession() })} />)
+    await waitFor(() => expect(content()).toHaveAttribute('contenteditable', 'true'))
+  })
 })
 
 describe('MarkdownComposer — stop actions (issue #32)', () => {
@@ -966,8 +1428,10 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
 
   it('keeps the send gesture while an actionable draft is typed on a running session', () => {
     installStopScope(fakeConversation())
+    // The #79 relabel: on a running steerable session the seat names the
+    // mode the click delivers (queue under the default preference).
     render(<MarkdownComposer {...chainProps({ draft: '排队的话', session: stopSession() })} />)
-    const send = seatNamed(en['composer.action.submit'])
+    const send = seatNamed(en['composer.send.queue'])
     expect(send).toBeInTheDocument()
     expect(send).toBeEnabled()
     expect(seatNamed(en['composer.action.stop'])).toBeUndefined()
@@ -990,9 +1454,10 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
     })} />)
     const dedicated = getByRole('button', { name: en['composer.action.stop'] })
     expect(dedicated).toBeEnabled()
-    // Native dedicated stop: the inline square glyph, the primary stays Send.
+    // Native dedicated stop: the inline square glyph, the primary stays Send
+    // — the #79 relabel names its queue mode on the continuable child.
     expect(dedicated.querySelector('svg rect')).not.toBeNull()
-    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+    expect(seatNamed(en['composer.send.queue'])).toBeInTheDocument()
     fireEvent.click(dedicated)
     await waitFor(() => expect(conversation.cancel).toHaveBeenCalledTimes(1))
   })
@@ -1026,7 +1491,7 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
       draft: '无阻塞面时保持发送',
       session: stopSession(),
     })} />)
-    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+    expect(seatNamed(en['composer.send.queue'])).toBeInTheDocument()
   })
 
   it('swallows a failed cancel without degrading the card', async () => {
@@ -1092,12 +1557,417 @@ describe('MarkdownComposer — stop actions (issue #32)', () => {
       render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
       fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
       await vi.waitFor(() => {
-        expect(document.querySelector('[role="tooltip"]')?.textContent)
-          .toBe(en['composer.action.stop'])
+        // The label plus the Esc+Esc keycaps (issue #80's shortcut hint).
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip?.textContent).toContain(en['composer.action.stop'])
+        expect(tip).toHaveAttribute('data-has-shortcut')
       })
     } finally {
       vi.stubGlobal('ResizeObserver', undefined)
     }
+  })
+
+  it('carries the Esc+Esc shortcut on both stop tooltips (issue #80)', async () => {
+    /** jsdom lacks ResizeObserver; the host Tooltip sizes its bubble through one. */
+    class StaticResizeObserver {
+      constructor(private readonly callback: (entries: unknown[]) => void) {}
+      observe(target: Element): void {
+        this.callback([{ target, borderBoxSize: [{ inlineSize: 120, blockSize: 30 }] }])
+      }
+      disconnect(): void {}
+      unobserve(): void {}
+    }
+    vi.stubGlobal('ResizeObserver', StaticResizeObserver)
+    try {
+      // The primary stop arm on an ordinary running session with no draft.
+      installStopScope(fakeConversation())
+      const primary = render(<MarkdownComposer {...chainProps({ session: stopSession() })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
+      await vi.waitFor(() => {
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip).toHaveAttribute('data-has-shortcut')
+        expect(tip?.textContent).toContain('Esc')
+        expect(tip?.getAttribute('aria-label')?.match(/Esc/gu)).toHaveLength(2)
+      })
+      primary.unmount()
+
+      // The dedicated stop on a running continuable child.
+      installStopScope(fakeConversation())
+      render(<MarkdownComposer {...chainProps({
+        session: stopSession({ subagent: { address: { mode: 'continuable' }, parentAvailable: true } }),
+      })} />)
+      fireEvent.mouseOver(seatNamed(en['composer.action.stop']))
+      await vi.waitFor(() => {
+        const tip = document.querySelector('[role="tooltip"]')
+        expect(tip).toHaveAttribute('data-has-shortcut')
+        expect(tip?.getAttribute('aria-label')?.match(/Esc/gu)).toHaveLength(2)
+      })
+    } finally {
+      vi.stubGlobal('ResizeObserver', undefined)
+    }
+  })
+})
+
+describe('MarkdownComposer — submission policy (issue #79)', () => {
+  /** A shell exposing the runtime submit plane (the full SessionInputShell). */
+  function shellMembers(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      state: { subscribe: () => () => {}, getSnapshot: () => ({ draftRev: 0 }) },
+      submit: vi.fn(),
+      steerQueue: vi.fn(),
+      beginCommand: vi.fn(() => false),
+      ...overrides,
+    }
+  }
+
+  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */
+  function bindBusyEnter(behavior: string): void {
+    // Store-contract parity: the store and its snapshot answer stable
+    // references between updates, or useSyncExternalStore would loop.
+    const snapshot = { value: { busyEnter: behavior } }
+    const store = {
+      subscribe: () => () => {},
+      getSnapshot: () => snapshot,
+    }
+    setBusyEnterSource(() => store)
+  }
+
+  it('delivers Enter through the shell with the steer preference on a running session', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('插话这句')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+    // The queue-only public face is bypassed — its signature takes no mode.
+    expect(inputActions.submit).not.toHaveBeenCalled()
+  })
+
+  it('keeps the queue mode when the preference is queue', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('queue')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('排队这句')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('queue', 'enter'))
+  })
+
+  it('queues on an idle session whatever the preference (resolveSubmitMode)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      session: { running: false, subagent: null },
+    })} />)
+    pastePlain('空闲时的话')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('queue', 'enter'))
+  })
+
+  it('falls back to the queue-only public face when the shell verbs are absent', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('降级宿主的话')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('does not offer the mode delivery when the shell member set is partial', async () => {
+    // The face rule: a half-reachable runtime shell reads as absent — the
+    // public face keeps the delivery instead of a broken mode hop.
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    setConversationSource(() => fakeConversation({ shell: { submit: vi.fn() } }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      inputActions,
+      session: { running: true, subagent: null },
+    })} />)
+    pastePlain('半面的话')
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('names the delivery mode on the primary seat while a click would deliver a plain message (AC2)', () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      draft: '要发的这句话',
+      session: { running: true, subagent: null },
+    })} />)
+    // The seat stays icon-only (#39): the mode name rides aria and the
+    // tooltip, never a text node.
+    const seat = seatNamed(en['composer.send.steer'])
+    expect(seat).toBeInTheDocument()
+    expect(seat.textContent).toBe('')
+    expect(seat).toBeEnabled()
+  })
+
+  it('names the queue mode under the queue preference on the same state (AC2)', () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('queue')
+    render(<MarkdownComposer {...chainProps({
+      draft: '要发的这句话',
+      session: { running: true, subagent: null },
+    })} />)
+    expect(seatNamed(en['composer.send.queue'])).toBeInTheDocument()
+  })
+
+  it('keeps plain send outside the mode arms: idle, slash draft, claimed (AC2)', () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    const idle = render(<MarkdownComposer {...chainProps({ draft: '空闲时的话' })} />)
+    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+    idle.unmount()
+    // A `/` line heads for adjudication, not a plain message — no mode name.
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      session: { running: true, subagent: null },
+    })} />)
+    expect(seatNamed(en['composer.action.submit'])).toBeInTheDocument()
+  })
+
+  it('submits through the shell with the button-click gesture (AC2 onPrimary parity)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      draft: '按钮发的这句',
+      session: { running: true, subagent: null },
+    })} />)
+    fireEvent.click(seatNamed(en['composer.send.steer']))
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+  })
+
+  it('steers the whole queue on an empty draft with the accelerated chord (AC3)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      session: { running: true, subagent: null, pendingSubmissions: [] },
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }] }],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(shell.steerQueue).toHaveBeenCalledTimes(1))
+    // The steer is not a draft send: no flight, no submission hop.
+    expect(shell.submit).not.toHaveBeenCalled()
+  })
+
+  it('steers per-row through the session verb when the shell verb is absent (AC3 degraded)', async () => {
+    const conversation = fakeConversation()
+    installConversationSource({
+      get: (name: string) => name === 'sessions'
+        ? { scope: () => ({ get: (n: string) => n === 'conversation' ? conversation : undefined }) }
+        : undefined,
+    } as never)
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      session: { running: true, subagent: null, pendingSubmissions: [] },
+      queue: [
+        { id: 'm1', content: [{ type: 'text', text: '第一条' }] },
+        { id: 'm2', content: [{ type: 'text', text: '第二条' }] },
+      ],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(conversation.updateQueue).toHaveBeenCalledWith('m1', { kind: 'steer' }))
+    expect(conversation.updateQueue).toHaveBeenCalledWith('m2', { kind: 'steer' })
+  })
+
+  it('keeps the empty-draft no-op when the steer gate is closed (AC3 gate arms)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    // Idle session: no steering, no queue verb — the machine's empty no-op.
+    const idle = render(<MarkdownComposer {...chainProps({
+      session: { running: false, subagent: null },
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }] }],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    expect(shell.steerQueue).not.toHaveBeenCalled()
+    idle.unmount()
+    // A non-continuable child address closes the steering arm (real wire
+    // signal, the native `steeringAvailable` gate).
+    render(<MarkdownComposer {...chainProps({
+      session: { running: true, subagent: { address: { mode: 'supervised' } } },
+      queue: [{ id: 'm1', content: [{ type: 'text', text: '排队的' }] }],
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    expect(shell.steerQueue).not.toHaveBeenCalled()
+  })
+
+  it('inverts the preference on the accelerated chord with a draft (AC3)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('queue')
+    render(<MarkdownComposer {...chainProps({
+      draft: '加速 chord 的话',
+      session: { running: true, subagent: null },
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+  })
+
+  it('applies a menu claim pick through the shell beginCommand (AC5)', async () => {
+    const beginCommand = vi.fn(() => true)
+    const shell = shellMembers({ beginCommand })
+    setConversationSource(() => fakeConversation({ shell }))
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps()} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    expect(goalRow).toBeDefined()
+    fireEvent.mouseDown(goalRow)
+    await waitFor(() => expect(beginCommand).toHaveBeenCalledTimes(1))
+    const [claim, span] = beginCommand.mock.calls[0] as [
+      { name: string, token: string, submit: unknown },
+      { start: number, end: number, draftRev: number },
+    ]
+    // The claim is the leadingClaim shape: catalog name, localized token
+    // with its separator (the en card resolves the alias spelling), and a
+    // callable submit closure.
+    expect(claim.name).toBe('goal')
+    expect(claim.token).toBe('/goal ')
+    expect(typeof claim.submit).toBe('function')
+    // The span covers the head the pick replaced (the empty draft's caret),
+    // at the machine's own revision.
+    expect(span).toEqual({ start: 0, end: 0, draftRev: 0 })
+    // The visible token text landed in the editor either way.
+    expect(content().textContent).toContain('goal')
+  })
+
+  it('flushes the token draft synchronously and silences the mirror once claimed (AC5)', () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      const beginCommand = vi.fn(() => true)
+      const shell = shellMembers({ beginCommand })
+      setConversationSource(() => fakeConversation({ shell }))
+      setCommandSource(() => ({
+        commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+      }) as never)
+      render(<MarkdownComposer {...chainProps({ inputActions })} />)
+      fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+      const goalRow = [...document.querySelectorAll('[role="option"]')]
+        .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+      fireEvent.mouseDown(goalRow)
+      expect(beginCommand).toHaveBeenCalledTimes(1)
+      // The machine's draft must describe the text the span is applied over:
+      // the flush is synchronous, before the debounce window could race it.
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+      expect(inputActions.setDraft).toHaveBeenCalledWith('/goal ')
+      vi.advanceTimersByTime(DRAFT_SYNC_DEBOUNCE_MS * 2)
+      // And the applied claim owns the projection — the token mirror
+      // claimSelection armed never fires to drop the chip back to text.
+      expect(inputActions.setDraft).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('holds the debounced draft mirror while a claim phase owns the projection (AC5)', async () => {
+    vi.useFakeTimers()
+    try {
+      const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+      render(<MarkdownComposer {...chainProps({
+        draft: '/goal ',
+        phase: 'claimed',
+        claim: { name: 'goal', token: '/goal ' },
+        inputActions,
+      })} />)
+      // The user types args while the claim holds: a plain-text mirror
+      // would replace the chip document and drop the claim.
+      pastePlain('ship it')
+      expect(content().textContent).toBe('/goal ship it')
+      await vi.advanceTimersByTimeAsync(DRAFT_SYNC_DEBOUNCE_MS * 2)
+      expect(inputActions.setDraft).not.toHaveBeenCalled()
+      // The submit flush still carries the args at Enter time (AC6's
+      // claimed-pass pipeline) — asserted in the claimed-phase tests.
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the token-text-only behavior when the shell face is absent (AC5 degrade)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps({ inputActions })} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    fireEvent.mouseDown(goalRow)
+    // The mirror (no claim owns the projection): the token text persists as
+    // an ordinary draft, and Enter rides the typed-slash adjudication.
+    await waitFor(() => expect(inputActions.setDraft).toHaveBeenCalledWith('/goal '))
+  })
+
+  it('submits a claimed draft on Enter instead of dropping it (AC6)', async () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      phase: 'claimed',
+      claim: { name: 'goal', token: '/goal ' },
+      inputActions,
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    // The claim args are ordinary text: the flush carries them and the hop
+    // delivers — no phase-gate deadlock.
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+    expect(inputActions.setDraft).toHaveBeenCalledWith('/goal ship it')
+    expect(content().textContent).toBe('/goal ship it')
+  })
+
+  it('submits a claimed draft through the shell with the resolved mode (AC6)', async () => {
+    const shell = shellMembers()
+    setConversationSource(() => fakeConversation({ shell }))
+    bindBusyEnter('steer')
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      phase: 'claimed',
+      claim: { name: 'goal', token: '/goal ' },
+      session: { running: true, subagent: null },
+    })} />)
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
+  })
+
+  it('keeps the submit seat enabled while a claim holds (AC6)', () => {
+    render(<MarkdownComposer {...chainProps({
+      draft: '/goal ship it',
+      phase: 'claimed',
+      claim: { name: 'goal', token: '/goal ' },
+    })} />)
+    expect(seatNamed(en['composer.action.submit'])).toBeEnabled()
+  })
+
+  it('still refuses Enter during the busy admission phases (regression)', () => {
+    const inputActions = { setDraft: vi.fn(), submit: vi.fn() }
+    render(<MarkdownComposer {...chainProps({ phase: 'adjudicating', inputActions })} />)
+    pastePlain('忙时的话')
+    // Busy phases read-only the editor: the paste lands nowhere.
+    fireEvent.keyDown(content(), { key: 'Enter' })
+    expect(inputActions.setDraft).not.toHaveBeenCalled()
+    expect(inputActions.submit).not.toHaveBeenCalled()
   })
 })
 
@@ -1195,20 +2065,59 @@ describe('MarkdownComposer — plan chip, goal strip, runtime placeholders (issu
   it('swaps the placeholder to the steer-queue copy while running with queued rows', () => {
     const session = { running: true, subagent: null }
     const queue: readonly QueueRow[] = [
-      { id: 'q1', content: [{ type: 'text', text: 'queued' }], placement: 'queued' },
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
     ]
     render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
     // Native ladder: steering a queue outranks plan mode.
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
   })
 
-  it('keeps the plan placeholder when the queued rows carry no queued placement (native wire test)', () => {
+  it('reads the native queue length, not a non-existent placement field (AC4 wire parity)', () => {
+    // The inbox `next-turn` wire item is `UserMessage` — id/content/source
+    // only. The native `canSteerQueue` tests `queue.length > 0`; a row with
+    // no `placement` is a real queued row and still opens the gate.
     const session = { running: true, subagent: null }
     const queue: readonly QueueRow[] = [
       { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
     ]
     render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
+  })
+
+  it('offers the steer hint to a running continuable child too (AC4 real-signal parity)', () => {
+    // The native canSteerQueue gate reads steeringAvailable — a continuable
+    // child address steers (the per-row buttons already say so); the hint
+    // must never promise less than the chord delivers.
+    const session = {
+      running: true,
+      // `parentAvailable` true is the online parent: the #80 lock arm would
+      // otherwise read an absent field as offline and close the gate.
+      subagent: { address: { mode: 'continuable' }, parentAvailable: true },
+    }
+    const queue: readonly QueueRow[] = [
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
+    ]
+    render(<MarkdownComposer {...chainProps({ session, queue })} />)
+    expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.steerQueue'])
+  })
+
+  it('hides the steer hint and refuses the chord while the input is locked (native !locked arm)', async () => {
+    const shell = {
+      state: { subscribe: () => () => {}, getSnapshot: () => ({ draftRev: 0 }) },
+      submit: vi.fn(),
+      steerQueue: vi.fn(),
+      beginCommand: vi.fn(() => false),
+    }
+    setConversationSource(() => fakeConversation({ shell }))
+    const session = { running: true, subagent: null, removed: true }
+    const queue: readonly QueueRow[] = [
+      { id: 'q1', content: [{ type: 'text', text: 'queued' }] },
+    ]
+    render(<MarkdownComposer {...chainProps({ session, queue, plan: PLAN_ON })} />)
+    // The gate stays shut: the plan arm keeps the placeholder.
     expect(content()).toHaveAttribute('aria-placeholder', en['composer.placeholder.plan'])
+    fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+    expect(shell.steerQueue).not.toHaveBeenCalled()
   })
 
   it('keeps the render-mode copy in the default arm', () => {
@@ -1248,36 +2157,68 @@ describe('MarkdownComposer — hit area (issue #41)', () => {
     expect(document.activeElement).toBe(content())
   })
 
-  it('does not steal focus from a tool-row button on mousedown', () => {
-    render(<MarkdownComposer {...chainProps()} />)
-    const before = document.activeElement
-    const submit = seatNamed(en['composer.action.submit'])
+  it('keeps the text face live across a tool-row button press (native keepDraftFocus, #74)', () => {
+    render(<MarkdownComposer {...chainProps({ draft: 'text' })} />)
     const focus = spyOnFocus()
-    fireEvent.mouseDown(submit)
-    expect(focus).not.toHaveBeenCalled()
-    // jsdom does not focus a button on mousedown; what matters is that the
-    // card did not move focus to the editor behind the button's back.
-    expect(document.activeElement).toBe(before)
-    expect(document.activeElement).not.toBe(content())
+    const submit = seatNamed(en['composer.action.submit'])
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    submit.dispatchEvent(press)
+    // The native keepDraftFocus shape: the mousedown is consumed so focus
+    // never lands on the button, and the editor takes it back — typing
+    // continues without re-clicking the text face.
+    expect(press.defaultPrevented).toBe(true)
+    expect(focus).toHaveBeenCalledTimes(1)
+    expect(focus.mock.instances[0]).toBe(content())
+    expect(document.activeElement).toBe(content())
+    // The same arm carries the other seats: the mode toggle.
+    const mode = seatNamed(modeToggleCopy('source'))
+    const modePress = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    mode.dispatchEvent(modePress)
+    expect(modePress.defaultPrevented).toBe(true)
   })
 
-  it('excludes interactive-element targets, and the button click still fires', async () => {
-    // The exclusion walks ancestors: the tool row's mousedowns always land on
-    // an interactive element nested in the card, so no arm of the handler may
-    // claim them. The click that follows is untouched — the guard never
-    // preventDefaults.
+  it('keeps the editor focus on a tool-row button press without blocking the click (#74)', async () => {
     const inputActions = { submit: vi.fn() }
     render(<MarkdownComposer {...chainProps({ draft: 'text', inputActions })} />)
     const submit = seatNamed(en['composer.action.submit'])
+    const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    submit.dispatchEvent(press)
+    // The keep-focus arm consumes the mousedown (defaultPrevented), but the
+    // click that follows still submits.
+    expect(press.defaultPrevented).toBe(true)
+    fireEvent.click(submit)
+    await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))
+  })
+
+  it('leaves tool-row gaps to the card hit area and the mousedown uncancelled (#74)', () => {
+    render(<MarkdownComposer {...chainProps()} />)
     const focus = spyOnFocus()
+    const row = document.querySelector('[class*="toolRow"]') as HTMLElement
+    const gapPress = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    row.dispatchEvent(gapPress)
+    // The keep-focus arm claims button targets only; a gap mousedown falls
+    // through to the card hit area (which focuses without cancelling).
+    expect(gapPress.defaultPrevented).toBe(false)
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('excludes interactive-element targets, and the button click still fires', async () => {
+    // The exclusion walks ancestors: the tool row's mousedowns always land
+    // on an interactive element nested in the card, so no arm of the CARD
+    // handler may claim them (the keep-focus arm lives on the tool row, the
+    // card handler stays preventDefault-free). The click that follows is
+    // untouched.
+    const inputActions = { submit: vi.fn() }
+    render(<MarkdownComposer {...chainProps({ draft: 'text', inputActions })} />)
+    const submit = seatNamed(en['composer.action.submit'])
     // A real event object (not the testing-library return value) so
-    // `defaultPrevented` can be read back: the guard must not cancel the
-    // native gesture.
+    // `defaultPrevented` can be read back.
     const press = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
     submit.dispatchEvent(press)
     fireEvent.click(submit)
-    expect(focus).not.toHaveBeenCalled()
-    expect(press.defaultPrevented).toBe(false)
+    // The tool row's keep-focus arm ran (issue #74) — the CARD handler
+    // itself still never prevents here (the unit predicate test pins that).
+    expect(press.defaultPrevented).toBe(true)
     // Submit rides a 0ms window after setDraft (submit reads the host's
     // projection), so the click's landing is observed on the timer.
     await waitFor(() => expect(inputActions.submit).toHaveBeenCalledTimes(1))

@@ -138,6 +138,35 @@ export function isBuiltInPreset(preset: PresetDisplaySource): boolean {
 }
 
 /**
+ * Whether a roster row is one of the shipped presets the native seat filters
+ * out when Developer tools are off (`settings-store.ts:53-55`): exactly the
+ * two tool-centric shipped ids — `ptc` and `minimal`. The other shipped rows
+ * (`standard`, `cordis`) are never filtered, and a declaration that names
+ * itself escapes the gate even on a shipped id (`isBuiltInPreset`'s rule).
+ * @param preset - roster row.
+ */
+export function requiresCodingTools(preset: PresetDisplaySource): boolean {
+  return isBuiltInPreset(preset) && (preset.id === 'ptc' || preset.id === 'minimal')
+}
+
+/**
+ * The rows the menu offers under the current Developer-tools preference, the
+ * native display-layer filter (`AgentPresetSeat.tsx:105-108`): the healthy
+ * options minus the tool presets when Developer tools are off. The STORE is
+ * never filtered — the chip label and the seat's own visibility keep reading
+ * the full healthy list, so a current tool preset still names itself on the
+ * (disabled) chip.
+ * @param options - healthy options in roster order.
+ * @param developerTools - whether Developer tools are currently enabled.
+ */
+export function agentPresetVisibleOptions(
+  options: readonly AgentPresetOption[],
+  developerTools: boolean,
+): AgentPresetOption[] {
+  return developerTools ? [...options] : options.filter(option => !requiresCodingTools(option))
+}
+
+/**
  * One host-dictionary read as the fold consumes it: the bound translate
  * echoes the raw key when the namespace never resolves it (a host build
  * without the ui-agent-preset plugin — the locale service's `?? key` tail),

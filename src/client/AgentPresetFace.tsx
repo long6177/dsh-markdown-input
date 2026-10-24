@@ -43,15 +43,30 @@ import {
 import {
   agentPresetCurrentId, agentPresetDisplayName, agentPresetMenuItems,
   agentPresetOptions, agentPresetProjectionOf, agentPresetRefusal,
-  agentPresetSeatVisible, presetDisplayText,
+  agentPresetSeatVisible, agentPresetVisibleOptions, presetDisplayText,
   type AgentPresetOption, type AgentPresetSeatCopy, type PresetTranslate,
 } from './agent-preset-core.ts'
-import type { AgentPresetsRemoteFace } from './agent-preset-face.ts'
+import { useObservable } from './conversation-face.ts'
+import type {
+  AgentPresetRefreshSubscribe, AgentPresetsRemoteFace, DeveloperToolsStore,
+} from './agent-preset-face.ts'
+import { developerToolsEnabledOf } from './agent-preset-face.ts'
 import type { FaceDefinition } from './face.ts'
 import css from './MarkdownComposer.module.css'
 
 /** Face id of the agent-preset seat (the host seat is `conversation.hero.agentPreset`). */
 export const AGENT_PRESET_FACE_ID = 'hero.agentPreset'
+
+/**
+ * The seat's one availability predicate (ADR-0005): the roster verbs and the
+ * projection hook. The FaceGate probe and the card's own hero-row line read
+ * this SAME function, so the line never computes a second, drifting verdict.
+ * @param useProjection - the session projection hook as the chain delivers it.
+ * @param remotePresent - whether `ctx.remote.agentPresets` resolved.
+ */
+export function agentPresetSeatPossible(useProjection: unknown, remotePresent: boolean): boolean {
+  return remotePresent && typeof useProjection === 'function'
+}
 
 /**
  * The FaceGate definition of the Agent-preset seat: the projections it cannot
@@ -68,7 +83,7 @@ export function agentPresetFaceDefinition(
 ): FaceDefinition {
   return {
     id: AGENT_PRESET_FACE_ID,
-    probe: () => remotePresent && typeof useProjection === 'function',
+    probe: () => agentPresetSeatPossible(useProjection, remotePresent),
   }
 }
 
@@ -91,6 +106,20 @@ export interface AgentPresetFaceProps {
   readonly copy: AgentPresetSeatCopy
   /** Report a refusal or a roster-read failure through the card's banner. */
   readonly onError: (message: string) => void
+  /**
+   * The host Developer-tools form (#78), the native gate's signal
+   * (`AgentPresetSeat.tsx:32`): the tool presets (`ptc`, `minimal`) leave the
+   * menu while it reads off. Undefined (no configForms service) reads off
+   * too — the native observable face's own `?? false`.
+   */
+  readonly developerTools?: DeveloperToolsStore
+  /**
+   * The roster-refresh subscription (#78): fires the re-read on a transport
+   * reset, a preset-registry settings write, and the settings forms' changes
+   * — the native apply's four refresh signals. Undefined (no remote event
+   * face) keeps the one-mounting-read behavior.
+   */
+  readonly subscribeRefresh?: AgentPresetRefreshSubscribe
 }
 
 /** Loaded roster state: absent while loading, then either options or a reason. */
@@ -114,6 +143,15 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const onError = props.onError
+  // The roster-refresh clock (#78): every refresh signal bumps the tick and
+  // the read effect below re-runs against it — the native apply's refresh
+  // loop, shrunk to the one surface this card rebuilds.
+  const [refreshTick, setRefreshTick] = useState(0)
+  useEffect(() => {
+    const subscribe = props.subscribeRefresh
+    if (subscribe === undefined) return undefined
+    return subscribe(() => { setRefreshTick(tick => tick + 1) })
+  }, [props.subscribeRefresh])
 
   // The menu's placement anchor — the same seam the workspace chip uses:
   // `getAnchorRect` (not the Menu's own wrapper measurement) because the chip
@@ -125,10 +163,14 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
     [],
   )
 
-  // One roster read per mounting: the remote answers with the current
-  // declarations, and a card remount (session switch, election change) reads
-  // again. A failed read reports once through the card banner and otherwise
-  // leaves the seat hidden — a roster that never arrives offers no choice.
+  // One roster read per mounting, re-run by every refresh signal (#78): the
+  // remote answers with the current declarations, a card remount (session
+  // switch, election change) reads again, and a refresh tick reads again on
+  // top of whatever the seat already shows (a slow re-read never blanks the
+  // seat — the state only swaps when the read settles, the previous run's
+  // `live` flag dropping stale answers). A failed read reports once through
+  // the card banner and otherwise leaves the seat hidden — a roster that
+  // never arrives offers no choice.
   useEffect(() => {
     if (remote === undefined) return undefined
     let live = true
@@ -136,19 +178,29 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
       setRoster({ status: 'failed' })
       if (message !== undefined) onError(message)
     }
+    const ready = (presets: readonly AgentPresetOption[]): void => {
+      setRoster({
+        status: 'ready',
+        options: agentPresetOptions({ presets }),
+        defaults: presets.filter(preset => preset.isDefault === true).map(preset => preset.id),
+      })
+    }
     void remote.list().then(
       (result) => {
         if (!live) return
         if (!result.ok) {
+          // The optional-service absence is a LEGAL deployment: the native
+          // read answers an empty roster and the seat hides silently
+          // (`settings-store.ts:76`) — reporting it would turn a quiet host
+          // into a recurring false alarm, worst right after a reconnect.
+          if (result.error.code === 'gateway/invocation-unavailable') {
+            ready([])
+            return
+          }
           fail(agentPresetRefusal(result.error))
           return
         }
-        const presets = result.value.presets
-        setRoster({
-          status: 'ready',
-          options: agentPresetOptions({ presets }),
-          defaults: presets.filter(preset => preset.isDefault === true).map(preset => preset.id),
-        })
+        ready(result.value.presets)
       },
       (error: unknown) => {
         if (!live) return
@@ -158,7 +210,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
       },
     )
     return () => { live = false }
-  }, [remote, onError])
+  }, [remote, onError, refreshTick])
 
   const options = roster.status === 'ready' ? roster.options : []
   const visible = agentPresetSeatVisible(projection, options)
@@ -166,10 +218,23 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
     ? agentPresetCurrentId({ projection: projection ?? null, options, defaults: roster.defaults })
     : undefined
   const currentName = agentPresetDisplayName(options, currentId, props.translate)
-  const menuItems = useMemo(
-    () => agentPresetMenuItems(options, props.translate, props.copy.noDescription),
-    [options, props.translate, props.copy.noDescription],
+  // The Developer-tools gate (#78), the native display-layer filter
+  // (`AgentPresetSeat.tsx:105-108`): the MENU reads the filtered rows, the
+  // chip label and the seat's own visibility keep the full healthy list — a
+  // current tool preset still names itself on a chip that no longer offers it.
+  const developerTools = developerToolsEnabledOf(useObservable(props.developerTools))
+  const visibleOptions = useMemo(
+    () => agentPresetVisibleOptions(options, developerTools),
+    [options, developerTools],
   )
+  const menuItems = useMemo(
+    () => agentPresetMenuItems(visibleOptions, props.translate, props.copy.noDescription),
+    [visibleOptions, props.translate, props.copy.noDescription],
+  )
+  // The native close-on-shrink effect (`AgentPresetSeat.tsx:110-112`): the
+  // menu closes the moment its last visible row disappears (a Developer-tools
+  // flip among them) and stays closed when the rows return.
+  useEffect(() => { setOpen(false) }, [developerTools, visibleOptions.length])
 
   const onSelect = useCallback((id: string) => {
     setOpen(false)
@@ -204,7 +269,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
   return (
     <div className={css.agentPreset} data-markdown-agent-preset>
       <Menu
-        open={open}
+        open={open && visibleOptions.length > 0}
         anchor={null}
         getAnchorRect={getAnchorRect}
         items={menuItems.map(item => ({
@@ -229,7 +294,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
         aria-haspopup="menu"
         aria-expanded={open}
         title={props.copy.seatHint}
-        disabled={busy}
+        disabled={busy || visibleOptions.length === 0}
         onClick={() => { setOpen(value => !value) }}
       >
         <IconAgentPresetOutlineRegular className={css.agentPresetGlyph} size={16} />

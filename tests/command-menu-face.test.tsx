@@ -39,6 +39,7 @@ function stubEditor(leading = true) {
     focus: vi.fn(),
     isLeadingSelection: vi.fn(() => leading),
     claimSelection: vi.fn(),
+    selectionEnd: vi.fn(() => 0),
     setMenuKeyHandler: vi.fn((handler: MenuKeyHandler | null) => { menuHandler = handler }),
   }
   return {
@@ -56,6 +57,10 @@ function mountFace(options: {
   leading?: boolean
   locale?: 'zh' | 'en'
   chainPopups?: boolean
+  /** The card's claim-application callback (issue #79 AC5). */
+  beginClaim?: (claim: unknown) => void
+  /** The session snapshot's subagent share (native short-circuit, #76 AC4). */
+  subagent?: unknown
 } = {}) {
   const onError = vi.fn()
   const onPickFiles = vi.fn()
@@ -88,6 +93,8 @@ function mountFace(options: {
     onPickFiles,
     onError,
     registerClose: (fn: (() => void) | null) => { close = fn },
+    ...(options.beginClaim === undefined ? {} : { beginClaim: options.beginClaim }),
+    ...(options.subagent === undefined ? {} : { subagent: options.subagent }),
   } as unknown as CommandMenuFaceProps
   const view = render(
     <div ref={containerRef as never} data-composer-card>
@@ -172,6 +179,17 @@ describe('CommandMenuFace trigger', () => {
     mountFace({ sessionId: undefined })
     expect(trigger()).not.toBeInTheDocument()
     expect(listbox()).toBeNull()
+  })
+
+  it('does not open for a subagent session (the native catalog short-circuit leaves no rows)', async () => {
+    // Native parity (#76 AC4): the subagent catalog fetch short-circuits to
+    // an empty roster before any RPC — no candidate rows survive, so the
+    // menu never floats (the launcher's click is a no-op).
+    const { surfaces } = mountFace({ subagent: { address: { mode: 'nested' } } })
+    fireEvent.click(trigger())
+    await new Promise((resolve) => { setTimeout(resolve, 10) })
+    expect(listbox()).toBeNull()
+    expect(surfaces.commands.list).not.toHaveBeenCalled()
   })
 })
 
@@ -275,13 +293,66 @@ describe('CommandMenuFace keyboard', () => {
   })
 
   it('declines a claim while the caret follows text (leading guard)', async () => {
-    const { handler, editor } = mountFace({ leading: false })
+    const beginClaim = vi.fn()
+    const { handler, editor } = mountFace({ leading: false, beginClaim })
     await openMenu()
     // goal/plan/feedback are filtered out inline; compact (index 1 now) executes.
     await act(async () => { handler()?.('down') })
     await act(async () => { handler()?.('pick') })
     expect(editor.claimSelection).not.toHaveBeenCalled()
     expect(editor.isLeadingSelection).toHaveBeenCalled()
+    expect(beginClaim).not.toHaveBeenCalled()
+  })
+
+  it('hands a claim pick to the card beginClaim with the claim and a submit closure (AC5)', async () => {
+    const beginClaim = vi.fn()
+    const { handler, editor } = mountFace({ leading: true, beginClaim })
+    await openMenu()
+    // Highlight the goal row (index 1 behind the file row) and pick it.
+    await act(async () => { handler()?.('down') })
+    await act(async () => { handler()?.('pick') })
+    // The visible token still lands through claimSelection (the editor text
+    // is the claim's projection), and the card gets the claim to apply —
+    // with the pre-pick head end the machine's chip replaces.
+    expect(editor.claimSelection).toHaveBeenCalledWith('/目标 ')
+    expect(editor.selectionEnd).toHaveBeenCalled()
+    expect(beginClaim).toHaveBeenCalledTimes(1)
+    const [claim, headEnd] = beginClaim.mock.calls[0] as [
+      { name: string, token: string, submit: (args: string) => Promise<unknown> },
+      number,
+    ]
+    expect(claim.name).toBe('goal')
+    expect(claim.token).toBe('/目标 ')
+    expect(headEnd).toBe(0)
+    expect(typeof claim.submit).toBe('function')
+  })
+
+  it('the claim submit closure runs the command line through the execute verb (AC5)', async () => {
+    const beginClaim = vi.fn()
+    const { handler, surfaces } = mountFace({
+      leading: true, beginClaim,
+      executeResult: { ok: true, value: { commandId: 'c1', result: { kind: 'error', text: 'no goal set' } } },
+    })
+    await openMenu()
+    await act(async () => { handler()?.('down') })
+    await act(async () => { handler()?.('pick') })
+    const claim = beginClaim.mock.calls[0]?.[0] as { submit: (args: string) => Promise<{ kind: string, text?: string }> }
+    const outcome = await claim.submit('ship it')
+    // The line carries the catalog name and the typed args (the upstream
+    // leadingClaim's execute closure shape); the verb takes the empty
+    // attachment envelope the detached path sends.
+    expect(surfaces.commands.execute).toHaveBeenCalledWith('s1', '/goal ship it', [])
+    expect(outcome).toEqual({ kind: 'error', text: 'no goal set' })
+  })
+
+  it('keeps the claim text when the shell face is absent (beginClaim optional, AC5 degrade)', async () => {
+    const { handler, editor } = mountFace({ leading: true })
+    await openMenu()
+    await act(async () => { handler()?.('down') })
+    await act(async () => { handler()?.('pick') })
+    // No beginClaim prop: the token text stands alone; the typed-slash
+    // adjudication path still delivers it on Enter (the pre-#79 behavior).
+    expect(editor.claimSelection).toHaveBeenCalledWith('/目标 ')
   })
 
   it('closes on Escape/Shift+Tab through the seam and declines keys while closed', async () => {

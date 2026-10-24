@@ -14,11 +14,13 @@
  * combobox keyboard through the completion key seam, and the picks:
  * command rows dispatch exactly like the `+` menu's table (claim token /
  * detached execute / chained popup / file intake), the feedback row — while
- * the host `feedbackUi` service is alive — opens the session feedback dialog
- * and inserts nothing (the native decoration, issue #35), a skill inserts its
- * `/name ` token, and a file inserts its `formatFileMention` wire form —
- * `@path` or `@"path with spaces"`, a directory with its trailing slash —
- * with Tab drilling into directories. Every insertion is an ordinary
+ * the host `feedbackUi` service is alive — consumes the trigger token (the
+ * span CAS, issue #36's shape) and opens the session feedback dialog (#76
+ * AC5), a skill inserts its `/name ` token, and a file inserts its
+ * `formatFileMention` wire form — `@path` or `@"path with spaces"`, a
+ * directory with its trailing slash — followed by one separating space (the
+ * native chip-insertion tail rule, #76 AC7), with Tab drilling into
+ * directories. Every insertion is an ordinary
  * transaction, so the T9 chip decorations take over the visuals the moment
  * the text lands (insert → dictionary hit → decoration).
  *
@@ -33,7 +35,7 @@
  * `/mo` and returns focus to the editor (host PopupSelectController.settle
  * semantics). Dismissals and failures leave the token in the draft.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CSSProperties, ReactNode, RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { MenuSurface, ReferenceIconRegular, useAnchoredMaxHeight } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -44,11 +46,16 @@ import { commandFace, commandFaceSupported } from './command-face.ts'
 import { assembleCommandRows, reportExecute } from './command-rows.ts'
 import { feedbackUiSupported, openFeedbackSession } from './feedback-face.ts'
 import {
-  assembleCompletionView, guardAllowsProbe, sameProbeIdentity, skillInsertion,
-  type CompletionEntry, type CompletionGuard, type CompletionProbe,
+  assembleCompletionView, crumbsFor, guardAllowsProbe, sameProbeIdentity, skillInsertion,
+  type CompletionCrumb, type CompletionEntry, type CompletionGuard, type CompletionProbe,
   type CompletionView, type FileReferenceCandidate,
 } from './completion-core.ts'
 import { fileReferenceFace, fileReferenceFaceSupported } from './file-reference-face.ts'
+import type { SubagentShare } from './model-face.ts'
+import {
+  sessionReferenceFace, sessionReferenceFaceSupported, type SessionMentionCandidate,
+} from './session-reference-face.ts'
+import { hostHome, sessionSnapshot } from './sessions-face.ts'
 import { skillFace, type SkillEntry } from './skill-face.ts'
 import { NS } from './locales.ts'
 import type { MarkdownEditorHandle, MenuKeyHandler } from './markdown-editor.ts'
@@ -65,14 +72,15 @@ export const COMPLETION_FACE_ID = 'tool.completion'
 
 /**
  * The FaceGate definition: the popup face needs at least one data plane —
- * the command catalog for `/` or `remote.fileReferences` for `@`. A probe
- * miss (or a mid-life degrade) hides the popups wholesale; per-trigger
+ * the command catalog for `/`, or `remote.fileReferences` /
+ * `remote.sessionReferenceResolver` for `@`. A probe miss (or a mid-life
+ * degrade) hides the popups wholesale; per-trigger and per-plane
  * availability is checked at render (one plane can die alone).
  */
 export function completionFaceDefinition(): FaceDefinition {
   return {
     id: COMPLETION_FACE_ID,
-    probe: () => commandFaceSupported() || fileReferenceFaceSupported(),
+    probe: () => commandFaceSupported() || fileReferenceFaceSupported() || sessionReferenceFaceSupported(),
   }
 }
 
@@ -101,6 +109,14 @@ export interface CompletionFaceProps {
   readonly registerClose: (close: (() => void) | null) => void
   /** Runs when a probe opens the popup; closes the `+` menu (interlock). */
   readonly onOpen: () => void
+  /**
+   * The session snapshot's subagent share (wire data; null = ordinary
+   * session). A non-null address short-circuits the command-catalog and
+   * skill-lexicon reads before any RPC — the native pipeline serves a
+   * subagent session no candidate groups at all, so the `/` popup opens and
+   * auto-closes on the empty surface (issue #76 AC4).
+   */
+  readonly subagent?: SubagentShare
 }
 
 /** One display row with its a11y id and flat position (the highlight space). */
@@ -121,12 +137,15 @@ type CompletionRenderItem =
 /**
  * The `@` fetch state: the landed results carry their query so a probe that
  * moved on renders them as stale (SWR) instead of current, and carry their
- * session so a session switch never flashes the old workspace's files.
+ * session so a session switch never flashes the old workspace's files. The
+ * file and session candidates land as one batch (the native source reads
+ * both planes in parallel); a plane absent at fetch time lands empty.
  */
-interface LandedFiles {
+interface LandedBatch {
   readonly sessionId: SessionId
   readonly query: string
-  readonly results: readonly FileReferenceCandidate[]
+  readonly files: readonly FileReferenceCandidate[]
+  readonly sessions: readonly SessionMentionCandidate[]
 }
 
 /**
@@ -171,19 +190,24 @@ function chainSettle(handle: MarkdownEditorHandle, probe: CompletionProbe): Chai
  * @returns the portaled popup, or nothing while closed.
  */
 export function CompletionFace({
-  sessionId, t, editor, container, guard, canPickFiles, onPickFiles, onError, registerClose, onOpen,
+  sessionId, t, editor, container, guard, canPickFiles, onPickFiles, onError, registerClose, onOpen, subagent,
 }: CompletionFaceProps): ReactNode {
   const command = commandFace()
   const catalogs = useObservable(command?.catalogs)
   const skills = skillFace()
   const skillEntries = useObservable(skills?.lexicons)
   const fileFace = fileReferenceFace()
+  const sessionFace = sessionReferenceFace()
 
   const [probe, setProbe] = useState<CompletionProbe | null>(null)
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
   const [fetching, setFetching] = useState(false)
-  const [landed, setLanded] = useState<LandedFiles | null>(null)
+  const [landed, setLanded] = useState<LandedBatch | null>(null)
+  // The drill flag (issue #80, the host controller's `drilled`): true when the
+  // current menu was opened/rebounded by a drill, so continuing to type keeps
+  // the breadcrumb header while the menu closes clear it.
+  const [drilled, setDrilled] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
 
   // Mirrors keep the editor-seam handler and pick closures reading fresh
@@ -212,8 +236,8 @@ export function CompletionFace({
   const tRef = useRef(t)
   tRef.current = t
 
-  const skillRoll: readonly SkillEntry[] | null = skills === undefined
-    ? [] // no lexicon plane: no skill group at all (native roster parity)
+  const skillRoll: readonly SkillEntry[] | null = skills === undefined || subagent != null
+    ? [] // no lexicon plane (or the native subagent short-circuit): no skill group
     : sessionId === undefined || skillEntries === undefined
       ? null // the lexicon read is pending
       : skillEntries.value.get(sessionId) ?? null
@@ -221,40 +245,74 @@ export function CompletionFace({
   const descriptors = sessionId === undefined || catalogs === undefined
     ? null
     : catalogs.value.get(sessionId) ?? null
+  // The popup path never falls back to the synthetic catalog (#76 AC3): a
+  // session without a landed snapshot contributes no rows, and the group's
+  // status — pending skeleton vs removed (native source-failed) — comes from
+  // the face's failure verdict. A subagent session short-circuits to the
+  // native empty catalog.
+  const catalogFailed = sessionId !== undefined && (catalogs?.failed.has(sessionId) ?? false)
+  const catalogPending = subagent == null && descriptors === null && !catalogFailed
   const commandRows = useMemo(
     () => command === undefined || probe === null || probe.trigger !== '/'
       ? null
-      : assembleCommandRows({
-        descriptors,
-        canPickFiles,
-        // Live registry reads, like the `+` menu: the chainable rows resolve
-        // fresh per assembly, and feedbackUiSupported upgrades the feedback
-        // row to the native dialog action whenever the decoration owner is
-        // active (issue #35).
-        canChainPermission: hasChainPopup('permission'),
-        canChainModel: hasChainPopup('model'),
-        canOpenFeedback: feedbackUiSupported(),
-        leading: probe.position === 'leading',
-        t,
-      }),
-    [command, probe, descriptors, canPickFiles, t],
+      : subagent != null || descriptors === null
+        ? [] // no rows: the group pends (catalog read in flight) or is removed (failed/short-circuited)
+        : assembleCommandRows({
+          descriptors,
+          canPickFiles,
+          // Live registry reads, like the `+` menu: the chainable rows resolve
+          // fresh per assembly, and feedbackUiSupported upgrades the feedback
+          // row to the native dialog action whenever the decoration owner is
+          // active (issue #35).
+          canChainPermission: hasChainPopup('permission'),
+          canChainModel: hasChainPopup('model'),
+          canOpenFeedback: feedbackUiSupported(),
+          leading: probe.position === 'leading',
+          t,
+        }),
+    [command, probe, descriptors, canPickFiles, subagent, t],
   )
 
   const landedValid = landed !== null && landed.sessionId === sessionId
   const landedForProbe = landedValid && landed !== null && landed.query === probe?.query
   const view: CompletionView | null = useMemo(() => {
     if (probe === null) return null
-    if (probe.trigger === '/' ? command === undefined : fileFace === undefined) return null
+    if (probe.trigger === '/' ? command === undefined : fileFace === undefined && sessionFace === undefined) {
+      return null
+    }
     // Landed results answer the current query only; an older query's landed
-    // data shows as stale while the fresh fetch runs (SWR).
-    const files = fetching || !landedForProbe || landed === null ? null : landed.results
-    const staleFiles = fetching && landedValid && landed !== null ? landed.results : null
-    return assembleCompletionView({ probe, commandRows, skills: skillRoll, files, staleFiles, t })
-  }, [probe, command, fileFace, fetching, landedForProbe, landedValid, landed, commandRows, skillRoll, t])
-
-  const pending = view?.pending ?? false
-  const pendingRef = useRef(pending)
-  pendingRef.current = pending
+    // data shows as stale while the fresh fetch runs (SWR). A plane absent
+    // at fetch time landed empty: its group reads ready-empty and sheds.
+    const files = fileFace === undefined
+      ? []
+      : fetching || !landedForProbe || landed === null ? null : landed.files
+    const staleFiles = fileFace === undefined || !fetching || !landedValid || landed === null
+      ? null
+      : landed.files
+    const sessions = sessionFace === undefined || probe.quoted
+      ? []
+      : fetching || !landedForProbe || landed === null ? null : landed.sessions
+    const staleSessions = sessionFace === undefined || probe.quoted || !fetching || !landedValid || landed === null
+      ? null
+      : landed.sessions
+    return assembleCompletionView({
+      probe,
+      commandRows,
+      catalogPending,
+      skills: skillRoll,
+      files,
+      staleFiles,
+      sessions,
+      staleSessions,
+      sessionEnv: {
+        sessionId: sessionId ?? '',
+        now: Date.now(),
+        home: hostHome(),
+        summaries: sessionSnapshot(),
+      },
+      t,
+    })
+  }, [probe, command, fileFace, sessionFace, fetching, landedForProbe, landedValid, landed, commandRows, catalogPending, skillRoll, sessionId, t])
 
   // The rendered item list and the flat row space the keyboard highlight
   // cycles (one listbox over the groups in display order, native flatten).
@@ -292,6 +350,10 @@ export function CompletionFace({
   }, [view])
   const rowsRef = useRef(rows)
   rowsRef.current = rows
+  // The group statuses the key seam reads at gesture time (the pending gate
+  // is judged on the highlighted row's own group — #76 AC2).
+  const viewRef = useRef(view)
+  viewRef.current = view
 
   const visible = open && probe !== null && view !== null && guardAllowsProbe(guard, probe)
   const visibleRef = useRef(visible)
@@ -302,7 +364,10 @@ export function CompletionFace({
   // No dismissed memory: this close is the data's answer, not the user's.
   const allReadyEmpty = visible && view !== null && !view.pending && rows.length === 0
   useEffect(() => {
-    if (allReadyEmpty) setOpen(false)
+    if (allReadyEmpty) {
+      setOpen(false)
+      setDrilled(false)
+    }
   }, [allReadyEmpty])
 
   /**
@@ -329,13 +394,21 @@ export function CompletionFace({
   const insertSettling = useCallback((text: string): void => {
     rememberNextRef.current = true
     setOpen(false)
+    setDrilled(false)
     insertOverToken(text)
   }, [insertOverToken])
 
   const closeWithMemory = useCallback((): void => {
     dismissedRef.current = probeRef.current
     setOpen(false)
+    setDrilled(false)
   }, [])
+
+  // The bare close: no dismissed memory, the probe kept. The card's interlock
+  // (the `+` menu opening) uses this — the native toggleSource's open path
+  // never remembers (#76 AC6), so the `@` token the `+` menu displaced
+  // re-tracks open when the menu is gone.
+  const close = useCallback((): void => { setOpen(false); setDrilled(false) }, [])
 
   const pickRow = useCallback((row: CompletionRowItem, viaTab: boolean): void => {
     const editorHandle = editorRef.current
@@ -384,14 +457,30 @@ export function CompletionFace({
           }
           return
         }
-        case 'feedback':
-          // The host `feedbackUi` decoration: the pick opens the session
-          // feedback dialog and replaces the token with NOTHING (no
-          // insertion, no dismissed memory — the settled token is simply
-          // gone, so the popup cannot reopen on a memory that has no text to
-          // remember).
+        case 'feedback': {
+          // The host `feedbackUi` decoration invoke: consume the trigger
+          // token FIRST (the span CAS — the CM6 analogue of the host's
+          // draftRev guard, issue #36's chainSettle shape), then run the
+          // dialog (#76 AC5). The popup closes with the consumption; no
+          // dismissed memory is written — the token is gone, so the next
+          // probe is none and the memory self-clears through the seam. A
+          // CAS miss (a draft rewritten under a stale probe) keeps the draft
+          // and still closes the popup.
+          const handle = editorRef.current
+          if (handle !== null) {
+            const { start, end } = current
+            const doc = handle.view.state.doc
+            if (start < end && end <= doc.length && doc.sliceString(start, end).startsWith('/')) {
+              handle.view.dispatch({
+                changes: { from: start, to: end },
+                selection: { anchor: start },
+              })
+            }
+          }
+          setOpen(false)
           openFeedbackSession(sessionId)
           return
+        }
       }
       return
     }
@@ -399,13 +488,28 @@ export function CompletionFace({
       insertSettling(skillInsertion(option.name))
       return
     }
+    // Session rows settle their canonical wire mention — the insertion is
+    // exactly the text the host's reference pipeline writes, so the T9 chip
+    // decorations fold it into a session chip the moment it lands.
+    if (option.origin === 'session') {
+      insertSettling(option.mention)
+      return
+    }
     // File rows: Tab drills into a directory — the open mention keeps the
     // token live and the descended listing opens (no dismissed memory,
-    // no close); every other pick settles the reference.
+    // no close); every other pick settles the reference with the native
+    // chip-insertion tail rule (runtime.ts): one separating space unless
+    // the span is already followed by one (#76 AC7) — the mention never
+    // glues to the next keystroke and never doubles an existing space.
     if (viaTab && option.kind === 'directory') {
+      // A drill keeps the menu open on the descended listing and marks the
+      // session drilled, so the breadcrumb header shows while typing goes on.
+      setDrilled(true)
       insertOverToken(option.mention)
     } else {
-      insertSettling(option.mention)
+      const handle = editorRef.current
+      const tail = handle === null ? '' : handle.view.state.doc.sliceString(current.end, current.end + 1)
+      insertSettling(tail === ' ' ? option.mention : `${option.mention} `)
     }
   }, [command, sessionId, onPickFiles, insertSettling, insertOverToken])
 
@@ -426,18 +530,23 @@ export function CompletionFace({
       dismissedRef.current = null
       setProbe(null)
       setOpen(false)
+      setDrilled(false)
       return
     }
     if (dismissedRef.current !== null && sameProbeIdentity(dismissedRef.current, next)) {
       // The dismissed token is still there, untouched: stay closed.
       setProbe(next)
       setOpen(false)
+      setDrilled(false)
       return
     }
     dismissedRef.current = null
     const wasOpen = openRef.current
     setProbe(next)
     setOpen(true)
+    // A fresh open starts un-drilled; a re-track while open (the drill's own
+    // descended token) keeps the flag.
+    if (!wasOpen) setDrilled(false)
     if (!wasOpen) onOpenRef.current()
   }, [])
 
@@ -456,12 +565,17 @@ export function CompletionFace({
           setHighlight((current) => (current >= last ? 0 : current + 1))
           return true
         case 'pick':
-        case 'tab':
-          // Refinement pending: consume the gesture — never pick a stale
-          // row, and never let Tab leave the editor mid-refinement.
-          if (pendingRef.current) return true
-          pickRow(rowsRef.current[Math.min(highlightRef.current, last)]!, intent === 'tab')
+        case 'tab': {
+          const row = rowsRef.current[Math.min(highlightRef.current, last)]!
+          // Refinement pending, judged on the highlighted row's OWN group
+          // (native arbitrate, #76 AC2): a ready row picks while another
+          // group is still pending — no double-Enter stall; a stale SWR row
+          // (its group refetching) is consumed, never picked.
+          const group = viewRef.current?.groups.find((candidate) => candidate.id === row.entry.group)
+          if (group?.status === 'pending') return true
+          pickRow(row, intent === 'tab')
           return true
+        }
         case 'close':
           closeWithMemory()
           return true
@@ -470,10 +584,25 @@ export function CompletionFace({
   }
   // Mount-time warm-up: the catalog and lexicon reads start before the first
   // popup (the `+` menu face warms the catalog too — ensure is idempotent).
+  // A subagent session short-circuits both reads before any RPC (#76 AC4).
   useEffect(() => {
+    if (subagent != null) return undefined
     if (command !== undefined && sessionId !== undefined) command.ensure(sessionId)
     if (skills !== undefined && sessionId !== undefined) skills.ensure(sessionId)
-  }, [command, skills, sessionId])
+    return undefined
+  }, [command, skills, sessionId, subagent])
+  // Per-track retry (the native candidates re-pull per track): every `/`
+  // popup open and every re-track while open re-attempts the reads — ensure
+  // is a no-op while a session is cached and healthy, so this only fires
+  // real reads after a failure (#76 AC1) or an invalidation (#76 AC3).
+  useEffect(() => {
+    if (!visible || subagent != null || probe === null || probe.trigger !== '/' || sessionId === undefined) {
+      return undefined
+    }
+    command?.ensure(sessionId)
+    skills?.ensure(sessionId)
+    return undefined
+  }, [visible, probe, subagent, command, skills, sessionId])
   useEffect(() => {
     editor?.setCompletionKeyHandler(keyHandler.current)
     return () => { editor?.setCompletionKeyHandler(null) }
@@ -484,29 +613,43 @@ export function CompletionFace({
   }, [editor, onProbe])
 
   // The card closes the popup when the `+` menu opens (one candidate
-  // surface above the card — the native single-MenuView semantics).
+  // surface above the card — the native single-MenuView semantics). The
+  // interlock gets the BARE close: a displaced `@` token must re-track open
+  // when the menu is gone (native toggleSource remembers nothing on its
+  // open path, #76 AC6). Escape, outside presses and settling picks keep
+  // closeWithMemory.
   useEffect(() => {
-    registerClose(closeWithMemory)
+    registerClose(close)
     return () => { registerClose(null) }
-  }, [closeWithMemory, registerClose])
+  }, [close, registerClose])
 
-  // The `@` search: one fetch per live query, the previous results kept
-  // visible while the fresh one runs (native stale-while-revalidate).
+  // The `@` search: one batch per live query — both candidate planes in
+  // parallel (the native source reads them together), the previous results
+  // kept visible while the fresh one runs (native stale-while-revalidate).
+  // A quoted token skips the session query (native rule); an absent plane
+  // lands empty so its group sheds alone.
   useEffect(() => {
-    if (!visible || probe === null || probe.trigger !== '@' || fileFace === undefined || sessionId === undefined) {
+    if (!visible || probe === null || probe.trigger !== '@' || sessionId === undefined) {
       return undefined
     }
+    if (fileFace === undefined && sessionFace === undefined) return undefined
     const controller = new AbortController()
     inFlightRef.current?.abort()
     inFlightRef.current = controller
     setFetching(true)
-    void fileFace.search(sessionId, probe.query, controller.signal).then((results) => {
+    const filesPromise = fileFace === undefined
+      ? Promise.resolve([])
+      : fileFace.search(sessionId, probe.query, controller.signal)
+    const sessionsPromise = sessionFace === undefined || probe.quoted
+      ? Promise.resolve([])
+      : sessionFace.candidates(sessionId, probe.query, controller.signal)
+    void Promise.all([filesPromise, sessionsPromise]).then(([files, sessions]) => {
       if (controller.signal.aborted) return
       inFlightRef.current = null
-      setLanded({ sessionId, query: probe.query, results })
+      setLanded({ sessionId, query: probe.query, files, sessions })
       setFetching(false)
     }).catch(() => {
-      // The face resolves failures to []; a face-level surprise must not
+      // The faces resolve failures to []; a face-level surprise must not
       // leave a permanent pending group behind.
       if (!controller.signal.aborted) setFetching(false)
     })
@@ -515,7 +658,7 @@ export function CompletionFace({
       if (inFlightRef.current === controller) inFlightRef.current = null
       setFetching(false)
     }
-  }, [visible, probe, fileFace, sessionId])
+  }, [visible, probe, fileFace, sessionFace, sessionId])
 
   // Outside-pointerdown dismissal (the host MenuView's rule; the native
   // external-dismiss verb records the memory too — controller.dismiss()
@@ -550,6 +693,12 @@ export function CompletionFace({
   if (!visible || allReadyEmpty || probe === null || view === null || container.current === null) return null
 
   const activeFlat = Math.min(highlight, rows.length - 1)
+  // The breadcrumb trail of a drilled `@` source (issue #80): only the drill
+  // path carries one, and it lives outside the listbox (keyboard never lands
+  // on it; a press re-writes the ancestor mention and keeps the menu open).
+  const crumbs: readonly CompletionCrumb[] | undefined = probe.trigger === '@'
+    ? crumbsFor(probe.query, probe.quoted, drilled, t)
+    : undefined
 
   return createPortal(
     <MenuSurface
@@ -558,6 +707,32 @@ export function CompletionFace({
       style={{ maxHeight } satisfies CSSProperties}
       data-completion-menu=""
     >
+      {crumbs !== undefined && crumbs.length > 0 && (
+        <nav className={css.crumbs} aria-label={t('completion.crumbs.aria')} data-completion-crumbs>
+          {crumbs.map((crumb, index) => (
+            <Fragment key={`${String(index)}:${crumb.label}`}>
+              {index > 0 && <span className={css.crumbSeparator} aria-hidden>›</span>}
+              <button
+                type="button"
+                className={crumb.current === true ? `${css.crumb} ${css.crumbCurrent}` : css.crumb}
+                aria-current={crumb.current === true ? 'location' : undefined}
+                disabled={crumb.current === true}
+                data-completion-crumb={crumb.label}
+                onMouseDown={(event) => {
+                  // mousedown (not click) keeps the composer focused, the
+                  // native crumb's own gesture; the menu stays open.
+                  event.preventDefault()
+                  event.stopPropagation()
+                  setDrilled(true)
+                  insertOverToken(crumb.mention)
+                }}
+              >
+                {crumb.label}
+              </button>
+            </Fragment>
+          ))}
+        </nav>
+      )}
       <div
         className={css.viewport}
         role="listbox"
@@ -621,7 +796,7 @@ function OptionButton({ item, active, onPick, highlight, t }: {
   const option = entry.option
   const marker = option.origin === 'command'
     ? option.row.name
-    : option.origin === 'skill'
+    : option.origin === 'skill' || option.origin === 'session'
       ? option.name
       : option.path
   let content: ReactNode
@@ -640,9 +815,12 @@ function OptionButton({ item, active, onPick, highlight, t }: {
         )}
       </>
     )
-  } else if (option.origin === 'skill') {
+  } else if (option.origin === 'skill' || option.origin === 'session') {
     content = (
       <>
+        {option.origin === 'session' && (
+          <span className={css.itemIcon} aria-hidden><ReferenceIconRegular kind="session" size={14} /></span>
+        )}
         <span className={css.itemName}>{option.name}</span>
         {option.description !== undefined && (
           <span className={css.itemDescription}>{option.description}</span>

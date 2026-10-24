@@ -22,24 +22,26 @@
  * session's timed figures, the usage dialog the four billing buckets under an
  * exact grouped total.
  *
- * Recorded deviations from the native component: the native's window-scoped
- * `deriveStats` fallback fold has no counterpart (no chat-snapshot seat on
- * the card), so the counts pill rides the `sessionStats` projection alone;
- * the gauge and database glyphs are vendored SVG paths (no host package
- * import). The figures, gates, geometry, and copy are the host's own.
+ * Issue #80 closes the last data gap: without a `sessionStats` projection
+ * the counts pill folds the settled chat window (`deriveStats` over
+ * `uiConversation.binding(id).target('chat')`, the native fallback). The
+ * target's first subscriber activates it — accepted, since the fold needs
+ * that snapshot. The gauge and database glyphs remain vendored SVG paths
+ * (no host package import). The figures, gates, geometry, and copy are the
+ * host's own.
  */
-import { useState, type ReactNode } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { useObservable } from './conversation-face.ts'
+import { useObservable, type SessionId } from './conversation-face.ts'
 import type { FaceDefinition } from './face.ts'
 import {
-  billedInputTokens, cacheHitPercent, compactReadings, exactCount, fillTemplate, formatDuration,
+  billedInputTokens, cacheHitPercent, compactReadings, deriveStats, exactCount, fillTemplate, formatDuration,
   formatTokens, formatTokensPerSecond, hasTokenActivity, statsPillsVisible, statsStepsOf,
   timeDialogAvailable, tokensPerSecondOf, ttftMeanMs,
-  type SessionStatsView, type StatsPillsCopy, type TokenUsageView,
+  type SessionStatsView, type StatsPillsCopy, type TokenUsageView, type WindowStatsNode,
 } from './stats-pills-core.ts'
 import {
-  performanceUsageModeOf, statsSettingsStore,
+  chatSnapshotSource, performanceUsageModeOf, statsSettingsStore,
   type PerformanceUsageMode,
 } from './stats-pills-face.ts'
 import { MEASURE_STYLE, useStatDialog, type StatDialogSlot } from './stat-dialog-face.ts'
@@ -66,6 +68,8 @@ export interface StatsPillsFaceProps {
    * host build.
    */
   readonly useProjection: StatsProjectionReader
+  /** The owning session; the window-fold fallback reads its chat snapshot. */
+  readonly sessionId: SessionId
   /** The resolved pill copy (host `chat` words, plugin fallbacks — see `resolveStatsCopy`). */
   readonly copy: StatsPillsCopy
 }
@@ -323,13 +327,21 @@ function UsagePill({ usage, copy, dialog }: {
  * compact mode's plain readings instead when the setting says so; nothing
  * when neither plane answers with activity.
  */
-export function StatsPillsFace({ useProjection, copy }: StatsPillsFaceProps): ReactNode {
+export function StatsPillsFace({ useProjection, sessionId, copy }: StatsPillsFaceProps): ReactNode {
   // The presentation mode rides the `ui-chat` settings form's live snapshot
   // (native parity: the injected `usePerformanceUsage` hook); an absent
   // service reads as the host default (detailed).
   const settings = useObservable(statsSettingsStore())
   const mode: PerformanceUsageMode = performanceUsageModeOf(settings)
-  const stats = useProjection('sessionStats')
+  const projected = useProjection('sessionStats')
+  // The window fold (issue #80, the host `projected ?? deriveStats(nodes)`):
+  // the settled chat snapshot fills in when no projection is served. It
+  // answers "what is on screen" over the loaded window only.
+  const chat = useObservable(useMemo(() => chatSnapshotSource(sessionId), [sessionId]))
+  const stats = useMemo(
+    () => projected ?? deriveStats((chat?.legacy?.nodes ?? []) as readonly WindowStatsNode[]),
+    [projected, chat],
+  )
   const usage = useProjection('tokenUsage')
   // One exclusive slot for both dialogs: opening either pill closes the other
   // (host StatsPills.tsx:320-321). The slot is owned here, above the mode

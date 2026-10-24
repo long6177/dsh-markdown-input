@@ -63,7 +63,7 @@ function installVerb(verb: UiWorkspaceVerbFace | undefined): void {
 function hostSeats(options: {
   workspaces?: WorkspaceRowSnapshot
   cwdBySession?: Record<string, string | undefined>
-  verb?: { startSession: (workspaceId?: string) => void }
+  verb?: { startSession: (workspaceId?: string) => void; openWorkspace?: (workspaceId: string) => Promise<void> }
   withVerb?: boolean
 } = {}): { props: Partial<MarkdownComposerProps> } {
   const workspaces = options.workspaces ?? { items: [], phase: 'ready' }
@@ -346,6 +346,84 @@ describe('workspace pick menu', () => {
   })
 })
 
+describe('workspace pick refusal (#78)', () => {
+  const TWO_WORKSPACES = {
+    items: [
+      { workspaceId: 'w1', title: 'project', sessionIds: ['s1'] },
+      { workspaceId: 'w2', title: 'other', sessionIds: [] },
+    ],
+    phase: 'ready' as const,
+  }
+
+  function banner(): HTMLElement | null {
+    return document.querySelector<HTMLElement>('[data-markdown-banner]')
+  }
+
+  it('picks through the rejectable openWorkspace verb when the host exposes it', async () => {
+    const startSession = vi.fn()
+    const openWorkspace = vi.fn(() => Promise.resolve())
+    const seats = hostSeats({
+      workspaces: TWO_WORKSPACES,
+      verb: { startSession, openWorkspace },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    fireEvent.click(menuRow('other'))
+    expect(openWorkspace).toHaveBeenCalledWith('w2')
+    // The rejectable verb replaces the void one — the pick goes through
+    // `openWorkspace`, exactly the native `selectWorkspace`'s navigation.
+    expect(startSession).not.toHaveBeenCalled()
+    expect(menuRows()).toHaveLength(0)
+    expect(chip()).toHaveTextContent('other')
+  })
+
+  it('rolls the pending workspace label back when switching fails', async () => {
+    // Upstream `skeleton.client.spec.tsx:665`: the refused pick must not
+    // leave the chip naming a workspace the session never reached.
+    const openWorkspace = vi.fn(() => Promise.reject(new Error('connect failed')))
+    const seats = hostSeats({
+      workspaces: TWO_WORKSPACES,
+      verb: { startSession: vi.fn(), openWorkspace },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    fireEvent.click(menuRow('other'))
+    expect(chip()).toHaveTextContent('other')
+    await waitFor(() => { expect(chip()).toHaveTextContent('project') })
+    expect(chip()).not.toHaveTextContent('other')
+    // The failure names itself on the card's one error surface (the host's
+    // createFailed toast has no mirror here — the banner is the card's face).
+    await waitFor(() => { expect(banner()).not.toBeNull() })
+    expect(banner()?.textContent).toContain('connect failed')
+  })
+
+  it('keeps a newer pick pending when an older pick is refused', async () => {
+    // The native guard (`ConversationContent.tsx:119-131`): the refusal clears
+    // the pending pick ONLY while it is still the latest one.
+    let refuseFirst: (() => void) | undefined
+    const openWorkspace = vi.fn()
+      .mockReturnValueOnce(new Promise((_resolve, reject) => { refuseFirst = () => reject(new Error('connect failed')) }))
+      .mockReturnValue(new Promise<void>(() => {}))
+    const seats = hostSeats({
+      workspaces: TWO_WORKSPACES,
+      verb: { startSession: vi.fn(), openWorkspace },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.click(chip())
+    fireEvent.click(menuRow('other'))
+    expect(chip()).toHaveTextContent('other')
+    // A second pick supersedes the first while it is still in flight.
+    fireEvent.click(chip())
+    fireEvent.click(menuRow('project'))
+    expect(chip()).toHaveTextContent('project')
+    // Now the first pick refuses: the newer pick stays pending.
+    refuseFirst?.()
+    await waitFor(() => { expect(banner()).not.toBeNull() })
+    expect(chip()).toHaveTextContent('project')
+    expect(chip()).not.toHaveTextContent('other')
+  })
+})
+
 describe('workspace trigger posture', () => {
   it('turns the whole card into the picker when no workspace resolves', () => {
     const seats = hostSeats({ workspaces: { items: [], phase: 'ready' } })
@@ -377,6 +455,31 @@ describe('workspace trigger posture', () => {
     expect(chip()).not.toBeDisabled()
     expect(document.querySelector('.cm-content')).toHaveAttribute('contenteditable', 'true')
     void view
+  })
+
+  it('is keyboard reachable: Enter and Space open the same pick menu', () => {
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: [] }], phase: 'ready' },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    // The native card carries the pick-target quartet on its text face; the
+    // takeover card carries it on its root.
+    expect(card()).toHaveAttribute('tabindex', '0')
+    expect(card()).toHaveAttribute('aria-haspopup', 'menu')
+    expect(card()).toHaveAttribute('aria-expanded', 'false')
+    expect(card()).toHaveAttribute('aria-label', copy['hero.chooseWorkspace'])
+    fireEvent.keyDown(card(), { key: 'Enter' })
+    expect(menuRows()).toHaveLength(1)
+    expect(card()).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('opens the pick menu on Space as well', () => {
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: [] }], phase: 'ready' },
+    })
+    render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
+    fireEvent.keyDown(card(), { key: ' ' })
+    expect(menuRows()).toHaveLength(1)
   })
 
   it('does not focus the editor from a card mousedown while in the trigger posture', () => {
@@ -462,11 +565,35 @@ describe('hero line — one row for both seats (issue #42 alpha.12 feedback)', (
     expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
   })
 
-  it('mounts no hero line at all when the workspace row capability is missing', () => {
+  it('mounts no hero line at all when neither seat is available', () => {
+    // No verb (the workspace row's verdict fails) and no roster (the preset
+    // gate stays off): the line would be an empty flex box, so it stays off.
     const seats = hostSeats({ withVerb: false })
     render(<MarkdownComposer {...chainProps({ session: blankSession() })} {...seats.props} />)
     expect(document.querySelector('[data-markdown-hero-row]')).toBeNull()
     expect(row()).toBeNull()
+  })
+
+  it('still mounts the preset seat on the hero line when the workspace row capability is missing (#78)', async () => {
+    // AC4: the two seats judge their own availability. The workspace row's
+    // verdict failing (no reuse-or-create verb) hides the workspace chip
+    // alone — the preset seat, whose roster and projection are intact, keeps
+    // its place on the line.
+    setAgentPresetsSource(() => roster)
+    const seats = hostSeats({ withVerb: false })
+    render(
+      <MarkdownComposer
+        {...chainProps({ session: blankSession(), projection: { agentPreset: null } })}
+        {...seats.props}
+      />,
+    )
+    expect(row()).toBeNull()
+    const heroRow = document.querySelector('[data-markdown-hero-row]')
+    expect(heroRow).not.toBeNull()
+    await waitFor(() => {
+      expect(document.querySelector('[data-markdown-agent-preset]')).not.toBeNull()
+    })
+    expect(heroRow).toContainElement(document.querySelector('[data-markdown-agent-preset]'))
   })
 })
 

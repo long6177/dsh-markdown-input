@@ -136,6 +136,16 @@ describe('assembleCommandRows row faces', () => {
       label: '模型', description: '选择本会话使用的模型', icon: IconDataOutlineRegular,
     })
   })
+
+  it('carries the catalog input hint on claim rows for the claim snapshot (AC5)', () => {
+    const rows = new Map(zhRows(HOST_BUILTINS).map((row) => [row.name, row]))
+    expect(rows.get('goal')?.hint).toBe('[<objective>|clear]')
+    expect(rows.get('feedback')?.hint).toBe('<text>')
+    // Bare rows carry none; the empty synthetic hint reads as none too.
+    expect(rows.get('compact')?.hint).toBeUndefined()
+    const synthetic = new Map(zhRows(null).map((row) => [row.name, row]))
+    expect(synthetic.get('goal')?.hint).toBeUndefined()
+  })
 })
 
 describe('assembleCommandRows kinds', () => {

@@ -40,22 +40,24 @@ function chips(handle: MarkdownEditorHandle): string[] {
 }
 
 describe('ref chip decorations', () => {
-  it('decorates @ shapes and skill hits over the plain text', () => {
+  it('decorates @ directory shapes and skill hits over the plain text', () => {
     const { handle } = mount()
     handle.setSkillLexicon(['plan'])
-    handle.setText('use /plan and @a.txt')
-    expect(chips(handle)).toEqual(['skill /plan', 'file @a.txt'])
+    handle.setText('use /plan and @src/ and @a.txt')
+    // Issue #80: a bare file-shaped token stays plain; only the directory
+    // form chips (the host text-ref decorations' rule).
+    expect(chips(handle)).toEqual(['skill /plan', 'folder @src/'])
   })
 
   it('keeps the document text untouched (chips are decorations, the line format survives)', () => {
     const { handle } = mount()
     handle.setSkillLexicon(['plan'])
-    const draft = 'see @"path with spaces" + @[Old chat](dsh-session:s-1) and /plan.'
+    const draft = 'see @"path with spaces/" + @[Old chat](dsh-session:s-1) and /plan.'
     handle.setText(draft)
     expect(handle.getText()).toBe(draft)
     // `/plan.` is prose (punctuation tail — the skill-gesture discipline):
-    // only the quoted file and the session wire form chip here.
-    expect(chips(handle)).toEqual(['file @"path with spaces"', 'session @[Old chat](dsh-session:s-1)'])
+    // only the quoted directory and the session wire form chip here.
+    expect(chips(handle)).toEqual(['folder @"path with spaces/"', 'session @[Old chat](dsh-session:s-1)'])
     // A subsequent edit re-scans; the text is still the same draft.
     handle.view.dispatch({ changes: { from: 0, insert: 'x' } })
     expect(handle.getText()).toBe(`x${draft}`)

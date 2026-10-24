@@ -124,6 +124,118 @@ interface ModelDirectoriesFace {
   directoryFor(sessionId: SessionId): ModelDirectoryFace
 }
 
+/** The host slot key the model label extension registers on. */
+export const MODEL_LABEL_SLOT = 'conversation.input.model.label'
+
+/** One winning model-label entry as the card renders it. */
+export interface ModelLabelEntry {
+  /** The registered component (function, memo, or forwardRef object). */
+  readonly component: unknown
+  /** The dictionary namespace the renderer synthesizes a `t` seat from. */
+  readonly locale?: string | undefined
+}
+
+/**
+ * The model-label slot face (issue #80): the one winning entry of the host
+ * `conversation.input.model.label` slot, its change subscription, and the
+ * namespace-bound translate the renderer would have synthesized. The card is
+ * NOT a slot outlet, so it reads the registry directly and renders the
+ * component itself.
+ *
+ * Recorded limitation (the ticket's explicit discretion point): the renderer
+ * also synthesizes the standard seats (`useSession`, `useProjection`, …) into
+ * every entry; a hand render cannot. The shipped label extension uses only
+ * `provider`/`model`/`t`, so it renders faithfully; a third-party label that
+ * depends on a standard seat falls back to the catalog name on its own
+ * render error (the boundary in ModelSelectFace).
+ */
+export interface ModelLabelSlotFace {
+  /** The winning entry, or undefined when the slot is empty. */
+  winner(): ModelLabelEntry | undefined
+  /** Subscribe to the slot's registration changes. */
+  subscribe(listener: () => void): () => void
+  /** Bind one entry's dictionary namespace, or undefined when unavailable. */
+  translate(namespace: string): ((key: string, params?: Record<string, unknown>) => string) | undefined
+}
+
+export type ModelLabelSlotSource = () => ModelLabelSlotFace | undefined
+
+/** Narrow structural face of the host `slots` registry the label read needs. */
+interface SlotRegistryFace {
+  entriesOfSlot(key: string): readonly unknown[]
+  subscribe(key: string, listener: () => void): () => void
+}
+
+let labelSlotSource: ModelLabelSlotSource = () => undefined
+
+/**
+ * Bind the model-label slot source (the client apply does this once; tests
+ * bind fakes through the same seam).
+ * @param resolve - lazy resolver; `undefined` = slot registry absent.
+ */
+export function setModelLabelSlotSource(resolve: ModelLabelSlotSource): void {
+  labelSlotSource = resolve
+}
+
+/**
+ * Install the host `slots` registry reader for the model label (issue #80).
+ * The face is built once (its identity is stable across renders, so the
+ * consumer's change subscription does not churn); every read stays inside
+ * try/catch — a registry surprise degrades the label to the catalog name,
+ * never throws into the card.
+ * @param ctx - client root context.
+ */
+export function installModelLabelSlots(ctx: ClientContext): void {
+  try {
+    const slots = ctx.slots as Partial<SlotRegistryFace> | undefined
+    if (typeof slots?.entriesOfSlot !== 'function' || typeof slots.subscribe !== 'function') return
+    const registry = slots as SlotRegistryFace
+    const face: ModelLabelSlotFace = {
+      winner() {
+        try {
+          const entries = registry.entriesOfSlot(MODEL_LABEL_SLOT)
+          if (!Array.isArray(entries) || entries.length === 0) return undefined
+          const entry = entries[0] as { readonly component?: unknown; readonly locale?: unknown } | undefined
+          if (entry === undefined || entry.component === undefined || entry.component === null) return undefined
+          return {
+            component: entry.component,
+            locale: typeof entry.locale === 'string' ? entry.locale : undefined,
+          }
+        } catch {
+          return undefined
+        }
+      },
+      subscribe(listener) {
+        try {
+          return registry.subscribe(MODEL_LABEL_SLOT, listener)
+        } catch {
+          return () => {}
+        }
+      },
+      translate(namespace) {
+        try {
+          return ctx.locale.bind(namespace) as unknown as
+            (key: string, params?: Record<string, unknown>) => string
+        } catch {
+          return undefined
+        }
+      },
+    }
+    setModelLabelSlotSource(() => face)
+  } catch {
+    setModelLabelSlotSource(() => undefined)
+  }
+}
+
+/** The model-label slot face, or undefined while no registry is bound. */
+export function modelLabelSlotFace(): ModelLabelSlotFace | undefined {
+  try {
+    return labelSlotSource()
+  } catch {
+    return undefined
+  }
+}
+
 /** The subagent share of the session snapshot as the composer chain carries it. */
 export type SubagentShare = { readonly address: unknown } | null | undefined
 
@@ -250,4 +362,5 @@ export function modelSeatFace(sessionId: SessionId, subagent: SubagentShare): Mo
 export function resetModelFace(): void {
   source = () => undefined
   localeT = undefined
+  labelSlotSource = () => undefined
 }

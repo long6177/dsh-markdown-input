@@ -14,7 +14,7 @@
  * devDependencies pin the upstream master sources, and the slot/service
  * faces are per-version retest contract points (ADR-0002).
  */
-import { useMemo, useSyncExternalStore } from 'react'
+import { useMemo, useSyncExternalStore, type ReactNode } from 'react'
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { ComposerChainProps, ConversationController } from '@deepseek-ai/dsh-client-ui-conversation/client'
 
@@ -39,6 +39,17 @@ type InputHubFace = ConversationController['input'] & {
   shell(sessionId: SessionId): { readonly notices: ObservableSource<ComposerNotice | null> }
 }
 
+/**
+ * Upload lifecycle of one picked file draft (the native `DraftFileUpload`
+ * shape, consumed structurally): files upload on pick, not on send. The wire
+ * already carries loaded/total — the plugin's earlier `{ status }`-only face
+ * just never read them (#77).
+ */
+export type DraftUploadState =
+  | { readonly status: 'uploading'; readonly loaded: number; readonly total?: number }
+  | { readonly status: 'ready'; readonly receiptId?: unknown; readonly file?: unknown }
+  | { readonly status: 'error'; readonly message?: string }
+
 /** The draft-attachment operations the taken-over composer consumes. */
 export interface AttachmentFace {
   createDrafts(sessionId: SessionId, files: readonly File[]): readonly unknown[]
@@ -46,7 +57,7 @@ export interface AttachmentFace {
   releaseDraftAttachment(id: string): void
   releaseDraftAttachments(attachments: readonly unknown[]): void
   retryFileUpload(sessionId: SessionId, id: string): void
-  readonly fileUploads?: ObservableSource<Readonly<Record<string, { readonly status: string }>>>
+  readonly fileUploads?: ObservableSource<Readonly<Record<string, DraftUploadState>>>
 }
 
 /** The conversation service face the taken-over composer consumes. */
@@ -102,6 +113,78 @@ export function noticesOf(
 ): ObservableSource<ComposerNotice | null> | undefined {
   try {
     return (conversation.input as InputHubFace).shell(sessionId).notices
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * One command claim as the shell's `beginCommand` consumes it (the wire's
+ * CommandClaim): the catalog name, the draft token (spelling + separator),
+ * and the submit closure the machine's claimed branch calls with the args
+ * typed after the token.
+ */
+export interface ShellClaim {
+  readonly name: string
+  readonly token: string
+  readonly hint?: string
+  readonly attachments?: boolean
+  submit(
+    args: string,
+    actx?: unknown,
+    attachments?: readonly unknown[],
+  ): Promise<{ readonly kind: 'success' | 'error'; readonly text?: string }>
+}
+
+/** The pick-time span `beginCommand` applies the claim over (detect coordinates). */
+export interface ShellSpan {
+  readonly start: number
+  readonly end: number
+  readonly draftRev: number
+}
+
+/**
+ * The per-session input shell's submit plane (issue #79): the runtime
+ * facade `conversation.input.shell(sessionId)` resolves beyond the
+ * published `InputActions` face — the mode-aware submit (queue/steer, the
+ * busy-Enter preference carrier), the whole-queue steer verb, and the
+ * command-claim application. Runtime members beyond the published shapes
+ * are consumed structurally at the cast site (the conversation-face
+ * convention); the face is all-or-nothing: a shell missing any verb reads
+ * as absent and the card falls back to the queue-only public face — the
+ * exact pre-#79 behavior.
+ */
+export interface SessionShellFace {
+  readonly notices: ObservableSource<ComposerNotice | null>
+  /** The live InputState store (the machine's own revision reads). */
+  readonly state?: ObservableSource<{ readonly draftRev: number }>
+  submit(mode?: 'queue' | 'steer', source?: 'click' | 'enter'): void
+  steerQueue(): void
+  beginCommand(claim: ShellClaim, span: ShellSpan): boolean
+}
+
+/**
+ * The runtime input shell for one session, capability-detected per call.
+ * Undefined while the session binding is absent (the hub throws — a
+ * composer frame can render before it materializes) or when the submit
+ * verbs are not all present.
+ * @param conversation - the conversation service face.
+ * @param sessionId - owning session.
+ */
+export function sessionShellOf(
+  conversation: ConversationFace,
+  sessionId: SessionId,
+): SessionShellFace | undefined {
+  try {
+    const shell = (conversation.input as InputHubFace).shell(sessionId) as
+      | Partial<SessionShellFace>
+      | undefined
+      | null
+    if (shell === undefined || shell === null) return undefined
+    if (typeof shell.submit !== 'function') return undefined
+    if (typeof shell.steerQueue !== 'function') return undefined
+    if (typeof shell.beginCommand !== 'function') return undefined
+    return shell as SessionShellFace
   } catch {
     return undefined
   }
@@ -233,4 +316,64 @@ export function composerBlockOf(
   } catch {
     return undefined
   }
+}
+
+/**
+ * The session-scoped durable-image URL resolver (the native queue dock's
+ * `loadImage` inject: `uiConversation.imageUrl(sessionId, attachment)`),
+ * capability-detected per call off the client root context. Undefined
+ * sheds the queue strip's thumbnails to the native failure placeholder —
+ * the rows, chips, and preview text stay.
+ * @param sessionId - owning session (the resolution's authorization scope).
+ */
+export function imageUrlOf(
+  sessionId: SessionId,
+): ((attachment: unknown) => Promise<string>) | undefined {
+  try {
+    const uiConversation = rootContext?.get('uiConversation') as
+      | { imageUrl?(id: SessionId, attachment: unknown): Promise<string> }
+      | undefined
+    if (typeof uiConversation?.imageUrl !== 'function') return undefined
+    return (attachment) => uiConversation.imageUrl!(sessionId, attachment)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The primitives `ImageLightbox` component as the draft-thumbnail preview
+ * consumes it, bound once from the client apply's primitives probe
+ * (present-value check — memo/forwardRef wrappers break typeof checks).
+ * Undefined on a host build whose primitives lack the lightbox: the
+ * thumbnail degrades to a plain image, never a dead button.
+ */
+export type ImageLightboxComponent = (props: {
+  src: string
+  alt: string
+  labels: { readonly dialog: string; readonly close: string }
+  onClose: () => void
+}) => ReactNode
+
+let imageLightboxComponent: ImageLightboxComponent | undefined
+
+/**
+ * Bind the lightbox component (the client apply does this once, from the
+ * primitives probe).
+ * @param component - the probed component, or undefined when absent.
+ */
+export function setImageLightbox(component: ImageLightboxComponent | undefined): void {
+  imageLightboxComponent = component
+}
+
+/** The bound lightbox component, or undefined when the host build lacks it. */
+export function imageLightbox(): ImageLightboxComponent | undefined {
+  return imageLightboxComponent
+}
+
+/**
+ * Test seam: drop the binding so a fresh test sees an absent face. Never call
+ * in plugin code — the binding is page-lifetime by design.
+ */
+export function resetImageLightbox(): void {
+  imageLightboxComponent = undefined
 }

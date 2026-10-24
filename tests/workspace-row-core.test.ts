@@ -6,7 +6,7 @@
  * `:141`) — that chain is a user-visible parity contract, so it is pinned by
  * unit tests rather than by a rendered tree.
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   ADD_WORKSPACE_ID, addWorkspaceEntry, addWorkspaceIsOnlyEntry, resolveAddWorkspaceCopy,
   workspaceDisplayTitle, workspaceLabel, workspaceLabelState, workspaceMenuItems,
@@ -244,5 +244,32 @@ describe('workspace verb installer', () => {
     expect(workspaceVerbFace()).toBeUndefined()
     resetWorkspaceVerbSource()
     expect(workspaceVerbFace()).toBeUndefined()
+  })
+
+  it('carries the rejectable openWorkspace verb when the host exposes it (#78)', async () => {
+    const { installWorkspaceVerbSource, resetWorkspaceVerbSource, workspaceVerbFace } =
+      await import('../src/client/workspace-verb.ts')
+    const openWorkspace = vi.fn(function openWorkspace(this: unknown, _id: string) {
+      // The wrapper must preserve the host service as `this`.
+      expect(this).toBe(service)
+      return Promise.resolve()
+    })
+    const startSession = vi.fn(function startSession(this: unknown, _id?: string) {
+      expect(this).toBe(service)
+    })
+    const service = { startSession, openWorkspace }
+    installWorkspaceVerbSource({ get: key => key === 'uiWorkspace' ? service : undefined } as never)
+    const face = workspaceVerbFace()
+    expect(typeof face?.openWorkspace).toBe('function')
+    await face?.openWorkspace?.('w1')
+    await face?.startSession('w1')
+    expect(openWorkspace).toHaveBeenCalledWith('w1')
+    expect(startSession).toHaveBeenCalledWith('w1')
+    // The host object itself is never mutated by the wrap.
+    expect(Object.keys(service).sort()).toEqual(['openWorkspace', 'startSession'])
+    // A build without the rejectable verb keeps the void face alone.
+    installWorkspaceVerbSource({ get: () => ({ startSession: () => {} }) } as never)
+    expect(workspaceVerbFace()?.openWorkspace).toBeUndefined()
+    resetWorkspaceVerbSource()
   })
 })

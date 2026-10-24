@@ -22,9 +22,25 @@
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { AgentPresetOption } from './agent-preset-core.ts'
+import type { ObservableSource } from './conversation-face.ts'
 
 /** The host namespace the preset seat's display copy lives in (ui-agent-preset's locale NS). */
 export const AGENT_PRESET_NS = 'settings.agentPreset'
+
+/**
+ * The host settings namespace carrying the Developer-tools preference
+ * (`ui-settings/src/developer-tools-settings.ts`): the form's `enabled`
+ * field is the gate the native seat filters its menu by.
+ */
+export const DEVELOPER_TOOLS_NAMESPACE = 'ui-settings'
+
+/**
+ * The host settings namespace whose roster document the seat follows
+ * (`settings-store.ts:17`, the native `AGENT_PRESET_SETTINGS_NS`): a
+ * `settings/document-updated` for THIS namespace (and only this one) is a
+ * roster change worth a re-read.
+ */
+export const AGENT_PRESET_SETTINGS_NS = 'agent-preset-registry'
 
 /** The bound host translate as the seat consumes it (untyped: the namespace is outside this build's merge table). */
 export type AgentPresetLocaleTranslate = (key: string, params?: Record<string, unknown>) => string
@@ -134,4 +150,172 @@ export function installAgentPresetsSource(ctx: ClientContext): void {
  */
 export function resetAgentPresetsSource(): void {
   source = () => undefined
+}
+
+/**
+ * Structural view of the Developer-tools form snapshot — exactly the field
+ * the native gate reads (`ui-settings/src/client/developer-tools.ts:16`).
+ */
+export interface DeveloperToolsSnapshot {
+  readonly value?: { readonly enabled?: boolean } | undefined
+}
+
+/** The Developer-tools form as the face consumes it (a bare snapshot store). */
+export type DeveloperToolsStore = ObservableSource<DeveloperToolsSnapshot>
+
+/**
+ * The Developer-tools preference one snapshot selects, the native observable
+ * face's own reading (`developer-tools.ts:16`): `value?.enabled ?? false` —
+ * a form whose document has not landed yet reads OFF, exactly as the native
+ * seat sees it. An absent store reads the same way, so a host build without
+ * the settings service keeps the gate closed (the tool presets stay hidden
+ * unless the host can confirm they are wanted).
+ * @param snapshot - the form snapshot, if the service is present.
+ */
+export function developerToolsEnabledOf(snapshot: DeveloperToolsSnapshot | undefined): boolean {
+  return snapshot?.value?.enabled ?? false
+}
+
+export type DeveloperToolsSource = () => DeveloperToolsStore | undefined
+
+/**
+ * One roster-refresh subscription (#78): the listener fires on the native
+ * refresh signals — a transport reset, a `settings/document-updated` for the
+ * preset-registry namespace, and the two settings forms' own changes. The
+ * returned disposer detaches every edge; the face re-reads the roster per
+ * fire, so the seat survives a reconnect onto a host whose roster changed
+ * under the browser (the native apply's 'settings refresh' effect).
+ */
+export type AgentPresetRefreshSubscribe = (listener: () => void) => () => void
+
+let developerToolsSource: DeveloperToolsSource = () => undefined
+
+/**
+ * Bind the Developer-tools source (the client apply does this once; the thunk
+ * resolves per call so boot order stays free).
+ * @param resolve - lazy resolver; `undefined` = the service is absent.
+ */
+export function setDeveloperToolsSource(resolve: DeveloperToolsSource): void {
+  developerToolsSource = resolve
+}
+
+/**
+ * The `ui-settings` form, or undefined while the configForms service is
+ * absent — the seat then runs the gate closed (see
+ * {@link developerToolsEnabledOf}). Read per call (a render) so a service
+ * that materializes later is still found; a throwing `ctx.get` reads as
+ * absent — a render must never be the thing that throws into the card.
+ */
+export function developerToolsStore(): DeveloperToolsStore | undefined {
+  try {
+    return developerToolsSource()
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Install the lazy resolver on the client root context (called once from the
+ * plugin apply). The form is capability-detected, the `installStatsSettingsSource`
+ * idiom one namespace over: a service without the `get` face, or a form
+ * without the snapshot-store face, reads as absent.
+ * @param ctx - client root context.
+ */
+export function installDeveloperToolsSource(ctx: ClientContext): void {
+  setDeveloperToolsSource(() => {
+    const forms = ctx.get('configForms') as { get?(namespace: string): unknown } | undefined
+    if (forms === undefined || forms === null || typeof forms.get !== 'function') return undefined
+    const form = forms.get(DEVELOPER_TOOLS_NAMESPACE) as
+      | (DeveloperToolsStore & Record<string, unknown>)
+      | undefined
+    if (form === undefined || form === null) return undefined
+    if (typeof form.getSnapshot !== 'function' || typeof form.subscribe !== 'function') {
+      return undefined
+    }
+    return form as DeveloperToolsStore
+  })
+}
+
+/**
+ * Test seam: drop the source so a fresh test sees no settings service. Never
+ * call in plugin code — the binding is page-lifetime by design.
+ */
+export function resetDeveloperToolsSource(): void {
+  developerToolsSource = () => undefined
+}
+
+/** Narrow face of the host `remote` service's forwarded-event subscription. */
+interface RosterRefreshEvents {
+  $on(event: 'connection/reset' | 'settings/document-updated', listener: (...args: unknown[]) => void): () => void
+}
+
+let refreshSubscribe: AgentPresetRefreshSubscribe | undefined
+
+/**
+ * The roster-refresh subscription, or undefined before apply installs it —
+ * the seat then keeps its one-mounting-read behavior.
+ */
+export function agentPresetRefreshSubscribe(): AgentPresetRefreshSubscribe | undefined {
+  return refreshSubscribe
+}
+
+/**
+ * Install the roster-refresh subscription (#78) on the client root context
+ * (called once from the plugin apply). The subscription fans one listener out
+ * over the native refresh signals, each capability-detected at subscribe time
+ * so boot order stays free:
+ *
+ * 1. `remote.$on('connection/reset')` — a reconnect can land on a host whose
+ *    roster changed under the browser (the native apply's own comment);
+ * 2. `remote.$on('settings/document-updated')` — the forwarded settings
+ *    write, FILTERED to the preset-registry namespace (an unrelated
+ *    namespace moves nothing — the native test rules out the blanket
+ *    refresh);
+ * 3. the `ui-settings` form's own changes (the Developer-tools gate's store);
+ * 4. the `agent-preset-registry` form's own changes (the roster document).
+ *
+ * A host build without the remote event face or the configForms service
+ * sheds the missing edges alone; a seat with no edges at all simply never
+ * refreshes — the pre-#78 behavior, never a crash.
+ * @param ctx - client root context.
+ */
+export function installRosterRefreshSource(ctx: ClientContext): void {
+  refreshSubscribe = (listener: () => void): (() => void) => {
+    const disposers: Array<() => void> = []
+    try {
+      const remote = ctx.get('remote') as Partial<RosterRefreshEvents> | undefined
+      if (remote !== undefined && remote !== null && typeof remote.$on === 'function') {
+        const events = remote as RosterRefreshEvents
+        disposers.push(events.$on('connection/reset', listener))
+        disposers.push(events.$on('settings/document-updated', (...args: unknown[]) => {
+          if (args[0] === AGENT_PRESET_SETTINGS_NS) listener()
+        }))
+      }
+    } catch {
+      // Sealed globals / exotic builds: the transport edges shed alone.
+    }
+    try {
+      const forms = ctx.get('configForms') as { get?(namespace: string): unknown } | undefined
+      if (forms !== undefined && forms !== null && typeof forms.get === 'function') {
+        for (const namespace of [DEVELOPER_TOOLS_NAMESPACE, AGENT_PRESET_SETTINGS_NS]) {
+          const form = forms.get(namespace) as (ObservableSource<unknown> & Record<string, unknown>) | undefined
+          if (form === undefined || form === null || typeof form.subscribe !== 'function') continue
+          disposers.push((form as ObservableSource<unknown>).subscribe(listener))
+        }
+      }
+    } catch {
+      // The settings edges shed alone, never into the card.
+    }
+    return () => {
+      for (const dispose of disposers) dispose()
+    }
+  }
+}
+
+/**
+ * Test seam: drop the subscription so a fresh test sees no refresh edges.
+ * Never call in plugin code — the binding is page-lifetime by design.
+ */
+export function resetRosterRefreshSource(): void {
+  refreshSubscribe = undefined
 }

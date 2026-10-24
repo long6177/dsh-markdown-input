@@ -33,30 +33,40 @@ import * as primitives from '@deepseek-ai/dsh-client-ui-primitives'
 import { bindComposerCrash, takeoverDegraded } from './degrade.ts'
 import { probe, type Capability } from './capability.ts'
 import { installCommandSource } from './command-face.ts'
-import { installConversationSource } from './conversation-face.ts'
+import {
+  installConversationSource, setImageLightbox,
+  type ImageLightboxComponent,
+} from './conversation-face.ts'
 import { installFeedbackSource } from './feedback-face.ts'
 import { installGoalSource } from './goal-face.ts'
 import { installPermissionSource } from './permission-face.ts'
-import { installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
+import { installModelLabelSlots, installModelSource, MODEL_NS, setModelLocale } from './model-face.ts'
 import { installSkillSource } from './skill-face.ts'
 import { installFileReferenceSource } from './file-reference-face.ts'
+import { installSessionReferenceSource } from './session-reference-face.ts'
+import { installSessionsSource } from './sessions-face.ts'
+import { installSidebarRightSource } from './sidebar-right-face.ts'
+import { installReferenceLocales } from './reference-locale.ts'
 import { TakeoverCard } from './composer-card.tsx'
 import { CONTEXT_NS, resetContextLocale, setContextLocale } from './context-meter-face.ts'
+import { ECHO_TEXT_NS, resetEchoLocale, setEchoLocale } from './echo-text-face.ts'
 import { FallbackNotice } from './FallbackNotice.tsx'
 import { MARKDOWN_TAKEOVER } from './MarkdownComposer.tsx'
 import { en, NS, zh, type ComposerKey } from './locales.ts'
 import { en as modelEn, zh as modelZh, type ModelKey } from './ModelSelectFace.locales.ts'
-import { MarkdownUserMessage } from './UserMessage.tsx'
+import { MarkdownEchoText, MarkdownUserMessage } from './UserMessage.tsx'
 import { installWorkspaceVerbSource } from './workspace-verb.ts'
 import {
   WORKSPACE_ADD_NS, installWorkspaceAddSource, resetWorkspaceAddLocale, setWorkspaceAddLocale,
 } from './workspace-add.ts'
 import {
-  AGENT_PRESET_NS, installAgentPresetsSource, resetAgentPresetLocale, setAgentPresetLocale,
+  AGENT_PRESET_NS, installAgentPresetsSource, installDeveloperToolsSource,
+  installRosterRefreshSource, resetAgentPresetLocale, setAgentPresetLocale,
 } from './agent-preset-face.ts'
 import {
-  STATS_NS, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
+  STATS_NS, installChatSource, installStatsSettingsSource, resetStatsLocale, setStatsLocale,
 } from './stats-pills-face.ts'
+import { installBusyEnterSource } from './submit-policy.ts'
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface LocaleNamespaceMap {
@@ -129,6 +139,12 @@ export function apply(ctx: ClientContext): void {
   // The taken-over card reads the conversation service for its attachment
   // and notice faces (lazy per call — boot order stays free).
   installConversationSource(ctx)
+  // The draft-image preview's lightbox (#77): the primitives probe binds the
+  // component the card composes with — a host build without it keeps the
+  // attachment thumbnails display-only, the rest of the card unaffected.
+  setImageLightbox(present(primitives.ImageLightbox)
+    ? primitives.ImageLightbox as unknown as ImageLightboxComponent
+    : undefined)
   // The permission face reads the `remote.permissionPresets` catalog, the
   // forwarded invalidation event, and the live session's command face the
   // same lazy way; the capability detection lives in the installer.
@@ -139,6 +155,11 @@ export function apply(ctx: ClientContext): void {
   // the service is deliberately not a declared inject dependency, which
   // would hold the whole plugin pending until it materializes.
   installModelSource(ctx)
+  // The model label slot (issue #80): the card is not a slot outlet, so it
+  // reads the registry's winning `conversation.input.model.label` entry and
+  // renders it itself — the upstream 1017 release badge then rides the pill,
+  // the menu row, and every option row exactly as it does natively.
+  installModelLabelSlots(ctx)
   // The skill lexicon face (T9) reads the host `remote.skills` catalog —
   // the same hot `/` dictionary the native completion source polls — the
   // same lazy way; without it the chip decorations' `/` arm degrades to
@@ -148,6 +169,17 @@ export function apply(ctx: ClientContext): void {
   // `remote.fileReferences` namespace the same lazy way; without it the
   // popup face hides and typed `@` stays plain text.
   installFileReferenceSource(ctx)
+  // The reference surfaces (#75) read their host planes the same lazy way:
+  // the `@` popup's session mentions (`remote.sessionReferenceResolver`),
+  // the sessions snapshot (subagent facts, cwd, ages), the right-sidebar
+  // navigation controller (file/skill chip previews), and the reference/
+  // secretMask copy bindings. Each probes alone — a host build missing one
+  // degrades exactly that surface (no session group, display-only chips,
+  // fallback words) while the rest of the card stays.
+  installSessionReferenceSource(ctx)
+  installSessionsSource(ctx)
+  installSidebarRightSource(ctx)
+  installReferenceLocales(ctx)
   // The tool-row ① command menu reads the host `remote.commands` catalog
   // RPCs the same lazy way; a missed wiring here latches the face off for
   // the page life and the tool row silently stays on the paperclip
@@ -184,6 +216,17 @@ export function apply(ctx: ClientContext): void {
   // its composition switch — the same lazy way; without the registry the seat
   // hides whole while the workspace row (and the text face) stay.
   installAgentPresetsSource(ctx)
+  // The preset seat's Developer-tools gate (#78) reads the host `ui-settings`
+  // form through the configForms service the same lazy, capability-detected
+  // way (the stats-pills installer idiom): without it the gate reads off, the
+  // native observable face's own default, and the tool presets stay hidden.
+  installDeveloperToolsSource(ctx)
+  // The preset seat's roster refresh (#78) fans one listener out over the
+  // native signals — the transport reset, the preset-registry settings write
+  // (filtered by namespace), and the two settings forms' changes. Every edge
+  // is capability-detected at subscribe time; a host with none of them keeps
+  // the pre-#78 one-mounting-read behavior.
+  installRosterRefreshSource(ctx)
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'markdown-input: dictionaries')
   // The vendored picker's copy is the verbatim ui-model-selection dictionary
   // under the plugin's own namespace; the bound translate rides
@@ -251,7 +294,27 @@ export function apply(ctx: ClientContext): void {
     setWorkspaceAddLocale(ctx.locale.bind(WORKSPACE_ADD_NS))
     return resetWorkspaceAddLocale
   }, 'markdown-input: workspace add-flow host copy')
+  // The submission echo's chrome labels (#77) bind the HOST `chat`
+  // namespace the same read-only way as the stats pills above — the echo
+  // entry renders on the host's `conversation.user.text` factory, which
+  // passes no locale seat, so the fence toolbar and footnote words resolve
+  // through this bound seat. Unbound (no chat dictionary), the entry
+  // degrades to the native plain run on its own.
+  ctx.effect(() => {
+    setEchoLocale(ctx.locale.bind(ECHO_TEXT_NS))
+    return resetEchoLocale
+  }, 'markdown-input: echo text host copy')
   installStatsSettingsSource(ctx)
+  // The counts pill's window-fold fallback (issue #80) reads the session's
+  // chat snapshot through `uiConversation.binding(id).target('chat')` — the
+  // native ui-chat apply's own read. Without the service the pill keeps the
+  // projection-only behavior.
+  installChatSource(ctx)
+  // The submission policy's busy-Enter preference (issue #79) reads the
+  // `ui-conversation` settings form through the configForms service the
+  // same lazy, capability-detected way: a host build without the service
+  // keeps the native default (queue — the pre-#79 behavior).
+  installBusyEnterSource(ctx)
   // Card-level crash latch (ADR-0005): a render exception inside the card —
   // or an editor-face probe failure — funnels into the unified fallback
   // (degrade.ts), which latches the takeover off for the page life and
@@ -301,8 +364,29 @@ export function apply(ctx: ClientContext): void {
         key,
         priority: -1,
         locale: 'chat',
+        // The session scope's binding key rides the inject positionally (the
+        // native keyed-entry mechanism — the renderer passes the sessionId
+        // as the first argument): it is what scopes the bubble's chip
+        // activations (#75). The declared `ChatNodeInjected` face carries
+        // only hook factories, so the widened inject is cast — the runtime
+        // merges whatever the inject returns into the seat's props.
+        inject: ((sessionId: unknown) => ({
+          sessionId: typeof sessionId === 'string' ? sessionId : undefined,
+        })) as never,
       }, MarkdownUserMessage))
     }
+    // The submission echo's text run (#77): the keyed `conversation.user.
+    // text.node` slot has no factory to shadow — the host registers its
+    // 'text'/'session' entries at priority 100, so the same lower-rank
+    // shadow as the seats above puts the echo text through the Markdown
+    // projection its durable bubble uses. Keyed 'text' only: the host's
+    // 'session' entry (the wire-form chip) keeps serving. Gated on the same
+    // primitives probe — the entry composes the identical pipeline.
+    ctx.slots.inject('conversation.user.text.node', () => ctx.slots.register({
+      name: 'conversation.user.text.node',
+      key: 'text',
+      priority: -1,
+    }, MarkdownEchoText))
   } else {
     console.info(`[markdown-input] user-message Markdown rendering disabled: ${messageCapability.reason}`)
   }

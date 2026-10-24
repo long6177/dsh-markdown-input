@@ -8,8 +8,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentPresetCurrentId, agentPresetDisplayName, agentPresetMenuItems, agentPresetOptions,
-  agentPresetProjectionOf, agentPresetRefusal, agentPresetSeatVisible, isBuiltInPreset,
-  presetDisplayText, resolveAgentPresetCopy,
+  agentPresetProjectionOf, agentPresetRefusal, agentPresetSeatVisible, agentPresetVisibleOptions,
+  isBuiltInPreset, presetDisplayText, requiresCodingTools, resolveAgentPresetCopy,
   type AgentPresetOption,
   type BuiltInPresetCopyKey,
 } from '../src/client/agent-preset-core.ts'
@@ -161,6 +161,47 @@ describe('agentPresetRefusal', () => {
       .toBe('wrapped message')
     expect(agentPresetRefusal({ code: 'x' })).toBe('x')
     expect(agentPresetRefusal({})).toBe('agent preset switch failed')
+  })
+})
+
+describe('requiresCodingTools (the developer-tools gate, #78)', () => {
+  it('names the two shipped tool presets only', () => {
+    expect(requiresCodingTools({ id: 'ptc' })).toBe(true)
+    expect(requiresCodingTools({ id: 'minimal' })).toBe(true)
+  })
+
+  it('never filters the other shipped presets', () => {
+    expect(requiresCodingTools(STANDARD)).toBe(false)
+    expect(requiresCodingTools({ id: 'cordis' })).toBe(false)
+  })
+
+  it('keeps a named custom row that overrides a development preset id', () => {
+    // A user-authored declaration publishing its own name owns its copy and
+    // its seat — the escape valve isBuiltInPreset already pins.
+    expect(requiresCodingTools({ id: 'ptc', name: 'My workflow' })).toBe(false)
+  })
+
+  it('rejects custom ids outright', () => {
+    expect(requiresCodingTools({ id: 'custom-tool' })).toBe(false)
+  })
+})
+
+describe('agentPresetVisibleOptions (the display-layer filter, #78)', () => {
+  const PTC = { id: 'ptc' }
+  const MINIMAL = { id: 'minimal' }
+
+  it('offers every healthy row while developer tools are on', () => {
+    expect(agentPresetVisibleOptions([STANDARD, PTC, MINIMAL, CORDIS], true).map(o => o.id))
+      .toEqual(['standard', 'ptc', 'minimal', 'cordis'])
+  })
+
+  it('hides the tool presets when developer tools are off, keeping the rest in roster order', () => {
+    expect(agentPresetVisibleOptions([STANDARD, PTC, MINIMAL, CORDIS], false).map(o => o.id))
+      .toEqual(['standard', 'cordis'])
+  })
+
+  it('keeps a named custom row on a development id when developer tools are off', () => {
+    expect(agentPresetVisibleOptions([{ id: 'ptc', name: 'My workflow' }], false)).toHaveLength(1)
   })
 })
 

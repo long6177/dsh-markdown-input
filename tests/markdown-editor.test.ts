@@ -6,7 +6,7 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent } from '@testing-library/react'
-import { undo } from '@codemirror/commands'
+import { redo, undo } from '@codemirror/commands'
 import { createMarkdownEditor, type EditMode, type MarkdownEditorHandle } from '../src/client/markdown-editor.ts'
 
 const mounted: MarkdownEditorHandle[] = []
@@ -110,6 +110,62 @@ describe('createMarkdownEditor', () => {
     expect(handle.getText()).toBe('- alpha\nbeta')
   })
 
+  it('never sends a held-down Enter — keyboard auto-repeat must not machine-gun sends (#74)', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('hello')
+    const surface = content()
+    // The OS repeats the keydown while the key is held; each repeat is
+    // consumed before any binding sees it (the upstream keymap's repeat
+    // guard), so one hold is one send at most.
+    fireEvent.keyDown(surface, { key: 'Enter', repeat: true })
+    fireEvent.keyDown(surface, { key: 'Enter', repeat: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('hello')
+    // A fresh physical press still sends.
+    fireEvent.keyDown(surface, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(handle.getText()).toBe('hello')
+  })
+
+  it('holds the send through the brief post-compositionend window (Safari late close, #74)', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const { handle, onSubmit } = mount()
+      handle.setText('nihao')
+      const surface = content()
+      // Some engines deliver the composition-closing Enter AFTER the
+      // compositionend event, when CM6's `view.composing` has already
+      // dropped (its observer runs ahead of every dom handler). CM6's own
+      // Safari-only suppression eats exactly one such keydown; the closing
+      // gesture often arrives as the next one — without the hold window
+      // this second press submits (probed against the real chain).
+      fireEvent.compositionEnd(surface)
+      surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      surface.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+      expect(onSubmit).not.toHaveBeenCalled()
+      expect(handle.getText()).toBe('nihao')
+      // Past the hold window (an order of magnitude under CM6's own Safari
+      // window) the key is an ordinary Enter again.
+      vi.advanceTimersByTime(30)
+      fireEvent.keyDown(surface, { key: 'Enter' })
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('consumes an Enter carrying keyCode 229 (engines without isComposing, #74)', () => {
+    const { handle, onSubmit } = mount()
+    handle.setText('nihao')
+    // keyCode 229 is the legacy "IME owns this key" signal on engines that
+    // never raise isComposing on keydown.
+    const event = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'keyCode', { value: 229 })
+    content().dispatchEvent(event)
+    expect(onSubmit).not.toHaveBeenCalled()
+    expect(handle.getText()).toBe('nihao')
+  })
+
   it('never sends while IME composition is active (editor-level gating)', () => {
     const { handle, onSubmit } = mount()
     handle.setText('nihao')
@@ -134,6 +190,61 @@ describe('createMarkdownEditor', () => {
     fireEvent.keyDown(content, { key: 'Enter' })
     expect(onSubmit).not.toHaveBeenCalled()
     expect(handle.getText()).toBe('nihao')
+  })
+
+  describe('accelerated chord (issue #79: Ctrl/Cmd+Enter)', () => {
+    it('marks the gesture accelerated on Ctrl+Enter without touching the text', () => {
+      const { handle, onSubmit } = mount()
+      handle.setText('hello')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+      expect(onSubmit).toHaveBeenCalledWith(true)
+      expect(handle.getText()).toBe('hello')
+    })
+
+    it('marks the gesture accelerated on Cmd+Enter (meta parity)', () => {
+      const { onSubmit } = mount()
+      fireEvent.keyDown(content(), { key: 'Enter', metaKey: true })
+      expect(onSubmit).toHaveBeenCalledWith(true)
+    })
+
+    it('plain Enter stays the unaccelerated gesture (#79 gesture pairing)', () => {
+      const { onSubmit } = mount()
+      fireEvent.keyDown(content(), { key: 'Enter' })
+      expect(onSubmit).toHaveBeenCalledWith(false)
+    })
+
+    it('never sends a held-down accelerated Enter (the #74 repeat guard covers the chord)', () => {
+      const { handle, onSubmit } = mount()
+      handle.setText('hello')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true, repeat: true })
+      fireEvent.keyDown(content(), { key: 'Enter', metaKey: true, repeat: true })
+      expect(onSubmit).not.toHaveBeenCalled()
+    })
+
+    it('an open menu owns the accelerated chord first (upstream arbitration order)', () => {
+      const { handle, onSubmit } = mount()
+      const menu = vi.fn((intent: string) => intent === 'pick')
+      handle.setMenuKeyHandler(menu)
+      handle.setText('hello')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(menu).toHaveBeenCalledWith('pick')
+      expect(onSubmit).not.toHaveBeenCalled()
+      // A declining menu (closed) hands the chord to the submit gesture.
+      handle.setMenuKeyHandler(vi.fn(() => false))
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(onSubmit).toHaveBeenCalledWith(true)
+    })
+
+    it('does not insert a newline on the accelerated chord inside a list item', () => {
+      // lang-markdown's Prec.high continuation must not claim the chord any
+      // more than it claims plain Enter (the alpha.16 regression class).
+      const { handle, onSubmit } = mount()
+      handle.setText('- alpha')
+      fireEvent.keyDown(content(), { key: 'Enter', ctrlKey: true })
+      expect(onSubmit).toHaveBeenCalledTimes(1)
+      expect(handle.getText()).toBe('- alpha')
+    })
   })
 
   describe('paste (T6 migration of the dock-path semantics)', () => {
@@ -294,6 +405,53 @@ describe('createMarkdownEditor', () => {
     handle.setMode('render', 'render ph')
     expect(host.querySelectorAll('.cm-md-h1').length).toBeGreaterThan(0)
     expect(handle.getText()).toBe('# Head')
+  })
+
+  describe('submit-clear history cut (#74; the CLEAR_HISTORY_COMMAND parity)', () => {
+    it('a history-cutting setText leaves undo nothing to resurrect', () => {
+      const { handle } = mount()
+      handle.setText('已发送的话')
+      handle.setText('', { cutHistory: true })
+      expect(handle.getText()).toBe('')
+      // The whole stack is gone — the upstream commit-draft effect's "cut
+      // undo history" contract: sent content cannot come back.
+      expect(undo(handle.view)).toBe(false)
+      expect(handle.getText()).toBe('')
+    })
+
+    it('an ordinary setText stays undoable (the mode-switch undo promise holds)', () => {
+      // The seed and the clear are adjacent same-range dispatches, so the
+      // history's newGroupDelay would join them into one undo group when
+      // they share a clock tick — separate them past the 500ms default.
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const { handle } = mount()
+        handle.setText('seeded')
+        vi.advanceTimersByTime(600)
+        handle.setText('')
+        expect(undo(handle.view)).toBe(true)
+        expect(handle.getText()).toBe('seeded')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('the cut starts a fresh history: post-commit typing undoes to the commit point', () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const { handle } = mount()
+        handle.setText('sent')
+        vi.advanceTimersByTime(600)
+        handle.setText('', { cutHistory: true })
+        handle.setText('typed after')
+        expect(undo(handle.view)).toBe(true)
+        expect(handle.getText()).toBe('')
+        expect(redo(handle.view)).toBe(true)
+        expect(handle.getText()).toBe('typed after')
+      } finally {
+        vi.useRealTimers()
+      }
+    })
   })
 })
 
@@ -754,6 +912,75 @@ describe('task checkbox click (issue #48)', () => {
     handle.setMode('source', 'ph')
     expect(document.querySelector('.cm-md-hr')).toBeNull()
     expect(handle.getText()).toBe('above\n\n---\n\nbelow')
+  })
+})
+
+describe('wheel chain (issue #80)', () => {
+  /** Mount the editor inside a conversation scroller host. */
+  function mountInScroller(): { handle: MarkdownEditorHandle, scroller: HTMLElement } {
+    const scroller = document.createElement('div')
+    scroller.setAttribute('data-conversation-scroll', '')
+    document.body.appendChild(scroller)
+    const host = document.createElement('div')
+    scroller.appendChild(host)
+    const handle = createMarkdownEditor({
+      parent: host, placeholder: 'ph', mode: 'render',
+      onSubmit: vi.fn(), onDocChange: vi.fn(), onFiles: vi.fn(() => true),
+    })
+    mounted.push(handle)
+    return { handle, scroller }
+  }
+
+  /** jsdom has no layout: pin the scroller metrics the listener reads. */
+  function metrics(element: HTMLElement, values: { scrollTop: number, clientHeight: number, scrollHeight: number }): void {
+    Object.defineProperty(element, 'scrollTop', { configurable: true, writable: true, value: values.scrollTop })
+    Object.defineProperty(element, 'clientHeight', { configurable: true, value: values.clientHeight })
+    Object.defineProperty(element, 'scrollHeight', { configurable: true, value: values.scrollHeight })
+  }
+
+  /** Dispatch a cancelable wheel event; true = the editor took it over. */
+  function wheel(element: HTMLElement, deltaY: number): boolean {
+    const event = new WheelEvent('wheel', { deltaY, bubbles: true, cancelable: true })
+    element.dispatchEvent(event)
+    return event.defaultPrevented
+  }
+
+  it('leaves the wheel alone without a conversation-scroll ancestor', () => {
+    const { handle } = mount()
+    metrics(handle.view.scrollDOM, { scrollTop: 0, clientHeight: 100, scrollHeight: 100 })
+    expect(wheel(handle.view.scrollDOM, 100)).toBe(false)
+  })
+
+  it('hands the wheel to the session scroller when the draft does not overflow', () => {
+    const { handle, scroller } = mountInScroller()
+    metrics(scroller, { scrollTop: 40, clientHeight: 600, scrollHeight: 2000 })
+    metrics(handle.view.scrollDOM, { scrollTop: 0, clientHeight: 100, scrollHeight: 100 })
+    expect(wheel(handle.view.scrollDOM, 120)).toBe(true)
+    expect(scroller.scrollTop).toBe(160)
+  })
+
+  it('keeps the wheel inside a long draft until it reaches an edge', () => {
+    const { handle, scroller } = mountInScroller()
+    metrics(scroller, { scrollTop: 0, clientHeight: 600, scrollHeight: 2000 })
+    const editor = handle.view.scrollDOM
+    metrics(editor, { scrollTop: 50, clientHeight: 100, scrollHeight: 400 })
+    // Room in both directions: the editor keeps the event.
+    expect(wheel(editor, 100)).toBe(false)
+    expect(wheel(editor, -100)).toBe(false)
+    expect(scroller.scrollTop).toBe(0)
+    // Pinned at the top, wheel up chains to the session scroller.
+    editor.scrollTop = 0
+    expect(wheel(editor, -60)).toBe(true)
+    expect(scroller.scrollTop).toBe(-60)
+    // Pinned at the bottom, wheel down chains too.
+    editor.scrollTop = 300
+    expect(wheel(editor, 80)).toBe(true)
+    expect(scroller.scrollTop).toBe(20)
+  })
+
+  it('ignores a zero-delta wheel', () => {
+    const { handle } = mountInScroller()
+    expect(wheel(handle.view.scrollDOM, 0)).toBe(false)
   })
 })
 

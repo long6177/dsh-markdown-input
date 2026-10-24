@@ -9,10 +9,30 @@ import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import type { ChatNode, ChatNodeViewProps } from '@deepseek-ai/dsh-client-ui-chat/client'
 import { MarkdownUserMessage, type MarkdownSeatKind } from '../src/client/UserMessage.tsx'
 import { installClipboardStub } from './clipboard-stub.ts'
+import { resetReferenceLocale, setOwnLocale } from '../src/client/reference-locale.ts'
+import { resetSessionsSource, setSessionsSource } from '../src/client/sessions-face.ts'
+import { resetSidebarRightFace, setSidebarRightSource } from '../src/client/sidebar-right-face.ts'
+import { resetSkillFace, setSkillSource } from '../src/client/skill-face.ts'
 
 const t = vi.fn((key: string) => key)
 
 afterEach(cleanup)
+
+/** Bind the reference-activation faces with a recording sidebar controller. */
+function bindActivationHosts(openResource: ReturnType<typeof vi.fn>): void {
+  setSidebarRightSource(() => ({ sidebarRight: { openResource } }))
+  setSessionsSource(() => ({
+    get: (key: string) => (key === 'sessions'
+      ? { list: { getSnapshot: () => ({ byId: { s1: { cwd: '/w' } } }) } }
+      : undefined),
+  }))
+}
+
+afterEach(() => {
+  resetSidebarRightFace()
+  resetSkillFace()
+  resetSessionsSource()
+})
 
 /**
  * Fabricate the keyed seat for one node kind. The host serves `user` and
@@ -145,7 +165,7 @@ describe('MarkdownUserMessage', () => {
     expect(container.querySelector('li')).toHaveTextContent('第一项')
   })
 
-  it('delegates images to the host user-content factory and keeps file cards local', () => {
+  it('delegates every attachment to the host user-content factory in the original interleaved order (#77)', () => {
     const gallery = <div data-testid="images" />
     const renderFactorySlot = vi.fn(() => gallery)
     const loadImage = vi.fn(async () => 'blob:x')
@@ -156,18 +176,19 @@ describe('MarkdownUserMessage', () => {
             { type: 'text', text: '文件如下' },
             { type: 'image', attachment: { url: 'https://x/y.png' } },
             { type: 'file', attachment: { name: 'spec.md', bytes: 2048 } },
+            { type: 'image', attachment: { url: 'https://x/z.png' } },
           ]),
           loadImage,
           renderFactorySlot,
         } as unknown as ChatNodeViewProps<'user'>}
       />,
     )
-    // The images ride the host's own user-content factory (an images-only,
-    // text-less payload): the factory occurrence dispatches the native
-    // `conversation.chat.user.images` gallery with align 'end'. A chat-node
-    // seat cannot dispatch that slot directly — the factory owns the child
-    // declaration — so this is the one legal route back to the shipped
-    // gallery, with the seat's own `loadImage`.
+    // One factory occurrence carries ALL attachments in wire order (image
+    // and file alike): the native UserContent maps them one by one — images
+    // dispatch the gallery per attachment, file cards render between them —
+    // so the interleaved order the author sent survives. Counting all
+    // attachments (not images alone) is also what makes the host's compact
+    // tile rule fire: one image + one file must tile like two images.
     expect(renderFactorySlot).toHaveBeenCalledTimes(1)
     expect(renderFactorySlot).toHaveBeenCalledWith('conversation.chat.user.content', expect.objectContaining({
       loadImage,
@@ -175,25 +196,47 @@ describe('MarkdownUserMessage', () => {
       content: {
         text: '',
         extraBlocks: [],
-        attachments: [{ type: 'image', image: { attachment: { url: 'https://x/y.png' } } }],
+        attachments: [
+          { type: 'image', image: { attachment: { url: 'https://x/y.png' } } },
+          { type: 'file', file: { name: 'spec.md', bytes: 2048 } },
+          { type: 'image', image: { attachment: { url: 'https://x/z.png' } } },
+        ],
       },
     }))
     expect(view.getByTestId('images')).toBeInTheDocument()
-    expect(view.getByText('spec.md')).toBeInTheDocument()
+    // The file card is the factory's own render — nothing local anymore.
+    expect(view.queryByText('spec.md')).toBeNull()
   })
 
-  it('does not touch the host factory when the message has no images', () => {
+  it('does not touch the host factory when the message has no attachments', () => {
     const renderFactorySlot = vi.fn(() => null)
     const view = render(
       <MarkdownUserMessage
         {...{
-          ...seatProps('user', [{ type: 'text', text: '纯文字' }, { type: 'file', attachment: { name: 'a.md', bytes: 1 } }]),
+          ...seatProps('user', [{ type: 'text', text: '纯文字' }]),
           renderFactorySlot,
         } as unknown as ChatNodeViewProps<'user'>}
       />,
     )
     expect(renderFactorySlot).not.toHaveBeenCalled()
-    expect(view.getByText('a.md')).toBeInTheDocument()
+    expect(view.getByText('纯文字')).toBeInTheDocument()
+  })
+
+  it('keeps a foreign attachment block (no wire reference) as an extra block, not a card (#77)', () => {
+    const renderFactorySlot = vi.fn(() => null)
+    const view = render(
+      <MarkdownUserMessage
+        {...{
+          ...seatProps('user', [{ type: 'text', text: '看' }, { type: 'image' }, { type: 'file' }]),
+          renderFactorySlot,
+        } as unknown as ChatNodeViewProps<'user'>}
+      />,
+    )
+    // Wire data is untrusted: a block of image/file type without its
+    // attachment reference is not a card — the host's own fold parks it in
+    // the extra blocks (the JsonBlock face), and so does ours.
+    expect(renderFactorySlot).not.toHaveBeenCalled()
+    expect(view.container.querySelector('[data-markdown-user-bubble]')?.textContent).toContain('message.extraBlock')
   })
 
   it('renders an empty message as nothing inside the bubble row', () => {
@@ -206,6 +249,131 @@ describe('MarkdownUserMessage', () => {
     // MarkdownText chrome keys resolve through the chat `t` seat.
     expect(t).toHaveBeenCalledWith('copy')
     expect(t).toHaveBeenCalledWith('markdown.footnotes')
+  })
+
+  it('arms code fences with the toolbar labels — wrap/unwrap ride the same seat (#77)', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '```ts\nconst a = 1\n```' }])} />,
+    )
+    // The label keys resolve through the chat `t` seat (the host `chat`
+    // dictionary's own keys, copied verbatim into the plugin fallback).
+    expect(t).toHaveBeenCalledWith('codeBlock.title')
+    expect(t).toHaveBeenCalledWith('codeBlock.wrap')
+    expect(t).toHaveBeenCalledWith('codeBlock.unwrap')
+    // The fence renders as the toolbar card: language label plus the wrap
+    // toggle (the mock `t` echoes keys, so the labels read as the keys).
+    const toggle = container.querySelector('[data-code-wrap] button[aria-pressed]')
+    expect(toggle).not.toBeNull()
+    expect(toggle).toHaveAttribute('aria-label', 'codeBlock.wrap')
+  })
+})
+
+describe('MarkdownUserMessage chip activation (#75)', () => {
+  it('renders file chips as buttons and opens the session-scoped preview', () => {
+    const openResource = vi.fn()
+    bindActivationHosts(openResource)
+    const { container } = render(
+      <MarkdownUserMessage {...{ ...seatProps('user', [{ type: 'text', text: '@notes/file.md 看看' }]), sessionId: 's1' }} />,
+    )
+    const chip = container.querySelector('button[data-ref-chip="file"]')
+    expect(chip).not.toBeNull()
+    fireEvent.click(chip!)
+    expect(openResource).toHaveBeenCalledWith('dsh-resource://file/session/s1/notes/file.md')
+  })
+
+  it('renders skill chips as buttons and previews the catalog path', async () => {
+    const openResource = vi.fn()
+    bindActivationHosts(openResource)
+    setSkillSource(() => ({
+      skills: {
+        list: vi.fn(() => Promise.resolve({
+          ok: true,
+          value: { skills: [{ name: 'plan', path: '/w/skills/plan/SKILL.md' }] },
+        })),
+      },
+      remoteEvents: undefined,
+    }))
+    const { container } = render(
+      <MarkdownUserMessage
+        {...{
+          ...seatProps('user', [{ type: 'text', text: '/plan 列一下' }], { skillNames: ['plan'] }),
+          sessionId: 's1',
+        }}
+      />,
+    )
+    const chip = container.querySelector('button[data-ref-chip="skill"]')
+    expect(chip).not.toBeNull()
+    fireEvent.click(chip!)
+    await vi.waitFor(() => expect(openResource).toHaveBeenCalledWith('dsh-resource://file/session/s1/skills/plan/SKILL.md'))
+  })
+
+  it('keeps chips display-only when the activation planes are absent', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '@notes/file.md 看看' }], { sessionId: 's1' })} />,
+    )
+    expect(container.querySelector('button[data-ref-chip]')).toBeNull()
+    expect(container.querySelector('[data-ref-chip="file"]')).not.toBeNull()
+  })
+
+  it('keeps chips display-only without a session identity', () => {
+    bindActivationHosts(vi.fn())
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '@notes/file.md 看看' }])} />,
+    )
+    expect(container.querySelector('button[data-ref-chip]')).toBeNull()
+  })
+})
+
+describe('MarkdownUserMessage reference summary line (#75)', () => {
+  it('renders the joined labels under the bubble when the node carries them', () => {
+    const { container } = render(
+      <MarkdownUserMessage
+        {...seatProps('user', [{ type: 'text', text: '@a.md @b 会话 看看' }], { referenceLabels: ['a.md', 'b 会话'] })}
+      />,
+    )
+    // The mock `t` echoes keys, so the fold falls through to the plugin's
+    // verbatim fallback copy (the host chat words) with the zh separator.
+    const summary = container.querySelector('[data-reference-summary]')
+    expect(summary).not.toBeNull()
+    expect(summary?.textContent).toBe('引用会话 · a.md、b 会话')
+    // The summary sits after the bubble inside the stack (native userStack order).
+    expect(summary?.previousElementSibling).toBe(container.querySelector('[data-markdown-user-bubble]'))
+  })
+
+  it('renders no summary line without labels', () => {
+    const { container } = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: '纯文字' }])} />,
+    )
+    expect(container.querySelector('[data-reference-summary]')).toBeNull()
+  })
+
+  it('prefers the host chat words when the seat answers', () => {
+    const hostT = vi.fn((key: string, params?: Record<string, unknown>) =>
+      key === 'message.referenceSummary' ? `host 摘要 ${String(params?.labels)}` : key)
+    const { container } = render(
+      <MarkdownUserMessage
+        {...{ ...seatProps('user', [{ type: 'text', text: '看看' }], { referenceLabels: ['x.md'] }), t: hostT }}
+      />,
+    )
+    expect(container.querySelector('[data-reference-summary]')?.textContent).toBe('host 摘要 x.md')
+  })
+
+  it('resolves the fallback through the bound plugin dictionary (en words on an en page)', () => {
+    setOwnLocale(((key: string, params?: Record<string, unknown>) => {
+      if (key === 'message.referenceSummary') return `Referenced session · ${String(params?.labels)}`
+      if (key === 'message.referenceSeparator') return ', '
+      return String(key)
+    }) as never)
+    try {
+      const { container } = render(
+        <MarkdownUserMessage
+          {...seatProps('user', [{ type: 'text', text: '看看' }], { referenceLabels: ['x.md', 'y.md'] })}
+        />,
+      )
+      expect(container.querySelector('[data-reference-summary]')?.textContent).toBe('Referenced session · x.md, y.md')
+    } finally {
+      resetReferenceLocale()
+    }
   })
 })
 
@@ -259,6 +427,21 @@ describe('MarkdownUserMessage copy actions (#33)', () => {
     })
     // Native parity: the copy is contentParts().text — the raw user text.
     expect(writeText).toHaveBeenCalledWith('@notes/file.md 看看这个')
+  })
+
+  it('copies the raw wire text even when a credential draws masked (#75)', async () => {
+    const secret = 'sk-abc123def456ghijklmn'
+    const view = render(
+      <MarkdownUserMessage {...seatProps('user', [{ type: 'text', text: `token ${secret} here` }])} />,
+    )
+    expect(view.container.querySelector('[data-secret]')).not.toBeNull()
+    await act(async () => {
+      fireEvent.click(view.getByRole('button', { name: 'copy' }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    // Masking changes only the drawn text — the copy keeps the credential.
+    expect(writeText).toHaveBeenCalledWith(`token ${secret} here`)
   })
 
   it('mounts the same action row for a queued steering message', () => {

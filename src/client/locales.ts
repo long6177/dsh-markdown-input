@@ -6,6 +6,12 @@ const zh = {
   'composer.placeholder.render': '以 Markdown 撰写…（Enter 发送，Shift+Enter 换行）',
   'composer.placeholder.source': 'Markdown 源码…（Enter 发送，Shift+Enter 换行）',
   'composer.action.submit': '发送',
+  // Send-mode labels (issue #79) — the host `conversation` namespace's own
+  // keys copied verbatim (`input.send.queue` / `input.send.steer`): the
+  // primary seat names the delivery mode the gesture resolves to, exactly
+  // the native bar's primaryLabel arms.
+  'composer.send.queue': '排队发送',
+  'composer.send.steer': '插话发送',
   // Stop action (issue #32) — the host `conversation` namespace's `input.stop`
   // copied verbatim: the takeover card names stop exactly as the native bar.
   'composer.action.stop': '停止生成',
@@ -20,6 +26,20 @@ const zh = {
   'composer.file.uploadFailed': '上传失败',
   'composer.file.retry': '重试上传',
   'composer.file.rejected': '附件被拒绝',
+  // Draft-image preview (#77). The host `conversation` namespace's own keys
+  // copied verbatim (`image.openOriginal` / `image.preview` /
+  // `image.closePreview`) — the lightbox chrome reads them through the card's
+  // plugin namespace so the fallback ships with the plugin.
+  'image.openOriginal': '查看原图',
+  'image.preview': '原图预览',
+  'image.closePreview': '关闭原图预览',
+  // Pick-time image-limit rejections (issue #80) — the host `conversation`
+  // namespace's own lines copied verbatim, the fallback for a build whose
+  // dictionary misses them.
+  'image.unsupportedType': '仅支持 PNG、JPG、WebP、GIF 格式的图片',
+  'image.tooMany': '一条消息最多添加 {count} 张图片',
+  'image.fileTooLarge': '单张图片不能超过 {size}',
+  'image.totalTooLarge': '图片总大小超过 {size}，请移除部分图片',
   'composer.notice.dismiss': '关闭提示',
   'composer.fallback.notice': 'Markdown 输入区出现异常，已换回原生输入区；本次会话内不再重试，重启后恢复。',
   'permission.mode': '访问模式，当前：{name}',
@@ -40,6 +60,8 @@ const zh = {
   'permission.auto.confirm.acknowledge': '我已了解这些风险，并愿意继续',
   'permission.auto.confirm.enable': '启用 Auto review',
   'permission.switchFailed': '权限切换失败：{message}',
+  'permission.unmatched': '宿主不提供 /permission 命令',
+  'permission.retry': '重试',
   // `+` command menu (tool row ①). Row faces mirror the host `command`
   // namespace copy verbatim; the trigger title mirrors `conversation.
   // input.commands`.
@@ -110,7 +132,25 @@ const zh = {
   'completion.drill.hint': '进入目录',
   'completion.drill.key': 'Tab',
   'completion.drill.aria': '进入目录',
+  // The drilled-source breadcrumb (issue #80) — the host `ui-input-trigger`
+  // `crumbs.aria` / `ui-reference` `crumb.root` lines under this plugin's own
+  // namespace (that namespace is outside this build's dictionary table).
+  'completion.crumbs.aria': '目录导航',
+  'completion.crumb.root': '工作区',
   'completion.skill.userOnly': '仅用户',
+  // `@` session-mention rows (#75). The section titles, the no-cwd marker,
+  // and the relative-time words are the host `ui-reference` namespace's own
+  // copy verbatim (`reference` NS), shipped here as the popup's own fallback
+  // keys — the same posture as `completion.section.files` above.
+  'completion.section.subagents': '子智能体',
+  'completion.section.sessions': '对话',
+  'completion.candidate.noCwd': '（无工作目录）',
+  'completion.time.now': '刚刚',
+  'completion.time.minutes': '{n}分钟',
+  'completion.time.hours': '{n}小时',
+  'completion.time.days': '{n}天',
+  'completion.time.months': '{n}个月',
+  'completion.time.years': '{n}年',
   // Queue strip (issue #30). The native composer's queue dock renders inside
   // the fallback bar, which the takeover hides (overlay election), so the
   // card rebuilds it; keys mirror the host `conversation` namespace copy
@@ -127,6 +167,10 @@ const zh = {
   'queue.editFailed': '编辑失败：这条消息可能已经开始发送。',
   'queue.removeFailed': '删除失败：这条消息可能已经开始发送。',
   'queue.steerFailed': '插话发送失败，请重试。',
+  // Queue strip attachments (#77) — the native `conversation` namespace's
+  // own keys copied verbatim (`queue.image` / `queue.file`).
+  'queue.image': '排队消息图片',
+  'queue.file': '排队文件 {name}',
   // Todo panel (issue #38). The native TodoDock renders inside the composer
   // chain's fallback bar, which the takeover hides whole, so the card
   // rebuilds it; keys mirror the host `conversation` namespace copy verbatim
@@ -182,6 +226,19 @@ const zh = {
   'workspace.menu.addWorkspace': '添加工作区…',
   'workspace.folderError.title': '无法打开文件夹',
   'workspace.folderError.retry': '重新选择',
+  // Reference surfaces (#75) — the host words copied verbatim as the
+  // fallback keys the reference-locale folds resolve through. The file-open
+  // dialog's lines are the host `reference` namespace's own (ui-reference);
+  // the summary line's are the host `chat` namespace's own (ui-chat,
+  // rendered by the host UserContent fold too).
+  'fileOpen.title': '无法打开文件',
+  'fileOpen.failed': '无法打开“{path}”，请重试或关闭此提示',
+  'fileOpen.close': '关闭',
+  'fileOpen.retry': '重试',
+  'secret.reveal': '显示密钥',
+  'secret.hide': '隐藏密钥',
+  'message.referenceSummary': '引用会话 · {labels}',
+  'message.referenceSeparator': '、',
 } as const
 
 export type ComposerKey = keyof typeof zh
@@ -190,6 +247,10 @@ const en: Record<ComposerKey, string> = {
   'composer.placeholder.render': 'Write in Markdown… (Enter to send, Shift+Enter for newline)',
   'composer.placeholder.source': 'Markdown source… (Enter to send, Shift+Enter for newline)',
   'composer.action.submit': 'Send',
+  // Send-mode labels (issue #79) — the host `conversation` namespace's own
+  // lines copied verbatim (see the zh block above for the fold).
+  'composer.send.queue': 'Queue message',
+  'composer.send.steer': 'Steer message',
   'composer.action.stop': 'Stop generating',
   'composer.mode.render': 'Render',
   'composer.mode.source': 'Source',
@@ -202,6 +263,16 @@ const en: Record<ComposerKey, string> = {
   'composer.file.uploadFailed': 'Upload failed',
   'composer.file.retry': 'Retry upload',
   'composer.file.rejected': 'Attachment rejected',
+  // Draft-image preview (#77) — the host `conversation` namespace's lines
+  // copied verbatim (see the zh block above for the fold).
+  'image.openOriginal': 'View original',
+  'image.preview': 'Original image preview',
+  'image.closePreview': 'Close original image preview',
+  // Pick-time image-limit rejections (issue #80) — the host lines verbatim.
+  'image.unsupportedType': 'Only PNG, JPG, WebP, and GIF images are supported',
+  'image.tooMany': 'A message can include up to {count} images',
+  'image.fileTooLarge': 'Each image must be smaller than {size}',
+  'image.totalTooLarge': 'Images exceed {size} in total; remove some and try again',
   'composer.notice.dismiss': 'Dismiss notice',
   'composer.fallback.notice': 'The Markdown composer hit an error and fell back to the native input area; it will not retry this session, and resumes after a restart.',
   'permission.mode': 'Access mode, current: {name}',
@@ -222,6 +293,8 @@ const en: Record<ComposerKey, string> = {
   'permission.auto.confirm.acknowledge': 'I understand these risks and want to continue',
   'permission.auto.confirm.enable': 'Enable Auto review',
   'permission.switchFailed': 'Permission switch failed: {message}',
+  'permission.unmatched': 'The host offers no /permission command',
+  'permission.retry': 'Retry',
   'command.menu.open': 'Add files or run commands',
   'command.menu.section.add': 'Add',
   'command.menu.section.commands': 'Commands',
@@ -276,7 +349,21 @@ const en: Record<ComposerKey, string> = {
   'completion.drill.hint': 'Browse folder',
   'completion.drill.key': 'Tab',
   'completion.drill.aria': 'Browse folder',
+  // The drilled-source breadcrumb (issue #80) — the host lines verbatim.
+  'completion.crumbs.aria': 'Folder navigation',
+  'completion.crumb.root': 'Workspace',
   'completion.skill.userOnly': 'user-only',
+  // `@` session-mention rows (#75) — the host `ui-reference` lines verbatim
+  // (see the zh block above for the fold).
+  'completion.section.subagents': 'Subagents',
+  'completion.section.sessions': 'Sessions',
+  'completion.candidate.noCwd': '(no cwd)',
+  'completion.time.now': 'now',
+  'completion.time.minutes': '{n}min',
+  'completion.time.hours': '{n}h',
+  'completion.time.days': '{n}d',
+  'completion.time.months': '{n}mo',
+  'completion.time.years': '{n}y',
   'queue.count': '{n} queued messages',
   'queue.sending': 'Sending…',
   'queue.edit': 'Edit queued message',
@@ -289,6 +376,10 @@ const en: Record<ComposerKey, string> = {
   'queue.editFailed': 'Edit failed: this message may have already started sending.',
   'queue.removeFailed': 'Removal failed: this message may have already started sending.',
   'queue.steerFailed': 'Steering failed. Try again.',
+  // Queue strip attachments (#77) — the host `conversation` namespace's
+  // lines copied verbatim (see the zh block above for the fold).
+  'queue.image': 'Queued message image',
+  'queue.file': 'Queued file {name}',
   'todo.title': 'To-dos',
   'todo.progress.done': '{done} completed',
   'todo.progress.active': '{active} in progress',
@@ -328,6 +419,16 @@ const en: Record<ComposerKey, string> = {
   'workspace.menu.addWorkspace': 'Add workspace…',
   'workspace.folderError.title': 'Couldn’t open folder',
   'workspace.folderError.retry': 'Choose again',
+  // Reference surfaces (#75) — the host lines verbatim (see the zh block
+  // above for the fold).
+  'fileOpen.title': 'Couldn’t open file',
+  'fileOpen.failed': 'Couldn’t open “{path}”. Try again or close this message.',
+  'fileOpen.close': 'Close',
+  'fileOpen.retry': 'Retry',
+  'secret.reveal': 'Show secret',
+  'secret.hide': 'Hide secret',
+  'message.referenceSummary': 'Referenced session · {labels}',
+  'message.referenceSeparator': ', ',
 }
 
 export { zh, en }

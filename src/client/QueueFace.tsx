@@ -9,19 +9,30 @@
  * header, unadmitted submissions show as sending echoes with disabled
  * actions, rows carry edit (text-only) / remove (retract) / steer, and a
  * failed mutation reports on the card banner while the row stays.
+ *
+ * Attachments ride the rows too (#77): durable rows render thumbnails
+ * through the session-authorized image loader (placeholder without the
+ * face) and file chips, sending echoes render straight from their local
+ * preview URLs; the preview keeps its single-line shape with the reference
+ * chips the sent-text projection folds in.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
+  FileTypeIcon, fileSizeText,
   IconCheckOutlineMedium, IconChevronDownOutlineMedium, IconChevronUpOutlineMedium,
   IconCloseOutlineMedium, IconEditOutlineMedium, IconQueueOutlineMedium,
   IconSendOutlineMedium, IconTrashOutlineMedium,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
-import type { QueueAction, QueueUpdate } from './conversation-face.ts'
+import { useObservable, type QueueAction, type QueueUpdate, type SessionId } from './conversation-face.ts'
+import { referenceActions } from './reference-actions-face.ts'
 import { NS } from './locales.ts'
+import { skillFace } from './skill-face.ts'
 import {
-  contentText, previewText, type QueueViewRow,
+  contentText, echoAttachments, previewText, queueAttachments,
+  type QueueAttachment, type QueueEchoAttachment, type QueueViewRow,
 } from './queue-core.ts'
+import { projectUserText } from './user-text-projection.tsx'
 import css from './MarkdownComposer.module.css'
 
 export interface QueueFaceProps {
@@ -33,9 +44,20 @@ export interface QueueFaceProps {
   readonly running: boolean
   /** The session-scoped mutation verb; undefined sheds the action buttons. */
   readonly updateQueue: QueueUpdate | undefined
+  /**
+   * The session's durable-image URL resolver (the native dock's `loadImage`
+   * inject); undefined sheds the durable thumbnails to their placeholder —
+   * the rows, chips, and preview stay (#77).
+   */
+  readonly loadImage: ((attachment: unknown) => Promise<string>) | undefined
   readonly t: PropsLocale<typeof NS>['t']
   /** Card-banner outlet: a failed mutation reports here, the row stays. */
   readonly onError: (text: string) => void
+  /**
+   * The owning session: scopes the preview chips' activations (#75).
+   * Undefined (or absent planes) keeps every chip a display-only span.
+   */
+  readonly sessionId?: SessionId | undefined
 }
 
 /** Chevron glyphs by expansion state (the native header's toggling pair). */
@@ -44,14 +66,105 @@ function chevron(expanded: boolean): React.ReactNode {
 }
 
 /**
+ * One durable queued image as a fixed-size thumbnail: the loader resolves
+ * the session-authorized URL, a failure (or an absent face) keeps the empty
+ * placeholder — the native QueueThumb posture.
+ */
+function QueueThumb({ attachment, loadImage, label }: {
+  attachment: unknown
+  loadImage: QueueFaceProps['loadImage']
+  label: string
+}) {
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (loadImage === undefined) return undefined
+    let alive = true
+    loadImage(attachment).then(
+      (resolved) => { if (alive) setUrl(resolved) },
+      () => { /* placeholder retained; the durable transcript surfaces read errors */ },
+    )
+    return () => { alive = false }
+  }, [attachment, loadImage])
+  return url === null
+    ? <span className={css.queueThumb} aria-hidden />
+    : <img className={css.queueThumb} src={url} alt={label} />
+}
+
+/** Compact file identity used beside queue thumbnails (the native QueueFile). */
+function QueueFileChip({ attachment, label }: {
+  attachment: { readonly name?: string; readonly bytes?: number }
+  label: string
+}) {
+  return (
+    <span className={css.queueFile} aria-label={label} title={attachment.name ?? ''}>
+      <span className={css.queueFileIcon} aria-hidden><FileTypeIcon path={attachment.name ?? ''} size={16} /></span>
+      <span className={css.queueFileName}>{attachment.name}</span>
+      <span className={css.queueFileSize}>{fileSizeText(attachment.bytes ?? 0)}</span>
+    </span>
+  )
+}
+
+/** One attachment either a durable row or a sending echo carries. */
+type QueueAttachmentView = QueueAttachment | QueueEchoAttachment
+
+/**
+ * Render one attachment span: durable rows load their thumbnail through the
+ * session-authorized loader and show file chips with name + size; sending
+ * echoes render their local preview URL directly (the submitter owns its
+ * lifetime, native pendingQueue parity). The row kind correlates with the
+ * item arm (queue-core builds each list from its own row).
+ */
+function attachmentView(
+  item: QueueAttachmentView,
+  rowKind: QueueViewRow['kind'],
+  key: string,
+  loadImage: QueueFaceProps['loadImage'],
+  t: QueueFaceProps['t'],
+): React.ReactNode {
+  if (rowKind === 'queued') {
+    const durable = item as QueueAttachment
+    return durable.type === 'image'
+      ? <QueueThumb key={key} attachment={durable.attachment} loadImage={loadImage} label={t('queue.image')} />
+      : (
+        <QueueFileChip
+          key={key}
+          attachment={durable.attachment}
+          label={t('queue.file', { name: durable.attachment.name ?? '' })}
+        />
+      )
+  }
+  const echo = item as QueueEchoAttachment
+  return echo.type === 'image'
+    ? <img key={key} className={css.queueThumb} src={echo.value?.previewUrl ?? ''} alt={t('queue.image')} />
+    : <QueueFileChip key={key} attachment={echo.value ?? {}} label={t('queue.file', { name: echo.value?.name ?? '' })} />
+}
+
+/**
  * The queue strip, or null on an empty queue.
  * @param props - assembled rows, availability gates, copy, and the banner outlet.
  */
-export function QueueFace({ rows, mutable, running, updateQueue, t, onError }: QueueFaceProps) {
+export function QueueFace({ rows, mutable, running, updateQueue, loadImage, t, onError, sessionId }: QueueFaceProps) {
   const [collapsed, setCollapsed] = useState(true)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
+  // The preview chips' activations (#75): the same capability-detected
+  // actions the durable bubbles use — a host without the preview planes
+  // (or without the session id) keeps every chip display-only.
+  const references = useMemo(() => referenceActions(sessionId), [sessionId])
+  // The loaded skill roll: what lets a queued `/name` chip appear and
+  // activate (beyond the native dock, whose previews carry no skillNames
+  // facts and keep the gesture plain text).
+  const skillEntries = useObservable(skillFace()?.lexicons)
+  const skillNames = useMemo(() => {
+    if (sessionId === undefined || skillEntries === undefined) return []
+    return (skillEntries.value.get(sessionId) ?? []).map((skill) => skill.name)
+  }, [sessionId, skillEntries])
+  // The roll warms on mount (the completion face's idiom): a queued /name
+  // chip can land with the strip's first paint instead of the first popup.
+  useEffect(() => {
+    if (sessionId !== undefined) skillFace()?.ensure(sessionId)
+  }, [sessionId])
 
   const mutationActive = mutable && updateQueue !== undefined && (editing !== null || busy !== null)
   const expanded = !collapsed || mutationActive
@@ -126,6 +239,19 @@ export function QueueFace({ rows, mutable, running, updateQueue, t, onError }: Q
             : null
           const text = row.kind === 'queued' ? contentText(row.content) : row.text
           const actions = mutable && updateQueue !== undefined
+          // Attachment spans (#77): durable rows map their wire references
+          // (thumbs through the loader, file chips with name + size);
+          // sending rows render the echo's local preview URLs directly —
+          // the submitter owns their lifetime (native pendingQueue parity).
+          const attachments: readonly QueueAttachmentView[] = row.kind === 'queued'
+            ? queueAttachments(row.content)
+            : echoAttachments(row.attachments)
+          const attachmentViews = attachments.map((item, index) =>
+            attachmentView(item, row.kind, `${row.kind === 'queued' ? 'd' : 'e'}${index}`, loadImage, t))
+          // The single-line preview with the reference chips folded in —
+          // the vendored projection chips `@path` / `/skill` / the wire
+          // session form, the plain runs stay verbatim.
+          const preview = row.kind === 'queued' ? previewText(row.content) : row.text
           return (
             <li key={row.id} className={`${css.queueRow} ${row.kind === 'sending' ? css.queueSendingRow : ''}`}>
               {rows.length === 1 && (
@@ -153,9 +279,14 @@ export function QueueFace({ rows, mutable, running, updateQueue, t, onError }: Q
                   />
                 )
                 : (
-                  <span className={css.queuePreview}>
-                    {row.kind === 'queued' ? previewText(row.content) : row.text}
-                  </span>
+                  <>
+                    {attachments.length > 0 && (
+                      <span className={css.queueAttachments}>
+                        {attachmentViews}
+                      </span>
+                    )}
+                    <span className={css.queuePreview}>{projectUserText(preview, [], skillNames, references)}</span>
+                  </>
                 )}
               {row.kind === 'sending' && (
                 <span className={css.queueStatus} role="status">{t('queue.sending')}</span>

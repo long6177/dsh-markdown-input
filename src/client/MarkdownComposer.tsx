@@ -46,9 +46,9 @@
  * render/source copy).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, DragEvent, MouseEvent, ReactNode } from 'react'
+import type { ChangeEvent, DragEvent, KeyboardEvent, MouseEvent, ReactNode } from 'react'
 import {
-  IconCloseOutlineMedium, IconCodeOutlineRegular, IconPaperclipOutlineMedium,
+  fileExtension, fileSizeText, IconCloseOutlineMedium, IconCodeOutlineRegular, IconPaperclipOutlineMedium,
   IconWarningOutlineMedium, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type {
@@ -56,8 +56,10 @@ import type {
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { PropsLocale, PropsRuntime, Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import css from './MarkdownComposer.module.css'
-import { AgentPresetFace, agentPresetFaceDefinition } from './AgentPresetFace.tsx'
-import { agentPresetLocale, agentPresetsRemoteFace } from './agent-preset-face.ts'
+import { AgentPresetFace, agentPresetFaceDefinition, agentPresetSeatPossible } from './AgentPresetFace.tsx'
+import {
+  agentPresetLocale, agentPresetRefreshSubscribe, agentPresetsRemoteFace, developerToolsStore,
+} from './agent-preset-face.ts'
 import { resolveAgentPresetCopy } from './agent-preset-core.ts'
 import { CommandMenuFace } from './CommandMenuFace.tsx'
 import { commandFaceDefinition } from './command-face.ts'
@@ -68,9 +70,9 @@ import { ContextMeterFace, contextMeterFaceDefinition, type ContextMeterFaceProp
 import { observeControlRow } from './control-row.ts'
 import { fallbackToNative } from './degrade.ts'
 import {
-  attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, noticesOf,
-  queueUpdateOf, stopOf, useObservable,
-  type AttachmentFace,
+  attachmentFace as detectAttachmentFace, composerBlockOf, conversationFace, imageLightbox, imageUrlOf, noticesOf,
+  queueUpdateOf, sessionShellOf, stopOf, useObservable,
+  type AttachmentFace, type SessionShellFace, type ShellClaim,
 } from './conversation-face.ts'
 import { registerFace } from './face.ts'
 import { FaceGate } from './FaceGate.tsx'
@@ -94,6 +96,11 @@ import {
 } from './stats-pills-face.ts'
 import { StatsPillsFace, statsPillsFaceDefinition, type StatsPillsFaceProps } from './StatsPillsFace.tsx'
 import { dedicatedStopOf, primaryStopsOf } from './stop-core.ts'
+import {
+  busyEnterOf, busyEnterStore, canSteerQueueOf, primarySubmitLabelOf,
+  resolveSubmitMode, steeringAvailableOf,
+  type SteerQueueGate, type SubmitGesture,
+} from './submit-policy.ts'
 import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
 import {
   addWorkspaceEntry, addWorkspaceIsOnlyEntry, resolveAddWorkspaceCopy,
@@ -107,6 +114,26 @@ import { WorkspaceRowFace } from './WorkspaceRowFace.tsx'
 /** Selector marker this entry returns to win the composer chain election. */
 export interface MarkdownTakeover {
   readonly kind: 'markdown'
+}
+
+/**
+ * The failure-restore merge (issue #74): a failed send's draft comes back
+ * while the user kept typing during the flight. Nothing may be lost:
+ *
+ * - a pure in-flight append (the editor text starts with the restored
+ *   draft) survives whole — the upstream `retainSuffixOf` parity, the
+ *   append is the user's continuation of the sent text;
+ * - diverged text joins AFTER the restored draft with the submission-order
+ *   separator (the upstream failed-draft rebuild joins with `'\n\n'`) —
+ *   the restored text was submitted first;
+ * - an emptied editor just takes the restore; an equal or empty restore
+ *   never touches the editor text.
+ */
+export function mergeRestoredDraft(restored: string, editorText: string): string {
+  if (restored === '' || editorText === restored) return editorText
+  if (editorText === '') return restored
+  if (editorText.startsWith(restored)) return editorText
+  return `${restored}\n\n${editorText}`
 }
 
 /** The one non-null marker this chain entry elects with. */
@@ -171,6 +198,46 @@ function storedMode(): EditMode {
 
 function placeholderOf(t: MarkdownComposerProps['t'], mode: EditMode): string {
   return t(mode === 'render' ? 'composer.placeholder.render' : 'composer.placeholder.source')
+}
+
+/**
+ * The host attachment package's `ImageAttachmentLimits`, read structurally
+ * (the projection key is not in this build's merge table). Only the three
+ * pick-time limits and the media-type allowlist are consumed — pixels and
+ * dimensions are decode-time facts the host enforces at submit.
+ */
+export interface ImageLimitsView {
+  readonly maxImageBytes: number
+  readonly maxImagesPerMessage: number
+  readonly maxMessageImageBytes: number
+  readonly mediaTypes: readonly string[]
+}
+
+/**
+ * Narrow one `imageLimits` projection value, or undefined when the host does
+ * not serve it (the preflight then stays off — a missing projection must
+ * degrade to the pre-#80 behavior, never throw into the card).
+ * @param value - the projection value as the host serves it.
+ */
+export function imageLimitsOf(value: unknown): ImageLimitsView | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const limits = value as Record<string, unknown>
+  if (!Array.isArray(limits.mediaTypes)) return undefined
+  if (typeof limits.maxImageBytes !== 'number' || !Number.isFinite(limits.maxImageBytes)) return undefined
+  if (typeof limits.maxImagesPerMessage !== 'number' || !Number.isFinite(limits.maxImagesPerMessage)) return undefined
+  if (typeof limits.maxMessageImageBytes !== 'number' || !Number.isFinite(limits.maxMessageImageBytes)) return undefined
+  return {
+    maxImageBytes: limits.maxImageBytes,
+    maxImagesPerMessage: limits.maxImagesPerMessage,
+    maxMessageImageBytes: limits.maxMessageImageBytes,
+    mediaTypes: limits.mediaTypes.filter((type): type is string => typeof type === 'string'),
+  }
+}
+
+/** Byte count as user-facing megabytes (host `imageSizeText`, verbatim). */
+export function imageSizeText(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  return `${Number.isInteger(mb) ? String(mb) : mb.toFixed(1)}MB`
 }
 
 /** Mode → copy mapping: the visible label names the CURRENT mode. */
@@ -257,6 +324,20 @@ export function MarkdownComposer({
 
   const input = useInput((state) => state)
   const conversation = conversationFace()
+  // The runtime submit plane (issue #79): the full shell behind the public
+  // inputActions face — the mode-aware submit (the busy-Enter preference
+  // carrier), the whole-queue steer, and the command-claim application —
+  // capability-detected per render. Absent (or partial) on hosts without
+  // it: the card keeps the queue-only public face, the exact pre-#79
+  // behavior.
+  const shell = conversation !== undefined && sessionId !== undefined
+    ? sessionShellOf(conversation, sessionId)
+    : undefined
+  // The busy-Enter preference (issue #79): the host `ui-conversation`
+  // settings form's field through the configForms service (the stats-pills
+  // settings precedent); a missing service reads the native default
+  // (queue — the pre-#79 behavior).
+  const busyEnter = busyEnterOf(useObservable(busyEnterStore()))
   const [mode, setMode] = useState<EditMode>(storedMode)
   const [hasText, setHasText] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -267,6 +348,10 @@ export function MarkdownComposer({
     action?: { label: string; run: () => void } | undefined
   } | null>(null)
   const editorRef = useRef<MarkdownEditorHandle | null>(null)
+  // The original-image preview (#77): one lightbox at the card level, opened
+  // from a draft image chip's thumbnail; the opener auto-dismisses when its
+  // attachment leaves the draft (the native ComposerAttachments rule).
+  const [previewImage, setPreviewImage] = useState<ComposerAttachment | null>(null)
   // The editor handle as state: the tool-row faces need it in their effects
   // (the menu key seam binds on arrival), and child effects run before this
   // component's mount effect, so a ref alone would leave them unbound.
@@ -300,6 +385,18 @@ export function MarkdownComposer({
   const touchedRef = useRef(false)
   const seedingRef = useRef(false)
   const draftSyncTimerRef = useRef<number | undefined>(undefined)
+  /**
+   * The send-flight gate (issue #74): a submit's window spans the setDraft →
+   * host submit hop and the frames before the host's settled state (the
+   * cleared draft) reaches the seed — the machine detaches back to 'plain'
+   * at send time, so the phase guard alone lets a second Enter or a second
+   * click through and the still-present editor text re-enters the machine.
+   * 'pending' = the setDraft/submit hop is scheduled; 'sent' = the host
+   * submit fired, the flight awaits its settle (the seed effect releases
+   * it); false = idle. The seed effect also reads the 'sent' state as the
+   * commit point where the undo history is cut (issue #74).
+   */
+  const flightRef = useRef<false | 'pending' | 'sent'>(false)
   // Refs mirroring the mutable faces so the editor (mounted once) always
   // reads the freshest session state without remounting.
   const inputRef = useRef(input)
@@ -308,6 +405,28 @@ export function MarkdownComposer({
   inputActionsRef.current = inputActions
   const tRef = useRef(t)
   tRef.current = t
+  const shellRef = useRef<SessionShellFace | undefined>(shell)
+  shellRef.current = shell
+  // The submission policy's live inputs (issue #79): mirrored per render so
+  // the mounted-once editor's submit closure reads the freshest preference,
+  // session signals, queue rows, and the ONE steer gate at gesture time.
+  // The initializer runs once with the early-render dummies; the real
+  // snapshot is assigned below, once the lock state is known.
+  const submitPolicyRef = useRef({
+    busyEnter,
+    queueRows: [] as ReturnType<typeof queueViewRows>,
+    queueUpdate: undefined as ReturnType<typeof queueUpdateOf>,
+    gate: {
+      sessionBound: sessionId !== undefined,
+      phase: 'plain',
+      draftEmpty: true,
+      running: false,
+      steeringAvailable: true,
+      menuOpen,
+      hasQueuedRows: false,
+      locked: false,
+    } as SteerQueueGate,
+  })
   // The mounted-once editor reads the paste intake through this ref: the
   // intakeFiles closure is re-created every render, the editor's onFiles
   // seam is installed once (the same reason submit reads mirrored faces).
@@ -359,6 +478,10 @@ export function MarkdownComposer({
   // session-scoped conversation verb, capability-detected per call —
   // without it the strip keeps rendering, minus its action buttons.
   const queueUpdate = sessionId === undefined ? undefined : queueUpdateOf(sessionId)
+  // The queue strip's durable-image loader (#77): the native dock's
+  // `loadImage` inject (`uiConversation.imageUrl`), capability-detected per
+  // call — without the face the strip's thumbnails degrade to placeholders.
+  const queueImageLoad = sessionId === undefined ? undefined : imageUrlOf(sessionId)
   const queueRows = useMemo(
     () => queueViewRows(input.queue, session?.pendingSubmissions ?? []),
     [input.queue, session?.pendingSubmissions],
@@ -381,9 +504,13 @@ export function MarkdownComposer({
   )
   const composerBlock = useObservable(blockSource)
   const draftEmpty = !hasText && input.attachmentIds.length === 0
+  // The session's busy and steerability signals (issue #79): the submission
+  // policy's real wire reads, shared by the stop arms and the submit mode.
+  const running = sessionId !== undefined && (session?.running ?? false)
+  const steeringAvailable = steeringAvailableOf(session?.subagent)
   const stopConditions = {
     // No session id, no session-scoped verb: the arms stay off entirely.
-    running: sessionId !== undefined && (session?.running ?? false),
+    running,
     subagent: session?.subagent,
     empty: draftEmpty,
     blocked: composerBlock !== undefined,
@@ -431,13 +558,79 @@ export function MarkdownComposer({
     }
   }, [attachmentFace, attachments, input.attachmentIds, inputActions])
 
-  function submit(): void {
+  // An open preview whose attachment left the draft closes itself (the
+  // native ComposerAttachments rule — the lightbox would show a dead URL).
+  useEffect(() => {
+    if (previewImage !== null && !attachments.some((attachment) => attachment.id === previewImage.id)) {
+      setPreviewImage(null)
+    }
+  }, [attachments, previewImage])
+
+  /**
+   * The whole-queue steer (issue #79 AC3): the empty-draft accelerated
+   * gesture's delivery. The runtime shell's own verb when it resolves (the
+   * upstream hub choreography: FIFO per-row steer, silent convergence on
+   * the two expected refusals, one notice on a genuine failure); otherwise
+   * per-row through the session verb, best-effort — the direct steer is
+   * intentionally best-effort upstream (a closed delivery window lands the
+   * message as the next waking queue item), and a failed row simply stays
+   * queued where the user can see it.
+   */
+  function steerAllQueued(): void {
+    const shell = shellRef.current
+    if (shell !== undefined) {
+      shell.steerQueue()
+      return
+    }
+    const update = submitPolicyRef.current.queueUpdate
+    if (update === undefined) return
+    for (const row of submitPolicyRef.current.queueRows) {
+      if (row.kind !== 'queued') continue
+      void update(row.id, { kind: 'steer' }).catch(() => {})
+    }
+  }
+
+  function submit(gesture: SubmitGesture): void {
+    // One send at a time (#74): the machine detaches back to plain at send
+    // time, so only this gate covers the whole pipeline window.
+    if (flightRef.current !== false) return
     const editor = editorRef.current
-    if (editor === null || inputRef.current.phase !== 'plain') return
+    if (editor === null) return
+    // Claimed is a live editing phase (issue #79 AC6): the claim args are
+    // ordinary text and Enter submits — only the busy admission phases stay
+    // shut (the pre-#79 plain-only gate deadlocked the claim).
+    const input = inputRef.current
+    if (input.phase !== 'plain' && input.phase !== 'claimed') return
+    // The machine's own empty-draft no-op (the upstream `trimmed === ''`
+    // guard): never arm the flight for a send the host would refuse — the
+    // gate would latch with nothing to release it. The accelerated chord
+    // acts on the queue instead of the (empty) draft (the upstream
+    // view-binding's canSteerQueue arm): steer every still-pending queued
+    // message into the running turn.
+    const empty = editor.getText().trim() === '' && inputRef.current.attachmentIds.length === 0
+    if (empty) {
+      // The gate's two per-gesture facts are live here: the draft IS empty,
+      // and the machine phase may have moved since the last render.
+      const gate = submitPolicyRef.current.gate
+      if (gesture === 'accelerated'
+        && canSteerQueueOf({ ...gate, draftEmpty: true, phase: inputRef.current.phase })) {
+        steerAllQueued()
+      }
+      return
+    }
     if (uploadsPendingRef.current) {
       showBanner(tRef.current('composer.file.stillUploading'))
       return
     }
+    // The delivery mode (issue #79 AC1): the busy-Enter preference resolved
+    // against the session's busy and steerability signals — plain Enter and
+    // the Send button share the `enter` gesture, the accelerated chord
+    // takes the opposite of the preference.
+    const policy = submitPolicyRef.current
+    const deliveryMode = resolveSubmitMode(
+      policy.busyEnter, policy.gate.running, gesture, policy.gate.steeringAvailable,
+    )
+    flightRef.current = 'pending'
     // Cancel a pending draft mirror: firing after the machine clears the
     // sent draft would resurrect the sent text into the input.
     window.clearTimeout(draftSyncTimerRef.current)
@@ -447,7 +640,22 @@ export function MarkdownComposer({
     // its projection; the phase re-checks at fire time in case the machine
     // left 'plain' in between.
     window.setTimeout(() => {
-      if (inputRef.current.phase === 'plain') inputActionsRef.current.submit()
+      const phase = inputRef.current.phase
+      if (phase === 'plain' || phase === 'claimed') {
+        // The mode-aware shell verb when the runtime face resolves it; the
+        // public face stays the queue-only fallback (its signature takes
+        // no mode).
+        const shell = shellRef.current
+        if (shell !== undefined) shell.submit(deliveryMode, 'enter')
+        else inputActionsRef.current.submit()
+        // The flight is now the host's: the seed effect releases the gate
+        // when the settled state (cleared or restored draft) arrives.
+        flightRef.current = 'sent'
+      } else {
+        // The machine went busy before our hop landed: the host never took
+        // this draft — release the gate instead of latching.
+        flightRef.current = false
+      }
     }, 0)
   }
 
@@ -456,6 +664,40 @@ export function MarkdownComposer({
   function stopRunning(): void {
     stop?.()
   }
+
+  /**
+   * The `+` menu's claim application (issue #79 AC5): the visible token text
+   * has landed through claimSelection; the machine's claim is applied here
+   * through the shell's `beginCommand` — the chip replaces the head span at
+   * the machine's own revision, the machine enters claimed, and the ghost
+   * hint lives while the args stay blank. Without the shell face the token
+   * text stands alone (the typed-slash adjudication delivers it on Enter,
+   * the pre-#79 behavior).
+   */
+  const beginClaim = useCallback((claim: ShellClaim, headEnd: number): void => {
+    const editor = editorRef.current
+    const shell = shellRef.current
+    if (editor === null || shell?.beginCommand === undefined) return
+    // The machine's draft must describe the same text the span is applied
+    // over: flush a lagging mirror now (the debounced write would race the
+    // claim and drop it).
+    const text = editor.getText()
+    if (inputRef.current.draft !== text) {
+      window.clearTimeout(draftSyncTimerRef.current)
+      inputActionsRef.current.setDraft(text)
+    }
+    // The span's revision is the machine's OWN current revision (the live
+    // store), never the rendered snapshot a synchronous flush outruns.
+    const live = shell.state?.getSnapshot()
+    const draftRev = typeof live?.draftRev === 'number' ? live.draftRev : inputRef.current.draftRev
+    const applied = shell.beginCommand(claim, { start: 0, end: headEnd, draftRev })
+    if (applied) {
+      // The claim owns the draft projection while it holds (the chip
+      // document): the token mirror claimSelection armed would replace it
+      // and drop the claim.
+      window.clearTimeout(draftSyncTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     const surface = surfaceRef.current
@@ -466,7 +708,9 @@ export function MarkdownComposer({
         parent: surface,
         placeholder: '',
         mode: storedMode(),
-        onSubmit: submit,
+        // The accelerated chord rides the same submit pipeline with its own
+        // gesture (issue #79): the editor only knows ctrl/meta was held.
+        onSubmit: (accelerated) => { submit(accelerated ? 'accelerated' : 'enter') },
         onFiles: (files) => intakeFilesRef.current(files),
         onDocChange: (text) => {
           // Any document change invalidates the `+` menu's trigger track
@@ -476,6 +720,11 @@ export function MarkdownComposer({
           if (seedingRef.current) return
           touchedRef.current = true
           setHasText(text.trim().length > 0)
+          // While a command claim holds (issue #79 AC5) the machine's draft
+          // is the chip document: a plain-text mirror would replace it and
+          // drop the claim, so the mirror waits for the claim to end. The
+          // submit flush still carries the args at Enter time.
+          if (inputRef.current.phase === 'claimed') return
           // Live draft mirror: the host persists machine-draft changes, so the
           // typed text reaches it as the user types, not only on unmount/submit.
           window.clearTimeout(draftSyncTimerRef.current)
@@ -515,15 +764,67 @@ export function MarkdownComposer({
     }
   }, [])
 
+  // A session switch retires the editing window (issue #74): typed text
+  // from the previous session must not suppress the new session's draft
+  // seed, a pending mirror must not write the old session's text into the
+  // new one, and a flight still open on the old session can never settle.
+  // Declared ahead of the seed effect so the reset lands before the new
+  // session's draft is applied.
+  const flightSessionRef = useRef(sessionId)
+  useEffect(() => {
+    if (flightSessionRef.current === sessionId) return
+    flightSessionRef.current = sessionId
+    window.clearTimeout(draftSyncTimerRef.current)
+    touchedRef.current = false
+    flightRef.current = false
+  }, [sessionId])
+
   // Seed from the persisted draft until the user edits locally; after a
   // settled submit the machine clears the draft and this clears the surface.
+  // The send flight settles through this same public state (issue #74): the
+  // first post-submit change — the cleared draft (accepted), a restored
+  // draft or returned attachments or the Session promptError (failed) —
+  // releases the flight gate; the accepted clear is the commit point where
+  // the seed cuts the undo history so Ctrl+Z cannot resurrect sent text.
+  // A host-side draft rewrite arriving over user-typed text (touched, the
+  // mirror lagging or already fired) is a failure restore, not a seed: it
+  // merges with what the user typed instead of being dropped — the old
+  // drop-then-remirror path lost the restored draft to the stale mirror.
+  const seededDraftRef = useRef<string | undefined>(undefined)
   useEffect(() => {
+    const editor = editorRef.current
+    if (editor === null) return
+    const draftChanged = seededDraftRef.current !== input.draft
+    seededDraftRef.current = input.draft
+    const flightSettled = flightRef.current === 'sent'
+    if (flightSettled) flightRef.current = false
+    const editorText = editor.getText()
+    if (touchedRef.current && draftChanged && input.draft !== '' && editorText !== input.draft) {
+      const merged = mergeRestoredDraft(input.draft, editorText)
+      // A pending mirror captured the pre-merge text; it must never land
+      // after the merge and put the truncated snapshot back.
+      window.clearTimeout(draftSyncTimerRef.current)
+      if (merged !== editorText) {
+        // The upstream restore shape: restoreDraft + clearHistory — the
+        // merged content starts a fresh undo history.
+        seedingRef.current = true
+        editor.setText(merged, { cutHistory: true })
+        seedingRef.current = false
+        setHasText(merged.trim().length > 0)
+      }
+      // The editor text is the truth now (kept append or merged): push it
+      // before any other writer can read the restored snapshot back.
+      inputActionsRef.current.setDraft(merged)
+      return
+    }
+    const commitClear = flightSettled
+      && input.draft === '' && input.attachmentIds.length === 0
     if (touchedRef.current) return
     seedingRef.current = true
-    editorRef.current?.setText(input.draft)
+    editor.setText(input.draft, commitClear ? { cutHistory: true } : undefined)
     seedingRef.current = false
     setHasText(input.draft.trim().length > 0)
-  }, [input.draft])
+  }, [input.draft, input.attachmentIds, session?.promptError])
 
   // Chip decorations (T9). Warm the skill lexicon once per session and push
   // the live roll into the editor — the RPC resolves after mount, so the
@@ -541,6 +842,13 @@ export function MarkdownComposer({
   // claim holds, the resolved per-command hint (the translated native key
   // wins, the machine's own hint answers for other claimed commands) rides
   // into the editor, which decides blank-args from its live document.
+  // Once claimed (issue #79 AC5), the claim's own insertion mirror — armed
+  // before the shell applied the chip — is cancelled: the machine's draft
+  // is the chip projection now, and the pending plain-text write would
+  // drop the claim.
+  useEffect(() => {
+    if (input.phase === 'claimed') window.clearTimeout(draftSyncTimerRef.current)
+  }, [input.phase])
   const hasGoal = useProjection('goal', (goal: unknown) => goal != null) === true
   // The plan mode's folded target (issue #34, native InputBar parity): the
   // same value the plan chip and the native `placeholder.plan` read. The
@@ -552,6 +860,11 @@ export function MarkdownComposer({
     (key: 'plan') => unknown
   const planState = planProjectionOf(readPlanProjection('plan'))
   const planActive = planChipVisible(planState)
+  // The attachment package's pick-time image limits (issue #80): the same
+  // `imageLimits` projection the host InputBar reads (`useProjection`), typed
+  // structurally because the key is outside this build's merge table.
+  const readImageLimits = useProjection as unknown as (key: 'imageLimits') => unknown
+  const imageLimits = imageLimitsOf(readImageLimits('imageLimits'))
   useEffect(() => {
     const claim = input.claim
     const claimed = input.phase === 'claimed' || input.phase === 'submitting'
@@ -627,13 +940,38 @@ export function MarkdownComposer({
   const triggerPosture = rowSupported && workspaceTriggerPosture({ blank, label: rowLabel })
   const openPicker = useCallback(() => { setPickerOpen(true) }, [])
   const closePicker = useCallback(() => { setPickerOpen(false) }, [])
+  // The trigger card's keyboard entry (issue #80): the native card is a
+  // focusable pick target (DraftEditor's workspace-trigger text face with
+  // tabIndex/onKeyDown); Enter and Space open the same pick menu the click
+  // does.
+  const onWorkspaceTriggerKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return
+    event.preventDefault()
+    openPicker()
+  }, [openPicker])
   // Native pick semantics: the card's blank session IS the session being moved,
   // so the reuse-or-create flow is the whole verb — no draft transfer (that is
   // `selectWorkspace`'s job for a non-blank session with something to carry).
+  // #78: the rejectable `openWorkspace` verb, the native `selectWorkspace`'s
+  // own navigation, is preferred when the host exposes it — its refusal rolls
+  // the pending pick back (conditional on the pick still being the latest
+  // one, `ConversationContent.tsx:119-131`), so a failed switch never leaves
+  // the chip naming a workspace the session never reached. The void
+  // `startSession` stays as the fallback for a host without it; its own
+  // failures are its own (console + the host notice), so only an immediate
+  // throw is catchable there.
   const pickWorkspace = useCallback((workspaceId: string) => {
     setPickerOpen(false)
     setPendingWorkspaceId(workspaceId)
     if (workspaceVerb === undefined) return
+    const opened = workspaceVerb.openWorkspace?.(workspaceId)
+    if (opened !== undefined) {
+      void opened.catch((error: unknown) => {
+        setPendingWorkspaceId(current => current === workspaceId ? undefined : current)
+        showBanner(error instanceof Error ? error.message : String(error))
+      })
+      return
+    }
     try {
       workspaceVerb.startSession(workspaceId)
     } catch (error: unknown) {
@@ -723,9 +1061,57 @@ export function MarkdownComposer({
   // workspace trigger posture (#42) joins it — the native `cardWorkspaceTrigger`
   // card is not an input until a workspace resolves, and the placeholder below
   // says what the click does instead.
+  //
+  // Issue #80 completes the native `disabled` formula (InputBar.tsx:140):
+  // a removed session, a missing session id (the composer's `inert`), an
+  // owner-raised composer block, and a continuable child whose parent is
+  // offline all lock the text face. The draft stays visible and read-only in
+  // every arm — the native bar's own posture. A block does NOT lock the model
+  // seat: choosing a model is one way out of the block.
+  const subagentShare = session?.subagent as {
+    readonly address?: { readonly mode?: unknown } | undefined
+    readonly parentAvailable?: unknown
+  } | null | undefined
+  const parentOffline = subagentShare?.address?.mode === 'continuable'
+    && subagentShare.parentAvailable !== true
+  const inputLocked = session?.removed === true || sessionId === undefined
+    || triggerPosture || composerBlock !== undefined || parentOffline
+  // The ONE whole-queue steer gate both surfaces read: the placeholder
+  // ladder below and the accelerated chord in `submit` (through the mirrored
+  // ref). The native canSteerQueue formula over real wire signals; the
+  // queued-row arm is `queue.length > 0` (the inbox row is a UserMessage,
+  // with no placement field) and the #80 lock arm closes it whole.
+  const steerQueueGate: SteerQueueGate = {
+    sessionBound: sessionId !== undefined,
+    phase: input.phase,
+    draftEmpty,
+    running,
+    steeringAvailable,
+    menuOpen,
+    hasQueuedRows: input.queue.length > 0,
+    locked: inputLocked,
+  }
+  submitPolicyRef.current = {
+    busyEnter,
+    queueRows,
+    queueUpdate,
+    gate: steerQueueGate,
+  }
   useEffect(() => {
-    editorRef.current?.setEditable(!machineBusy && !triggerPosture)
-  }, [machineBusy, triggerPosture])
+    editorRef.current?.setEditable(!machineBusy && !inputLocked)
+  }, [machineBusy, inputLocked])
+
+  // The session-switch/unlock focus (issue #74, the native bar's unlock
+  // effect with sessionId in its deps): a session change or the machine
+  // leaving a busy phase puts the caret back in the text face — the
+  // handle's focus restores the selection and scrolls it into view, so a
+  // long restored draft lands with its caret visible. A busy phase or the
+  // workspace trigger posture is not an editor surface: nothing is pulled
+  // into it.
+  useEffect(() => {
+    if (machineBusy || inputLocked) return
+    editorRef.current?.focus()
+  }, [machineBusy, inputLocked, sessionId, editorHandle])
 
   // Mode and placeholder live in compartments, so a switch keeps undo
   // history and scroll; the choice persists across page loads.
@@ -745,13 +1131,13 @@ export function MarkdownComposer({
   // The placeholder follows the native bar's runtime ladder (issue #34):
   // steering a queue while running wins over plan mode, plan mode wins over
   // the card's own render/source copy — the native formula verbatim,
-  // including the open `+` menu's suppression arm and the queue rows'
-  // `placement === 'queued'` wire test. (The native ladder's earlier arms —
-  // workspace picker, block reason, offline parent — ride states the card
-  // does not model.)
-  const canSteerQueue = sessionId !== undefined && !machineBusy && draftEmpty
-    && (session?.running ?? false) && session?.subagent == null && !menuOpen
-    && input.queue.some((row) => (row as { readonly placement?: unknown }).placement === 'queued')
+  // including the open `+` menu's suppression arm and the native
+  // `queue.length > 0` test. (The native ladder's earlier arms — workspace
+  // picker, block reason, offline parent — ride the gate or the trigger
+  // posture.) The gate is the SAME pure function the accelerated chord
+  // reads (issue #79): the hint never promises a gesture the chord would
+  // refuse, and vice versa.
+  const canSteerQueue = canSteerQueueOf(steerQueueGate)
   // The native placeholder ladder's FIRST arm (#42): while the card is the
   // workspace picker, `placeholder.workspace` outranks every steering/plan/
   // render arm — the surface is not an editor then, it is the pick target.
@@ -766,7 +1152,31 @@ export function MarkdownComposer({
     editorRef.current?.setMode(mode, placeholderText)
   }, [mode, placeholderText])
 
-  const canSubmit = !draftEmpty && input.phase === 'plain' && !uploadsPending
+  // Native parity: the submit seat stays live while a claim holds (issue
+  // #79 AC6) — the claim args are ordinary text and the click delivers
+  // them; only the busy admission phases disable it.
+  const canSubmit = !draftEmpty && (input.phase === 'plain' || input.phase === 'claimed')
+    && !uploadsPending
+  // The primary seat's copy names the mode the click delivers (issue #79
+  // AC2) — the same resolution plain Enter uses (the shared `enter`
+  // gesture) — but only while the click would really deliver a plain
+  // message right now: enabled, over a plain non-command draft, on a
+  // running steerable session (the native primaryLabel arms verbatim). A
+  // claimed or `/` draft, an idle session, or a pending upload keeps plain
+  // send — the label never names a delivery the click cannot perform.
+  const submitMode = resolveSubmitMode(busyEnter, running, 'enter', steeringAvailable)
+  const plainMessageDraft = !draftEmpty && input.phase === 'plain'
+    && !input.draft.trimStart().startsWith('/')
+  const submitLabelKey = primarySubmitLabelOf({
+    primaryStops, running, steeringAvailable, enabled: canSubmit, plainMessageDraft, submitMode,
+  })
+  const submitLabel = submitLabelKey === 'stop'
+    ? t('composer.action.stop')
+    : submitLabelKey === 'send.queue'
+      ? t('composer.send.queue')
+      : submitLabelKey === 'send.steer'
+        ? t('composer.send.steer')
+        : t('composer.action.submit')
   // Native canAcceptDrop parity: subagent === null, not locked (a session id
   // exists), not busy, and the intake face present.
   const canIntake = attachmentFace !== undefined && sessionId !== undefined
@@ -797,9 +1207,48 @@ export function MarkdownComposer({
   // refusal releases the just-created drafts instead of leaking them).
   // Returns whether the intake was admitted — the paste seam consumes the
   // event only then, mirroring the paste handler's cancel-after-landing rule.
+  /**
+   * The pick-time image preflight's copy (issue #80): the host
+   * `conversation` namespace's own named keys when bound, the plugin's
+   * verbatim strings otherwise (a raw echoed key never reaches the banner).
+   */
+  function imageCopy(
+    key: 'image.unsupportedType' | 'image.tooMany' | 'image.fileTooLarge' | 'image.totalTooLarge',
+    params?: Record<string, unknown>,
+  ): string {
+    const host = contextLocale() as unknown as
+      ((name: string, values?: Record<string, unknown>) => string) | undefined
+    const hostText = host?.(key, params)
+    if (hostText !== undefined && hostText !== key) return hostText
+    return (t as unknown as (name: string, values?: Record<string, unknown>) => string)(key, params)
+  }
+
   function intakeFiles(files: readonly File[]): boolean {
     if (attachmentFace === undefined || sessionId === undefined || files.length === 0) return false
     if (session?.subagent != null || machineBusy) return false
+    // The native pick-time preflight (InputBar.tsx:208-239): the whole batch
+    // is refused before any draft exists, with the host's named copy. Only
+    // the image subset is limited; generic files stay unrestricted.
+    if (imageLimits !== undefined) {
+      const images = files.filter((file) => imageLimits.mediaTypes.includes(file.type))
+      if (images.length > 0) {
+        const heldImages = attachments.filter((attachment) => attachment.kind === 'image')
+        if (heldImages.length + images.length > imageLimits.maxImagesPerMessage) {
+          showBanner(imageCopy('image.tooMany', { count: imageLimits.maxImagesPerMessage }))
+          return false
+        }
+        if (images.some((file) => file.size > imageLimits.maxImageBytes)) {
+          showBanner(imageCopy('image.fileTooLarge', { size: imageSizeText(imageLimits.maxImageBytes) }))
+          return false
+        }
+        const totalBytes = heldImages.reduce((sum, attachment) => sum + attachment.file.size, 0)
+          + images.reduce((sum, file) => sum + file.size, 0)
+        if (totalBytes > imageLimits.maxMessageImageBytes) {
+          showBanner(imageCopy('image.totalTooLarge', { size: imageSizeText(imageLimits.maxMessageImageBytes) }))
+          return false
+        }
+      }
+    }
     try {
       const drafts = attachmentFace.createDrafts(sessionId, files) as ComposerAttachment[]
       if (!inputActionsRef.current.addAttachments(drafts.map((draft) => draft.id))) {
@@ -838,6 +1287,25 @@ export function MarkdownComposer({
   }
 
   /**
+   * The tool row's keep-focus arm (issue #74, the native keepDraftFocus): a
+   * mousedown on a row button is consumed — focus never lands on the button
+   * — and the editor takes it back, so typing continues after sending,
+   * toggling the mode, or opening a picker without re-clicking the text
+   * face. The click itself still fires (preventDefault on mousedown cancels
+   * no click). Popup items and containers portal outside this row and keep
+   * their own focus behavior; the row's gaps fall through to the card hit
+   * area (issue #41), which focuses without cancelling.
+   */
+  function onToolRowMouseDown(event: MouseEvent<HTMLDivElement>): void {
+    if (triggerPosture) return
+    const target = event.target
+    if (!(target instanceof Element)) return
+    if (target.closest('button') === null) return
+    event.preventDefault()
+    editorRef.current?.focus()
+  }
+
+  /**
    * Card-level hit area (issue #41): the stretched contentDOM covers the
    * scroller band now, but the card's own padding and the gaps between the
    * strips are still outside it. A mousedown there focuses the editor through
@@ -870,6 +1338,13 @@ export function MarkdownComposer({
     attachmentFace.retryFileUpload(sessionId, id)
   }
 
+  /** Native FileCard ready meta: extension badge + size, e.g. "TXT 2.0KB". */
+  function readyMeta(attachment: ComposerAttachment): string {
+    if (attachment.kind !== 'file') return ''
+    const extension = fileExtension(attachment.file.name).toUpperCase().slice(0, 8)
+    return [extension, fileSizeText(attachment.file.size)].filter((part) => part !== '').join(' ')
+  }
+
   function uploadState(id: DraftAttachmentId): ReactNode {
     const upload = uploads?.[id]
     if (upload === undefined || upload.status === 'ready') return null
@@ -883,17 +1358,47 @@ export function MarkdownComposer({
         </span>
       )
     }
-    return <span className={css.uploadState}>{t('composer.file.uploading')}</span>
+    // Native FileCard parity (#77): the fraction renders only when the wire
+    // reports a total; an unknown total keeps the text-only state.
+    const progress = upload.status === 'uploading' && typeof upload.total === 'number' && upload.total > 0
+      ? Math.min(1, Math.max(0, upload.loaded / upload.total))
+      : undefined
+    return (
+      <span className={css.uploadState}>
+        {t('composer.file.uploading')}
+        {progress !== undefined && (
+          <span className={css.progressTrack} aria-hidden>
+            <span className={css.progressBar} data-markdown-upload-progress
+              style={{ width: `${String(progress * 100)}%` }} />
+          </span>
+        )}
+      </span>
+    )
   }
+
+  // The original-image preview's component (#77): read ONCE per render
+  // beside the other capability faces — an unbound face keeps the chip
+  // display-only and the lightbox unmounted (the chip and the card-level
+  // portal share this one probe).
+  const Lightbox = imageLightbox()
 
   function attachmentChip(attachment: ComposerAttachment): ReactNode {
     return (
       <li key={attachment.id} className={css.attachment}>
         {attachment.kind === 'image'
-          ? <img className={css.thumb} src={attachment.previewUrl} alt="" />
+          ? Lightbox === undefined
+            ? <img className={css.thumb} src={attachment.previewUrl} alt="" />
+            : (
+              <button type="button" className={css.thumbButton} title={t('image.openOriginal')}
+                onClick={() => { setPreviewImage(attachment) }}>
+                <img className={css.thumb} src={attachment.previewUrl} alt="" />
+              </button>
+            )
           : <span className={css.fileChip} aria-hidden>⌗</span>}
         <span className={css.attachmentName}>{attachment.file.name}</span>
-        {attachment.kind === 'file' ? uploadState(attachment.id) : null}
+        {attachment.kind === 'file'
+          ? (uploadState(attachment.id) ?? <span className={css.uploadState}>{readyMeta(attachment)}</span>)
+          : null}
         <button type="button" className={css.removeButton} aria-label={t('composer.attachment.remove')}
           title={t('composer.attachment.remove')} disabled={machineBusy}
           onClick={() => { onRemoveAttachment(attachment.id) }}>
@@ -916,6 +1421,21 @@ export function MarkdownComposer({
     switchRefused: t('agentPreset.switchRefused'),
   })
   const agentPresetsRemote = agentPresetsRemoteFace()
+  // The preset seat's Developer-tools signal (#78): the host `ui-settings`
+  // form, read per render like the roster verbs — an absent service leaves
+  // the gate off (the native observable face's own default).
+  const presetDeveloperTools = developerToolsStore()
+  // The preset seat's roster-refresh subscription (#78): bound once by apply,
+  // so the identity read here is stable across renders and the face's effect
+  // never resubscribes.
+  const presetRefresh = agentPresetRefreshSubscribe()
+  // #78: the preset seat judges its OWN availability — the roster verbs and
+  // the projection hook, the two facts its FaceGate probes. The predicate is
+  // the face's OWN export (ADR-0005: the probe is not re-derived here); the
+  // workspace row's capability verdict no longer takes it down: the native
+  // hero's two seats are independent slot occupants, and a workspace-less
+  // chain entry still offers the preset switch when ITS data plane is there.
+  const presetSeatPossible = agentPresetSeatPossible(useProjection, agentPresetsRemote !== undefined)
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
   // the binding (registerFace latches per id, so a first render before apply's
@@ -969,7 +1489,18 @@ export function MarkdownComposer({
           level mousedown hit area (#41) stays on the FACE: the dock row below
           is not editor surface. */}
       <div className={css.card} data-markdown-composer data-composer-card ref={cardRef}
-        {...triggerPosture ? { 'data-workspace-trigger': '' } : {}}
+        {...triggerPosture ? {
+          'data-workspace-trigger': '',
+          // Keyboard reachability (issue #80): the card itself is the pick
+          // target while no workspace resolves, so it takes focus and
+          // Enter/Space. The native card's text face carries the same
+          // tabIndex/haspopup/expanded/onKeyDown quartet.
+          tabIndex: 0,
+          'aria-haspopup': 'menu',
+          'aria-expanded': pickerOpen,
+          'aria-label': workspaceCopy?.('hero.chooseWorkspace'),
+          onKeyDown: onWorkspaceTriggerKeyDown,
+        } : {}}
         onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} onMouseDown={onCardMouseDown}
         onClick={triggerPosture ? openPicker : undefined}
         onPointerDown={triggerPosture ? (event) => { event.stopPropagation() } : undefined}>
@@ -1004,14 +1535,14 @@ export function MarkdownComposer({
             top, the native `heroWorkspaceRow` mirrored — the workspace
             chip+menu and the preset seat are siblings of the same row
             container (gap 2px, align-items center), not two stacked card
-            children. The row mounts whenever the row's capability verdict
-            holds; a face whose gate is absent (roster service, projection
-            key) leaves the line to the other seat instead of dangling. The
-            row's two halves are still independent faces: the workspace chip
-            (and the trigger posture it owns) hides whole when the list hook,
-            the copy, or the reuse-or-create verb is missing, the preset seat
-            when the roster or the projection is. */}
-        {rowSupported && (
+            children. #78: the line mounts when EITHER seat is available —
+            each judges its own data plane, the native slot shape — and a
+            face whose gate is absent leaves the line to the other seat
+            instead of dangling. The workspace chip (and the trigger posture
+            it owns) hides whole when the list hook, the copy, or the
+            reuse-or-create verb is missing; the preset seat when the roster
+            or the projection is. */}
+        {(rowSupported || presetSeatPossible) && (
           <div className={css.heroRow} data-markdown-hero-row="">
             {rowSupported && workspaceCopy !== undefined && (
               <WorkspaceRowFace
@@ -1037,6 +1568,8 @@ export function MarkdownComposer({
                 translate={agentPresetT}
                 copy={agentPresetCopy}
                 onError={showBanner}
+                developerTools={presetDeveloperTools}
+                subscribeRefresh={presetRefresh}
               />
             </FaceGate>
           </div>
@@ -1065,17 +1598,19 @@ export function MarkdownComposer({
           <GoalStripFace
             useProjection={useProjection}
             sessionId={sessionId}
-            running={session?.running ?? false}
+            running={running}
             t={t}
           />
         </FaceGate>
         <QueueFace
           rows={queueRows}
           mutable={queueMutable}
-          running={session?.running ?? false}
+          running={running}
           updateQueue={queueUpdate}
+          loadImage={queueImageLoad}
           t={t}
           onError={showBanner}
+          sessionId={sessionId}
         />
         {dragging && canIntake && (
           <div className={css.dropOverlay} data-markdown-dropzone>{t('composer.dropHere')}</div>
@@ -1085,8 +1620,20 @@ export function MarkdownComposer({
             {attachments.map(attachmentChip)}
           </ul>
         )}
+        {/* Original-image preview (#77): the native lightbox portal —
+            Escape, backdrop press, or the close control dismisses it. The
+            component rides the capability binding; absent, the thumbnails
+            above stay display-only and nothing mounts here. */}
+        {Lightbox !== undefined && previewImage !== null && previewImage.kind === 'image' && (
+          <Lightbox
+            src={previewImage.previewUrl}
+            alt={previewImage.file.name}
+            labels={{ dialog: t('image.preview'), close: t('image.closePreview') }}
+            onClose={() => { setPreviewImage(null) }}
+          />
+        )}
         <div className={css.surface} data-markdown-surface ref={surfaceRef} />
-        <div className={css.toolRow} ref={toolRowRef}>
+        <div className={css.toolRow} ref={toolRowRef} onMouseDown={onToolRowMouseDown}>
           {/* The native row's two-group shape (issue #39, alpha.13 inversion):
               the seats ride in a leading and a trailing cluster, each ONE
               non-shrinking flex item (`flex: none`) — the layout premise the
@@ -1127,6 +1674,8 @@ export function MarkdownComposer({
                 onError={showBanner}
                 registerClose={registerMenuClose}
                 onOpen={handleMenuOpen}
+                beginClaim={beginClaim}
+                subagent={session?.subagent ?? null}
               />
             </FaceGate>
             {/* Completion popups (typed triggers, T10): the `/` command+skill
@@ -1147,6 +1696,7 @@ export function MarkdownComposer({
                 onError={showBanner}
                 registerClose={registerCompletionClose}
                 onOpen={closeCommandMenu}
+                subagent={session?.subagent ?? null}
               />
             </FaceGate>
             {attachmentFace !== undefined && (
@@ -1168,7 +1718,7 @@ export function MarkdownComposer({
                 sessionId={sessionId}
                 t={t}
                 locked={sessionId === undefined}
-                onError={showBanner}
+                focusEditor={() => { editorRef.current?.focus() }}
               />
             </FaceGate>
             {/* Plan chip (tool row, issue #34): the native PlanChip seat the
@@ -1213,13 +1763,19 @@ export function MarkdownComposer({
                 button — the native inline square glyph, disabled while the cancel
                 verb is missing. Mutually exclusive with the primary stop arm. */}
             {dedicatedStop && (
-              <button type="button" className={css.stopButton}
-                aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
-                disabled={stop === undefined} onClick={stopRunning}>
-                <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
-                  <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
-                </svg>
-              </button>
+              // The native dedicated stop rides the same Tooltip with the
+              // Esc+Esc shortcut keys (issue #80); the host's fixed-input
+              // service already binds the sequence.
+              <Tooltip label={t('composer.action.stop')} shortcutKeys={['Esc', 'Esc']}
+                side="top" delayMs={500} disabled={stop === undefined}>
+                <button type="button" className={css.stopButton}
+                  aria-label={t('composer.action.stop')} title={t('composer.action.stop')}
+                  disabled={stop === undefined} onClick={stopRunning}>
+                  <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
+                    <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
+                  </svg>
+                </button>
+              </Tooltip>
             )}
             {/* Send/stop semantics (native `primaryStops`): on a running ordinary
                 session the primary names stop while the composer is empty or
@@ -1234,13 +1790,14 @@ export function MarkdownComposer({
                 group, and its bubble is fixed-position — out of flow, so a
                 hover can never widen what the row measures (the transient
                 latch candidate the alpha.13 note flagged). */}
-            <Tooltip label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+            <Tooltip label={submitLabel}
               side="top" delayMs={500}
+              shortcutKeys={primaryStops ? ['Esc', 'Esc'] : undefined}
               disabled={primaryStops ? stop === undefined : !canSubmit}>
               <button type="button" className={css.submitButton}
-                aria-label={primaryStops ? t('composer.action.stop') : t('composer.action.submit')}
+                aria-label={submitLabel}
                 disabled={primaryStops ? stop === undefined : !canSubmit}
-                onClick={primaryStops ? stopRunning : submit}>
+                onClick={primaryStops ? stopRunning : () => { submit('enter') }}>
                 {primaryStops ? (
                   <svg viewBox="0 0 16 16" width={16} height={16} aria-hidden="true">
                     <rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor" />
@@ -1284,6 +1841,7 @@ export function MarkdownComposer({
           <FaceGate definition={statsPillsFaceDefinition(useProjection)}>
             <StatsPillsFace
               useProjection={useProjection as unknown as StatsPillsFaceProps['useProjection']}
+              sessionId={sessionId}
               copy={statsCopy}
             />
           </FaceGate>

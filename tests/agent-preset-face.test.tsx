@@ -16,8 +16,13 @@ import {
   type AgentPresetFaceProps,
 } from '../src/client/AgentPresetFace.tsx'
 import {
-  agentPresetsRemoteFace, resetAgentPresetsSource, setAgentPresetsSource,
-  type AgentPresetsRemoteFace,
+  AGENT_PRESET_SETTINGS_NS, agentPresetRefreshSubscribe, agentPresetsRemoteFace,
+  developerToolsEnabledOf, developerToolsStore,
+  DEVELOPER_TOOLS_NAMESPACE, installDeveloperToolsSource, installRosterRefreshSource,
+  resetAgentPresetsSource,
+  resetDeveloperToolsSource, resetRosterRefreshSource, setAgentPresetsSource,
+  type AgentPresetRefreshSubscribe,
+  type AgentPresetsRemoteFace, type DeveloperToolsSnapshot,
 } from '../src/client/agent-preset-face.ts'
 import { FaceGate } from '../src/client/FaceGate.tsx'
 import { resetFaces } from '../src/client/face.ts'
@@ -84,6 +89,8 @@ function renderFace(overrides: {
   sessionId?: string | undefined
   onError?: (message: string) => void
   translate?: ((key: BuiltInPresetCopyKey) => string) | undefined
+  developerTools?: DeveloperToolsStore | undefined
+  subscribeRefresh?: AgentPresetRefreshSubscribe
 } = {}) {
   return render(
     <AgentPresetFace
@@ -93,6 +100,8 @@ function renderFace(overrides: {
       translate={overrides.translate}
       copy={copy}
       onError={overrides.onError ?? (() => {})}
+      developerTools={overrides.developerTools}
+      subscribeRefresh={overrides.subscribeRefresh}
     />,
   )
 }
@@ -103,10 +112,47 @@ type AgentPresetRemote = {
   select: AgentPresetsRemoteFace['select']
 }
 
+/** A settable Developer-tools form double (the shape configForms hands out). */
+function devToolsStore(enabled: boolean | undefined): DeveloperToolsStore & {
+  set: (enabled: boolean | undefined) => void
+} {
+  let snapshot: DeveloperToolsSnapshot | undefined = { value: { enabled } }
+  const listeners = new Set<() => void>()
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    },
+    set: (next: boolean | undefined) => {
+      snapshot = { value: { enabled: next } }
+      for (const listener of [...listeners]) listener()
+    },
+  }
+}
+
+/** A roster carrying the two tool presets plus the standard trio of the other fixtures. */
+const TOOL_ROSTER: AgentPresetRemote = {
+  list: () => Promise.resolve({
+    ok: true,
+    value: {
+      presets: [
+        { id: 'standard', isDefault: true },
+        { id: 'ptc' },
+        { id: 'minimal' },
+        { id: 'cordis', name: 'Creator mode', description: 'Build plugins by talking.' },
+        { id: 'mine' },
+      ],
+    },
+  }),
+  select: ROSTER.select,
+}
+
 afterEach(() => {
   cleanup()
   resetFaces()
   resetAgentPresetsSource()
+  resetDeveloperToolsSource()
 })
 
 describe('AgentPresetFace visibility', () => {
@@ -225,6 +271,262 @@ describe('AgentPresetFace menu', () => {
   })
 })
 
+describe('AgentPresetFace developer-tools gate (#78)', () => {
+  it('hides the tool presets from the menu when developer tools are off, keeping the rest', async () => {
+    renderFace({ remote: TOOL_ROSTER, developerTools: devToolsStore(false) })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    const labels = menuRows().map(row => row.textContent)
+    expect(labels).toHaveLength(3)
+    expect(labels.some(text => text?.includes('standard'))).toBe(true)
+    expect(labels.some(text => text?.includes('Creator mode'))).toBe(true)
+    expect(labels.some(text => text?.includes('mine'))).toBe(true)
+    expect(labels.some(text => text?.includes('ptc'))).toBe(false)
+    expect(labels.some(text => text?.includes('minimal'))).toBe(false)
+  })
+
+  it('offers every healthy row while developer tools are on', async () => {
+    renderFace({ remote: TOOL_ROSTER, developerTools: devToolsStore(true) })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(5)
+  })
+
+  it('keeps the current mode named on a disabled chip without opening a picker when all options are hidden', async () => {
+    // Upstream `components.client.spec.tsx:121`: the current tool preset still
+    // labels the chip (unfiltered list), but the menu never opens.
+    const toolsOnly: AgentPresetRemote = {
+      list: () => Promise.resolve({ ok: true, value: { presets: [{ id: 'ptc' }, { id: 'minimal' }] } }),
+      select: ROSTER.select,
+    }
+    renderFace({
+      remote: toolsOnly,
+      projection: { agentPreset: 'minimal' },
+      developerTools: devToolsStore(false),
+    })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    expect(chip()).toHaveTextContent('minimal')
+    expect(chip()).toBeDisabled()
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(chip()).toHaveAttribute('aria-expanded', 'false')
+    expect(menuRows()).toHaveLength(0)
+  })
+
+  it('keeps a named custom row overriding a development id when developer tools are off', async () => {
+    const override: AgentPresetRemote = {
+      list: () => Promise.resolve({ ok: true, value: { presets: [{ id: 'ptc', name: 'My workflow' }] } }),
+      select: ROSTER.select,
+    }
+    renderFace({ remote: override, developerTools: devToolsStore(false) })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(1)
+    expect(menuRows()[0]?.textContent).toContain('My workflow')
+  })
+
+  it('closes the menu immediately when developer tools turn off', async () => {
+    const tools = devToolsStore(true)
+    renderFace({ remote: TOOL_ROSTER, developerTools: tools })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(5)
+    tools.set(false)
+    await waitFor(() => { expect(menuRows()).toHaveLength(0) })
+    expect(chip()).toHaveAttribute('aria-expanded', 'false')
+    // Turning them back on does not re-open the menu by itself.
+    tools.set(true)
+    expect(menuRows()).toHaveLength(0)
+  })
+
+  it('reads an absent developer-tools store as off (the native ?? false)', async () => {
+    renderFace({ remote: TOOL_ROSTER, developerTools: undefined })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    fireEvent.click(chip() as HTMLButtonElement)
+    expect(menuRows()).toHaveLength(3)
+  })
+})
+
+describe('AgentPresetFace roster refresh (#78)', () => {
+  /** A refresh subscription double that hands the test the fire button. */
+  function refreshSignal(): AgentPresetRefreshSubscribe & { fire: () => void } {
+    const listeners = new Set<() => void>()
+    const subscribe: AgentPresetRefreshSubscribe = (listener: () => void) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    }
+    return Object.assign(subscribe, {
+      fire: () => { for (const listener of [...listeners]) listener() },
+    })
+  }
+
+  it('re-reads the roster when the refresh signal fires and swaps the offered rows', async () => {
+    const list = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { presets: [{ id: 'standard', isDefault: true }] },
+      })
+      .mockResolvedValue({
+        ok: true,
+        value: { presets: [{ id: 'cordis', name: 'Creator mode', isDefault: true }] },
+      })
+    const refresh = refreshSignal()
+    renderFace({ remote: { list, select: ROSTER.select } as AgentPresetRemote, subscribeRefresh: refresh })
+    await waitFor(() => { expect(chip()).toHaveTextContent('standard') })
+    refresh.fire()
+    await waitFor(() => { expect(list).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(chip()).toHaveTextContent('Creator mode') })
+  })
+
+  it('keeps the mounted seat steady while a refresh re-read is in flight', async () => {
+    let release: ((value: unknown) => void) | undefined
+    const list = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: { presets: [{ id: 'standard', isDefault: true }] } })
+      .mockReturnValueOnce(new Promise(resolve => {
+        release = resolve
+      }))
+    const refresh = refreshSignal()
+    renderFace({ remote: { list, select: ROSTER.select } as AgentPresetRemote, subscribeRefresh: refresh })
+    await waitFor(() => { expect(chip()).toHaveTextContent('standard') })
+    refresh.fire()
+    await waitFor(() => { expect(list).toHaveBeenCalledTimes(2) })
+    // The old roster still labels the chip — a slow refresh never blanks the seat.
+    expect(chip()).toHaveTextContent('standard')
+    release?.({ ok: true, value: { presets: [{ id: 'cordis', name: 'Creator mode', isDefault: true }] } })
+    await waitFor(() => { expect(chip()).toHaveTextContent('Creator mode') })
+  })
+
+  it('reads gateway/invocation-unavailable as an empty roster, silently', async () => {
+    // The optional-service absence is a legal deployment: the native read
+    // answers an empty roster and the seat hides without a word
+    // (`settings-store.ts:76`) — a banner here would misreport a quiet host.
+    const onError = vi.fn()
+    const unavailable: AgentPresetRemote = {
+      list: () => Promise.resolve({
+        ok: false,
+        error: { code: 'gateway/invocation-unavailable', message: 'no such service' },
+      }),
+      select: ROSTER.select,
+    }
+    const { container } = renderFace({ remote: unavailable, onError })
+    await waitFor(() => { expect(container).toBeEmptyDOMElement() })
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('reports a refresh that fails with a real error and hides the seat', async () => {
+    const onError = vi.fn()
+    const list = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: { presets: [{ id: 'standard', isDefault: true }] } })
+      .mockResolvedValue({ ok: false, error: { code: 'gateway/error', message: 'roster unavailable' } })
+    const refresh = refreshSignal()
+    renderFace({
+      remote: { list, select: ROSTER.select } as AgentPresetRemote,
+      subscribeRefresh: refresh,
+      onError,
+    })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    refresh.fire()
+    await waitFor(() => { expect(onError).toHaveBeenCalledWith('roster unavailable') })
+    expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
+  })
+})
+
+describe('installRosterRefreshSource (the four refresh signals, #78)', () => {
+  /** A configForms double whose forms record their subscribers. */
+  function formsWith(forms: Record<string, { subscribe?: (listener: () => void) => () => void }>): {
+    get(namespace: string): unknown
+  } {
+    return { get: (namespace: string) => forms[namespace] }
+  }
+
+  /** A remote double that records `$on` subscriptions per event. */
+  function remoteDouble() {
+    const subs: Record<string, Array<(...args: unknown[]) => void>> = {}
+    return {
+      $on: (event: string, listener: (...args: unknown[]) => void) => {
+        ;(subs[event] ??= []).push(listener)
+        return () => {
+          subs[event] = (subs[event] ?? []).filter(item => item !== listener)
+        }
+      },
+      fire: (event: string, ...args: unknown[]) => {
+        for (const listener of [...(subs[event] ?? [])]) listener(...args)
+      },
+    }
+  }
+
+  it('fires the listener on a transport reset', () => {
+    const remote = remoteDouble()
+    installRosterRefreshSource({
+      get: (key: string) => key === 'remote' ? remote : undefined,
+    } as never)
+    const subscribe = agentPresetRefreshSubscribe()
+    expect(subscribe).toBeTypeOf('function')
+    const listener = vi.fn()
+    const dispose = subscribe?.(listener)
+    remote.fire('connection/reset')
+    expect(listener).toHaveBeenCalledTimes(1)
+    dispose?.()
+    remote.fire('connection/reset')
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('filters settings/document-updated to the preset-registry namespace', () => {
+    const remote = remoteDouble()
+    installRosterRefreshSource({
+      get: (key: string) => key === 'remote' ? remote : undefined,
+    } as never)
+    const listener = vi.fn()
+    const dispose = agentPresetRefreshSubscribe()?.(listener)
+    // The wire payload: [namespace, revision] — the same shape the native
+    // apply test emits (`apply.client.spec.ts:446`).
+    remote.fire('settings/document-updated', 'agent-preset-registry', 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    remote.fire('settings/document-updated', 'llm-deepseek', 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    remote.fire('settings/document-updated', 'ui-settings', 1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    dispose?.()
+  })
+
+  it('subscribes the two settings forms and detaches on dispose', () => {
+    const uiSettings = { subscribe: vi.fn(() => () => {}) }
+    const registry = { subscribe: vi.fn(() => () => {}) }
+    const remote = remoteDouble()
+    installRosterRefreshSource({
+      get: (key: string) => key === 'remote' ? remote
+        : key === 'configForms' ? formsWith({
+            [DEVELOPER_TOOLS_NAMESPACE]: uiSettings,
+            [AGENT_PRESET_SETTINGS_NS]: registry,
+          })
+        : undefined,
+    } as never)
+    const listener = vi.fn()
+    const dispose = agentPresetRefreshSubscribe()?.(listener)
+    expect(uiSettings.subscribe).toHaveBeenCalledWith(listener)
+    expect(registry.subscribe).toHaveBeenCalledWith(listener)
+    // Every edge detached at once: the dispose is the whole teardown.
+    const uiDisposals = uiSettings.subscribe.mock.results[0]?.value
+    const registryDisposals = registry.subscribe.mock.results[0]?.value
+    expect(typeof uiDisposals).toBe('function')
+    expect(typeof registryDisposals).toBe('function')
+    dispose?.()
+    expect(uiSettings.subscribe).toHaveBeenCalledTimes(1)
+    resetRosterRefreshSource()
+    expect(agentPresetRefreshSubscribe()).toBeUndefined()
+  })
+
+  it('degrades to a bare dispose without any signal face', () => {
+    installRosterRefreshSource({ get: () => undefined } as never)
+    const listener = vi.fn()
+    const dispose = agentPresetRefreshSubscribe()?.(listener)
+    expect(typeof dispose).toBe('function')
+    dispose?.()
+    // Sealed globals: a throwing probe is silence, never a crash.
+    installRosterRefreshSource({ get: () => { throw new Error('sealed') } } as never)
+    expect(typeof agentPresetRefreshSubscribe()?.(() => {})).toBe('function')
+  })
+})
+
 describe('AgentPresetFace gate', () => {
   it('renders no seat at all when the remote namespace is missing', () => {
     const { container } = render(
@@ -268,6 +570,67 @@ describe('resolveAgentPresetsRemote', () => {
     // A throwing resolver (sealed globals, exotic host builds) reads as absent.
     setAgentPresetsSource(() => { throw new Error('sealed') })
     expect(agentPresetsRemoteFace()).toBeUndefined()
+  })
+})
+
+describe('developer tools settings source (the native gate signal, #78)', () => {
+  /** A configForms service double carrying the given namespaces. */
+  function configForms(forms: Record<string, unknown>): { get(namespace: string): unknown } {
+    return { get: (namespace: string) => forms[namespace] }
+  }
+
+  /** A snapshot-store form double (the shape configForms hands out). */
+  function storeForm(snapshot: DeveloperToolsSnapshot | undefined) {
+    let current = snapshot
+    const listeners = new Set<() => void>()
+    return {
+      getSnapshot: () => current,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      set: (next: DeveloperToolsSnapshot) => {
+        current = next
+        for (const listener of [...listeners]) listener()
+      },
+    }
+  }
+
+  it('reads the enabled field off the snapshot, defaulting to off (the native ?? false)', () => {
+    expect(developerToolsEnabledOf(undefined)).toBe(false)
+    expect(developerToolsEnabledOf({})).toBe(false)
+    expect(developerToolsEnabledOf({ value: undefined })).toBe(false)
+    expect(developerToolsEnabledOf({ value: { enabled: true } })).toBe(true)
+    expect(developerToolsEnabledOf({ value: { enabled: false } })).toBe(false)
+  })
+
+  it('resolves the ui-settings form through configForms, capability-detected', () => {
+    const form = storeForm({ value: { enabled: true } })
+    installDeveloperToolsSource({ get: (key: string) =>
+      key === 'configForms' ? configForms({ [DEVELOPER_TOOLS_NAMESPACE]: form }) : undefined } as never)
+    expect(developerToolsStore()).toBe(form)
+    resetDeveloperToolsSource()
+    expect(developerToolsStore()).toBeUndefined()
+  })
+
+  it('reads an absent service, an absent form, or a half-shaped form as absent', () => {
+    // No configForms service at all.
+    installDeveloperToolsSource({ get: () => undefined } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // The service answers, the namespace has no form.
+    installDeveloperToolsSource({ get: (key: string) =>
+      key === 'configForms' ? configForms({}) : undefined } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // A form without the snapshot-store face is not a form.
+    installDeveloperToolsSource({ get: (key: string) =>
+      key === 'configForms' ? configForms({ [DEVELOPER_TOOLS_NAMESPACE]: { getSnapshot: () => undefined } }) : undefined } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // Sealed globals: a throwing probe is absence, never a crash.
+    installDeveloperToolsSource({ get: () => { throw new Error('sealed') } } as never)
+    expect(developerToolsStore()).toBeUndefined()
+    // Uninstalled (the fresh-page shape).
+    resetDeveloperToolsSource()
+    expect(developerToolsStore()).toBeUndefined()
   })
 })
 

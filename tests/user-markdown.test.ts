@@ -36,4 +36,30 @@ describe('hardenSoftBreaks', () => {
     // Whitespace-only lines are blank lines to the block grammar.
     expect(hardenSoftBreaks('a\n \nb')).toBe('a  \n \nb')
   })
+
+  it('leaves an indented code block untouched (no hard break inside code)', () => {
+    const text = 'intro\n\n    code one\n    code two\n\n    code three\ntail\nlast'
+    expect(hardenSoftBreaks(text))
+      .toBe('intro  \n\n    code one\n    code two\n\n    code three\ntail  \nlast')
+  })
+
+  it('starts an indented block at the document start and with a tab', () => {
+    expect(hardenSoftBreaks('    first\n    second\ntail'))
+      .toBe('    first\n    second\ntail')
+    expect(hardenSoftBreaks('intro\n\n\tcode\ntail\nlast'))
+      .toBe('intro  \n\n\tcode\ntail  \nlast')
+  })
+
+  it('does not treat a list continuation line as an indented code block', () => {
+    // Without the blank-line boundary the four-space line is a list item's
+    // continuation, where the break must stay visible.
+    expect(hardenSoftBreaks('- item\n    continuation\n  next'))
+      .toBe('- item  \n    continuation  \n  next')
+  })
+
+  it('leaves table rows untouched, delimiter row included', () => {
+    const text = 'intro\n| a | b |\n| --- | --- |\n| 1 | 2 |\ntail\nlast'
+    expect(hardenSoftBreaks(text))
+      .toBe('intro  \n| a | b |\n| --- | --- |\n| 1 | 2 |\ntail  \nlast')
+  })
 })
