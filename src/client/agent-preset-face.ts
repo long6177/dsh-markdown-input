@@ -178,6 +178,16 @@ export function developerToolsEnabledOf(snapshot: DeveloperToolsSnapshot | undef
 
 export type DeveloperToolsSource = () => DeveloperToolsStore | undefined
 
+/**
+ * One roster-refresh subscription (#78): the listener fires on the native
+ * refresh signals — a transport reset, a `settings/document-updated` for the
+ * preset-registry namespace, and the two settings forms' own changes. The
+ * returned disposer detaches every edge; the face re-reads the roster per
+ * fire, so the seat survives a reconnect onto a host whose roster changed
+ * under the browser (the native apply's 'settings refresh' effect).
+ */
+export type AgentPresetRefreshSubscribe = (listener: () => void) => () => void
+
 let developerToolsSource: DeveloperToolsSource = () => undefined
 
 /**

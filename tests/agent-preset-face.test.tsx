@@ -19,6 +19,7 @@ import {
   agentPresetsRemoteFace, developerToolsEnabledOf, developerToolsStore,
   DEVELOPER_TOOLS_NAMESPACE, installDeveloperToolsSource, resetAgentPresetsSource,
   resetDeveloperToolsSource, setAgentPresetsSource,
+  type AgentPresetRefreshSubscribe,
   type AgentPresetsRemoteFace, type DeveloperToolsSnapshot,
 } from '../src/client/agent-preset-face.ts'
 import { FaceGate } from '../src/client/FaceGate.tsx'
@@ -87,6 +88,7 @@ function renderFace(overrides: {
   onError?: (message: string) => void
   translate?: ((key: BuiltInPresetCopyKey) => string) | undefined
   developerTools?: DeveloperToolsStore | undefined
+  subscribeRefresh?: AgentPresetRefreshSubscribe
 } = {}) {
   return render(
     <AgentPresetFace
@@ -97,6 +99,7 @@ function renderFace(overrides: {
       copy={copy}
       onError={overrides.onError ?? (() => {})}
       developerTools={overrides.developerTools}
+      subscribeRefresh={overrides.subscribeRefresh}
     />,
   )
 }
@@ -338,6 +341,90 @@ describe('AgentPresetFace developer-tools gate (#78)', () => {
     await waitFor(() => { expect(chip()).not.toBeNull() })
     fireEvent.click(chip() as HTMLButtonElement)
     expect(menuRows()).toHaveLength(3)
+  })
+})
+
+describe('AgentPresetFace roster refresh (#78)', () => {
+  /** A refresh subscription double that hands the test the fire button. */
+  function refreshSignal(): AgentPresetRefreshSubscribe & { fire: () => void } {
+    const listeners = new Set<() => void>()
+    const subscribe: AgentPresetRefreshSubscribe = (listener: () => void) => {
+      listeners.add(listener)
+      return () => { listeners.delete(listener) }
+    }
+    return Object.assign(subscribe, {
+      fire: () => { for (const listener of [...listeners]) listener() },
+    })
+  }
+
+  it('re-reads the roster when the refresh signal fires and swaps the offered rows', async () => {
+    const list = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: { presets: [{ id: 'standard', isDefault: true }] },
+      })
+      .mockResolvedValue({
+        ok: true,
+        value: { presets: [{ id: 'cordis', name: 'Creator mode', isDefault: true }] },
+      })
+    const refresh = refreshSignal()
+    renderFace({ remote: { list, select: ROSTER.select } as AgentPresetRemote, subscribeRefresh: refresh })
+    await waitFor(() => { expect(chip()).toHaveTextContent('standard') })
+    refresh.fire()
+    await waitFor(() => { expect(list).toHaveBeenCalledTimes(2) })
+    await waitFor(() => { expect(chip()).toHaveTextContent('Creator mode') })
+  })
+
+  it('keeps the mounted seat steady while a refresh re-read is in flight', async () => {
+    let release: ((value: unknown) => void) | undefined
+    const list = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: { presets: [{ id: 'standard', isDefault: true }] } })
+      .mockReturnValueOnce(new Promise(resolve => {
+        release = resolve
+      }))
+    const refresh = refreshSignal()
+    renderFace({ remote: { list, select: ROSTER.select } as AgentPresetRemote, subscribeRefresh: refresh })
+    await waitFor(() => { expect(chip()).toHaveTextContent('standard') })
+    refresh.fire()
+    await waitFor(() => { expect(list).toHaveBeenCalledTimes(2) })
+    // The old roster still labels the chip — a slow refresh never blanks the seat.
+    expect(chip()).toHaveTextContent('standard')
+    release?.({ ok: true, value: { presets: [{ id: 'cordis', name: 'Creator mode', isDefault: true }] } })
+    await waitFor(() => { expect(chip()).toHaveTextContent('Creator mode') })
+  })
+
+  it('reads gateway/invocation-unavailable as an empty roster, silently', async () => {
+    // The optional-service absence is a legal deployment: the native read
+    // answers an empty roster and the seat hides without a word
+    // (`settings-store.ts:76`) — a banner here would misreport a quiet host.
+    const onError = vi.fn()
+    const unavailable: AgentPresetRemote = {
+      list: () => Promise.resolve({
+        ok: false,
+        error: { code: 'gateway/invocation-unavailable', message: 'no such service' },
+      }),
+      select: ROSTER.select,
+    }
+    const { container } = renderFace({ remote: unavailable, onError })
+    await waitFor(() => { expect(container).toBeEmptyDOMElement() })
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('reports a refresh that fails with a real error and hides the seat', async () => {
+    const onError = vi.fn()
+    const list = vi.fn()
+      .mockResolvedValueOnce({ ok: true, value: { presets: [{ id: 'standard', isDefault: true }] } })
+      .mockResolvedValue({ ok: false, error: { code: 'gateway/error', message: 'roster unavailable' } })
+    const refresh = refreshSignal()
+    renderFace({
+      remote: { list, select: ROSTER.select } as AgentPresetRemote,
+      subscribeRefresh: refresh,
+      onError,
+    })
+    await waitFor(() => { expect(chip()).not.toBeNull() })
+    refresh.fire()
+    await waitFor(() => { expect(onError).toHaveBeenCalledWith('roster unavailable') })
+    expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
   })
 })
 

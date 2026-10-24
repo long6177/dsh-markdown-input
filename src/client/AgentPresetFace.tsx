@@ -47,7 +47,9 @@ import {
   type AgentPresetOption, type AgentPresetSeatCopy, type PresetTranslate,
 } from './agent-preset-core.ts'
 import { useObservable } from './conversation-face.ts'
-import type { AgentPresetsRemoteFace, DeveloperToolsStore } from './agent-preset-face.ts'
+import type {
+  AgentPresetRefreshSubscribe, AgentPresetsRemoteFace, DeveloperToolsStore,
+} from './agent-preset-face.ts'
 import { developerToolsEnabledOf } from './agent-preset-face.ts'
 import type { FaceDefinition } from './face.ts'
 import css from './MarkdownComposer.module.css'
@@ -100,6 +102,13 @@ export interface AgentPresetFaceProps {
    * too — the native observable face's own `?? false`.
    */
   readonly developerTools?: DeveloperToolsStore
+  /**
+   * The roster-refresh subscription (#78): fires the re-read on a transport
+   * reset, a preset-registry settings write, and the settings forms' changes
+   * — the native apply's four refresh signals. Undefined (no remote event
+   * face) keeps the one-mounting-read behavior.
+   */
+  readonly subscribeRefresh?: AgentPresetRefreshSubscribe
 }
 
 /** Loaded roster state: absent while loading, then either options or a reason. */
@@ -123,6 +132,15 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const onError = props.onError
+  // The roster-refresh clock (#78): every refresh signal bumps the tick and
+  // the read effect below re-runs against it — the native apply's refresh
+  // loop, shrunk to the one surface this card rebuilds.
+  const [refreshTick, setRefreshTick] = useState(0)
+  useEffect(() => {
+    const subscribe = props.subscribeRefresh
+    if (subscribe === undefined) return undefined
+    return subscribe(() => { setRefreshTick(tick => tick + 1) })
+  }, [props.subscribeRefresh])
 
   // The menu's placement anchor — the same seam the workspace chip uses:
   // `getAnchorRect` (not the Menu's own wrapper measurement) because the chip
@@ -134,10 +152,14 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
     [],
   )
 
-  // One roster read per mounting: the remote answers with the current
-  // declarations, and a card remount (session switch, election change) reads
-  // again. A failed read reports once through the card banner and otherwise
-  // leaves the seat hidden — a roster that never arrives offers no choice.
+  // One roster read per mounting, re-run by every refresh signal (#78): the
+  // remote answers with the current declarations, a card remount (session
+  // switch, election change) reads again, and a refresh tick reads again on
+  // top of whatever the seat already shows (a slow re-read never blanks the
+  // seat — the state only swaps when the read settles, the previous run's
+  // `live` flag dropping stale answers). A failed read reports once through
+  // the card banner and otherwise leaves the seat hidden — a roster that
+  // never arrives offers no choice.
   useEffect(() => {
     if (remote === undefined) return undefined
     let live = true
@@ -145,19 +167,29 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
       setRoster({ status: 'failed' })
       if (message !== undefined) onError(message)
     }
+    const ready = (presets: readonly AgentPresetOption[]): void => {
+      setRoster({
+        status: 'ready',
+        options: agentPresetOptions({ presets }),
+        defaults: presets.filter(preset => preset.isDefault === true).map(preset => preset.id),
+      })
+    }
     void remote.list().then(
       (result) => {
         if (!live) return
         if (!result.ok) {
+          // The optional-service absence is a LEGAL deployment: the native
+          // read answers an empty roster and the seat hides silently
+          // (`settings-store.ts:76`) — reporting it would turn a quiet host
+          // into a recurring false alarm, worst right after a reconnect.
+          if (result.error.code === 'gateway/invocation-unavailable') {
+            ready([])
+            return
+          }
           fail(agentPresetRefusal(result.error))
           return
         }
-        const presets = result.value.presets
-        setRoster({
-          status: 'ready',
-          options: agentPresetOptions({ presets }),
-          defaults: presets.filter(preset => preset.isDefault === true).map(preset => preset.id),
-        })
+        ready(result.value.presets)
       },
       (error: unknown) => {
         if (!live) return
@@ -167,7 +199,7 @@ export function AgentPresetFace(props: AgentPresetFaceProps): ReactNode {
       },
     )
     return () => { live = false }
-  }, [remote, onError])
+  }, [remote, onError, refreshTick])
 
   const options = roster.status === 'ready' ? roster.options : []
   const visible = agentPresetSeatVisible(projection, options)
