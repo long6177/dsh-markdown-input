@@ -103,7 +103,7 @@ import {
 } from './submit-policy.ts'
 import { TodoStripFace, todoStripFaceDefinition } from './TodoStripFace.tsx'
 import {
-  addWorkspaceEntry, addWorkspaceIsOnlyEntry, resolveAddWorkspaceCopy,
+  addWorkspaceEntry, addWorkspaceIsOnlyEntry, blankSessionPosture, resolveAddWorkspaceCopy,
   workspaceLabelState, workspaceMenuItems, workspaceRowSupported, workspaceTriggerPosture,
   type WorkspaceRowSnapshot,
 } from './workspace-row-core.ts'
@@ -260,6 +260,20 @@ const INTERACTIVE_SELECTOR = [
   '[role="button"]', '[role="menuitem"]', '[role="option"]', '[role="combobox"]',
   '[role="menu"]', '[role="menubar"]', '[role="listbox"]', '[role="dialog"]',
 ].join(', ')
+
+/**
+ * The DOM-containment gate the tool row and the card share (issue #83):
+ * portals keep their React ancestor chain, so a synthetic mousedown from a
+ * card row can reach a card handler even though the node lives under
+ * `document.body`. Containment is decided on the real DOM, never on React
+ * tree membership.
+ * @param current - the handler's `currentTarget` (the card or its tool row).
+ * @param target - the event target, if it is a node.
+ * @returns the target when it is an Element inside `current`, else null.
+ */
+function containedTarget(current: HTMLElement, target: EventTarget | null): Element | null {
+  return target instanceof Element && current.contains(target) ? target : null
+}
 
 /**
  * Whether a mousedown on the card may focus the editor (issue #41): the card
@@ -1306,9 +1320,8 @@ export function MarkdownComposer({
    */
   function onToolRowMouseDown(event: MouseEvent<HTMLDivElement>): void {
     if (triggerPosture) return
-    const target = event.target
-    if (!(target instanceof Element)) return
-    if (!event.currentTarget.contains(target)) return
+    const target = containedTarget(event.currentTarget, event.target)
+    if (target === null) return
     if (target.closest('button') === null) return
     event.preventDefault()
     editorRef.current?.focus()
@@ -1335,7 +1348,7 @@ export function MarkdownComposer({
     // own padding (the model pane's `role=group` surface is not in the
     // interactive selector) would otherwise pull focus to the editor and
     // close the card it belongs to.
-    if (event.target instanceof Element && !event.currentTarget.contains(event.target)) return
+    if (containedTarget(event.currentTarget, event.target) === null) return
     if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
     editorRef.current?.focus()
   }
@@ -1444,14 +1457,12 @@ export function MarkdownComposer({
   // so the identity read here is stable across renders and the face's effect
   // never resubscribes.
   const presetRefresh = agentPresetRefreshSubscribe()
-  // The native hero posture (`ConversationMainPanel.tsx:41-42`):
-  // `sessionId === undefined || session.blank`. The whole hero line — the
-  // workspace chip AND the preset seat — exists only before the conversation
-  // starts (`ConversationContent.tsx:166-167`); the preset chip is a
-  // new-session control (`AgentPresetSeat.tsx:1-9`). `blank` is the same
-  // signal the workspace row reads (workspace-row-core.ts:156), never a
-  // second verdict.
-  const heroPosture = sessionId === undefined || blank
+  // The blank-session posture (`ConversationMainPanel.tsx:41-42`): the whole
+  // hero line — the workspace chip AND the preset seat — exists only before
+  // the conversation starts (`ConversationContent.tsx:166-167`); the preset
+  // chip is a new-session control (`AgentPresetSeat.tsx:1-9`). The verdict is
+  // the workspace core's single predicate, never a second spelling.
+  const blankSession = blankSessionPosture({ sessionId, blank })
   // #78: the preset seat judges its OWN data plane — the roster verbs and
   // the projection hook, the two facts its FaceGate probes. The predicate is
   // the face's OWN export (ADR-0005: the probe is not re-derived here); the
@@ -1460,7 +1471,7 @@ export function MarkdownComposer({
   // chain entry still offers the preset switch when ITS data plane is there.
   // #82: independence is about DATA, not POSTURE — a started session has no
   // hero line at all, so the seat stays down with it.
-  const presetSeatPossible = heroPosture
+  const presetSeatPossible = blankSession
     && agentPresetSeatPossible(useProjection, agentPresetsRemote !== undefined)
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks

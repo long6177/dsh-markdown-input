@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
 import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, mergeRestoredDraft, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { installConversationSource, resetImageLightbox, setConversationSource, setImageLightbox } from '../src/client/conversation-face.ts'
@@ -158,6 +159,55 @@ function modeToggleCopy(mode: 'render' | 'source'): string {
     .replace('{mode}', mode === 'render' ? en['composer.mode.render'] : en['composer.mode.source'])
 }
 
+/**
+ * A ready model directory: one DeepSeek account group with one model. The
+ * tool-row split test needs only a routable model; the popup guard's effort
+ * row needs the reasoning metadata too.
+ */
+function modelDirectoryState(options: { readonly reasoning?: boolean } = {}) {
+  return {
+    current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
+    routable: true,
+    groups: [{
+      id: 'deepseek-account',
+      name: 'DeepSeek 账号',
+      models: [{
+        id: 'deepseek-chat',
+        name: 'DeepSeek-V41-Flash',
+        ...(options.reasoning === true
+          ? {
+              reasoning: {
+                efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+                defaultEffort: 'low',
+              },
+            }
+          : {}),
+      }],
+    }],
+    failures: [],
+    status: 'ready',
+    pending: null,
+    error: null,
+  }
+}
+
+/** Bind the model data plane so the seat and its `+` menu contribution live. */
+function bindModelPlane(state: ReturnType<typeof modelDirectoryState>): void {
+  setModelSource(() => ({
+    directoryFor: vi.fn(() => ({
+      store: {
+        subscribe: () => () => {},
+        getSnapshot: () => state,
+      },
+      load: vi.fn(() => Promise.resolve(state)),
+      select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
+    })),
+  }) as never)
+  setModelLocale(((key: string, params?: Record<string, string>) =>
+    (modelEn as Record<string, string>)[key]
+      ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+}
+
 /** Paste rich-text HTML into the editor surface (the conversion gesture). */
 function pasteHtml(html: string): void {
   fireEvent.paste(content(), {
@@ -252,32 +302,7 @@ describe('MarkdownComposer', () => {
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    const modelState = {
-      current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
-      routable: true,
-      groups: [{
-        id: 'deepseek-account',
-        name: 'DeepSeek 账号',
-        models: [{ id: 'deepseek-chat', name: 'DeepSeek-V41-Flash' }],
-      }],
-      failures: [],
-      status: 'ready',
-      pending: null,
-      error: null,
-    }
-    setModelSource(() => ({
-      directoryFor: vi.fn(() => ({
-        store: {
-          subscribe: () => () => {},
-          getSnapshot: () => modelState,
-        },
-        load: vi.fn(() => Promise.resolve(modelState)),
-        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
-      })),
-    }) as never)
-    setModelLocale(((key: string, params?: Record<string, string>) =>
-      (modelEn as Record<string, string>)[key]
-        ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+    bindModelPlane(modelDirectoryState())
     render(<MarkdownComposer {...chainProps()} />)
     const row = document.querySelector('[class*="toolRow"]')
     expect(row).not.toBeNull()
@@ -1622,21 +1647,33 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
 
   /**
    * A fake host shell whose `beginCommand` really performs the upstream
-   * insertCommand: the chip's token replaces the machine draft's
-   * [start, end) span. `setDraft` writes that same machine draft, so the
-   * flush-before-claim sequencing is observable end to end.
+   * insertCommand AND advances the input machine — the chip's token replaces
+   * the machine draft's [start, end) span, the phase enters `claimed`, and
+   * the claim rides back through `useInput`. `setDraft` writes that same
+   * machine draft, so the flush-before-claim sequencing is observable end to
+   * end.
    */
   function claimHost(): {
-    host: { draft: string }
+    host: {
+      draft: string
+      phase: 'plain' | 'claimed'
+      claim?: { name: string, token: string, hint?: string }
+    }
     beginCommand: ReturnType<typeof vi.fn>
     inputActions: { setDraft: ReturnType<typeof vi.fn>, submit: ReturnType<typeof vi.fn> }
   } {
-    const host = { draft: '' }
+    const host: {
+      draft: string
+      phase: 'plain' | 'claimed'
+      claim?: { name: string, token: string, hint?: string }
+    } = { draft: '', phase: 'plain' }
     const beginCommand = vi.fn((
-      claim: { token: string },
+      claim: { name: string, token: string, hint?: string },
       span: { start: number, end: number, draftRev: number },
     ): boolean => {
       host.draft = host.draft.slice(0, span.start) + claim.token + host.draft.slice(span.end)
+      host.phase = 'claimed'
+      host.claim = claim
       return true
     })
     const inputActions = {
@@ -1646,7 +1683,8 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     return { host, beginCommand, inputActions }
   }
 
-  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */  function bindBusyEnter(behavior: string): void {
+  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */
+  function bindBusyEnter(behavior: string): void {
     // Store-contract parity: the store and its snapshot answer stable
     // references between updates, or useSyncExternalStore would loop.
     const snapshot = { value: { busyEnter: behavior } }
@@ -1848,14 +1886,18 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
   })
 
-  it('applies a menu claim pick over the flushed token span (AC5)', async () => {
+  it.each([
+    ['an empty draft', ''],
+    ['a non-empty leading draft', '  '],
+  ])('applies a menu claim pick over the flushed token span (%s) (AC5/AC1)', async (_case, draft) => {
     const { host, beginCommand, inputActions } = claimHost()
+    host.draft = draft
     const shell = shellMembers({ beginCommand })
     setConversationSource(() => fakeConversation({ shell }))
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    render(<MarkdownComposer {...chainProps({ inputActions })} />)
+    render(<MarkdownComposer {...chainProps({ draft, inputActions })} />)
     fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
     const goalRow = [...document.querySelectorAll('[role="option"]')]
       .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
@@ -1878,19 +1920,53 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
     // The host draft keeps exactly one token — the chip's projection.
     expect(host.draft).toBe('/goal ')
-    expect(host.draft.match(/\/goal/gu)).toHaveLength(1)
     // The visible token text landed in the editor either way.
     expect(content().textContent).toContain('goal')
   })
 
-  it('applies a claim pick over a non-empty leading draft without duplicating the token (AC1)', async () => {
+  it('enters the claimed phase and shows the ghost hint after a claim pick (AC1)', async () => {
     const { host, beginCommand, inputActions } = claimHost()
     const shell = shellMembers({ beginCommand })
     setConversationSource(() => fakeConversation({ shell }))
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    render(<MarkdownComposer {...chainProps({ draft: '  ', inputActions })} />)
+    // The fake host really advances its machine; the chain props read it, so
+    // a rerender after the pick is the store push the real host would send.
+    const props = (): MarkdownComposerProps => chainProps({
+      draft: host.draft,
+      phase: host.phase,
+      ...(host.claim === undefined ? {} : { claim: host.claim }),
+      inputActions,
+    })
+    const view = render(<MarkdownComposer {...props()} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    fireEvent.mouseDown(goalRow)
+    await waitFor(() => expect(beginCommand).toHaveBeenCalledTimes(1))
+    expect(host.phase).toBe('claimed')
+    view.rerender(<MarkdownComposer {...props()} />)
+    await waitFor(() => {
+      expect(document.querySelector('.cm-mdx-claim-token')?.textContent).toBe('/goal')
+      expect(document.querySelector('.cm-mdx-claim-hint')?.textContent).toBe(en['composer.hint.goal'])
+    })
+  })
+
+  it('replaces only the document head and keeps the text after the caret (AC1 mid-draft)', async () => {
+    const { host, beginCommand, inputActions } = claimHost()
+    host.draft = '  tail text'
+    const shell = shellMembers({ beginCommand })
+    setConversationSource(() => fakeConversation({ shell }))
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps({ draft: '  tail text', inputActions })} />)
+    // Put the caret right after the leading whitespace: a mid-draft leading
+    // selection, so the claim rewrites [0, caret) and never the tail.
+    const view = EditorView.findFromDOM(content())
+    expect(view).not.toBeNull()
+    view!.dispatch({ selection: { anchor: 2 } })
     fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
     const goalRow = [...document.querySelectorAll('[role="option"]')]
       .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
@@ -1900,12 +1976,11 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
       unknown,
       { start: number, end: number, draftRev: number },
     ]
-    // Non-empty draft: claimSelection replaces the leading whitespace with
-    // the token, so the post-claim head is the token's end (not the caret's
-    // pre-pick offset).
+    // The span ends at the token's end, not at the pre-pick caret offset.
     expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
-    expect(host.draft).toBe('/goal ')
-    expect(host.draft.match(/\/goal/gu)).toHaveLength(1)
+    // The span absorbs the leading whitespace and leaves the tail intact;
+    // the exact projection also pins the single-token invariant.
+    expect(host.draft).toBe('/goal tail text')
   })
 
   it('flushes the token draft synchronously and silences the mirror once claimed (AC5)', () => {
@@ -2340,43 +2415,10 @@ describe('MarkdownComposer — popup focus guard (issue #83)', () => {
     Element.prototype.scrollIntoView = function scrollIntoView(): void {}
   }
 
-  const modelState = {
-    current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
-    routable: true,
-    groups: [{
-      id: 'deepseek-account',
-      name: 'DeepSeek 账号',
-      models: [{
-        id: 'deepseek-chat',
-        name: 'DeepSeek-V41-Flash',
-        reasoning: {
-          efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
-          defaultEffort: 'low',
-        },
-      }],
-    }],
-    failures: [],
-    status: 'ready',
-    pending: null,
-    error: null,
-  }
+  const modelState = modelDirectoryState({ reasoning: true })
 
   /** Bind the model data plane so the seat and its `+` menu contribution live. */
-  function bindModelSource(): void {
-    setModelSource(() => ({
-      directoryFor: vi.fn(() => ({
-        store: {
-          subscribe: () => () => {},
-          getSnapshot: () => modelState,
-        },
-        load: vi.fn(() => Promise.resolve(modelState)),
-        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
-      })),
-    }) as never)
-    setModelLocale(((key: string, params?: Record<string, string>) =>
-      (modelEn as Record<string, string>)[key]
-        ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
-  }
+  const bindModelSource = (): void => { bindModelPlane(modelState) }
 
   /** The portaled model card (root pane `role=menu`, drilled panes `role=group`). */
   function modelCard(): HTMLElement | null {
@@ -2401,6 +2443,27 @@ describe('MarkdownComposer — popup focus guard (issue #83)', () => {
     fireEvent.click(rows[0])
     // The row's click drilled into the model pane.
     await waitFor(() => expect(modelCard()?.getAttribute('role')).toBe('group'))
+  })
+
+  it('drills the reasoning row open as well (issue #83 AC1)', async () => {
+    bindModelSource()
+    render(<MarkdownComposer {...chainProps()} />)
+    const trigger = document.querySelector('button[aria-haspopup="menu"]') as HTMLElement
+    fireEvent.click(trigger)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    const rows = [...document.querySelectorAll('[role="menuitem"]')] as HTMLElement[]
+    // Root order is Model then Effort; the effort cell is the second row.
+    expect(rows).toHaveLength(2)
+    fireEvent.mouseDown(rows[1] as HTMLElement)
+    expect(modelCard()).not.toBeNull()
+    fireEvent.click(rows[1] as HTMLElement)
+    // The effort pane drills open with the catalog's levels.
+    await waitFor(() => {
+      const levels = [...document.querySelectorAll('[role="menuitemradio"]')]
+        .map((row) => row.textContent ?? '')
+      expect(levels.some((text) => text.includes('Low'))).toBe(true)
+      expect(levels.some((text) => text.includes('High'))).toBe(true)
+    })
   })
 
   it('opens the model card from the + menu model row and leaves it alive', async () => {

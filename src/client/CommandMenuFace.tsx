@@ -77,13 +77,14 @@ export interface CommandMenuFaceProps {
    */
   readonly onOpen?: () => void
   /**
-   * The card's claim application (issue #79 AC5): called after a claim row's
-   * token text lands, with the claim the shell's `beginCommand` applies —
-   * catalog name, localized token, catalog hint, and a submit closure over
-   * the detached execute verb — plus the pre-pick head end (detect
-   * coordinates) the machine's chip replaces. Absent (or a no-op) on a host
-   * without the runtime shell: the token text stands alone and the
-   * typed-slash adjudication delivers it on Enter, the pre-#79 behavior.
+   * The card's claim application (issue #79 AC5, #84): called after a claim
+   * row's `claimSelection` has landed, with the claim the shell's
+   * `beginCommand` applies — catalog name, localized token, catalog hint,
+   * and a submit closure over the detached execute verb — plus the head end
+   * of the span that insertion just produced (the token's end, the range
+   * the machine's chip replaces). Absent (or a no-op) on a host without the
+   * runtime shell: the token text stands alone and the typed-slash
+   * adjudication delivers it on Enter, the pre-#79 behavior.
    */
   readonly beginClaim?: (claim: ShellClaim, headEnd: number) => void
   /**
