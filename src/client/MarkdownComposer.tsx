@@ -1295,11 +1295,20 @@ export function MarkdownComposer({
    * no click). Popup items and containers portal outside this row and keep
    * their own focus behavior; the row's gaps fall through to the card hit
    * area (issue #41), which focuses without cancelling.
+   *
+   * DOM containment, not React-tree membership, decides that (issue #83):
+   * portals keep their React ancestor chain, so a card row's synthetic
+   * mousedown still reaches this handler even though the node lives under
+   * `document.body`. Without the guard the row would reclaim focus from the
+   * card, whose `onBlur` closes it — and the click lands on an unmounted
+   * row (the model card's two rows, and the `+` menu's model chain open).
+   * The native keepDraftFocus has the same gate (`InputBar.tsx:283`).
    */
   function onToolRowMouseDown(event: MouseEvent<HTMLDivElement>): void {
     if (triggerPosture) return
     const target = event.target
     if (!(target instanceof Element)) return
+    if (!event.currentTarget.contains(target)) return
     if (target.closest('button') === null) return
     event.preventDefault()
     editorRef.current?.focus()
@@ -1321,6 +1330,12 @@ export function MarkdownComposer({
    */
   function onCardMouseDown(event: MouseEvent<HTMLDivElement>): void {
     if (triggerPosture) return
+    // Same DOM-containment gate as the tool row (issue #83): a popup portaled
+    // to body keeps its React ancestor chain, so a mousedown on the card's
+    // own padding (the model pane's `role=group` surface is not in the
+    // interactive selector) would otherwise pull focus to the editor and
+    // close the card it belongs to.
+    if (event.target instanceof Element && !event.currentTarget.contains(event.target)) return
     if (!shouldFocusEditorFromCard(event.target, editorRef.current?.view.contentDOM ?? null)) return
     editorRef.current?.focus()
   }
