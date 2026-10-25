@@ -1,7 +1,7 @@
 {
   "name": "dsh-markdown-input",
   "description": "Markdown enhancements for the DeepSeek Harness web UI: a low-priority composer takeover card with a CodeMirror 6 live-rendering editor (Obsidian-style), Markdown-rendered user messages, and rich-text paste conversion — built-in takeover panels keep precedence, and every surface capability-probes and degrades to the native composer (ADR-0005)",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "main": "lib/index.js",
@@ -53,7 +53,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "*",
-    "@deepseek-ai/dsh": "^0.2.1-rc.2"
+    "@deepseek-ai/dsh": "^0.2.0-rc.2 || ^0.2.1-rc.2"
   },
   "peerDependenciesMeta": {
     "@deepseek-ai/dsh": {

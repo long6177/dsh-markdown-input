@@ -56,7 +56,7 @@ dsh plugin --profile web add github:long6177/dsh-markdown-input
 | `0.2.1-alpha.1` | — | — | **未验证** |
 
 - 迄今每一次 npm 发布——`0.2.0-alpha.0`（2026-10-02）到 `0.2.0-alpha.20`（2026-10-07），以及 `0.2.2`、`0.2.3`（2026-10-25）——都在运行 `0.2.0-rc.2` 内核的官方桌面端上重测过（桌面公开版当前捆绑的仍是该内核）。每次发布附带一份验收清单，逐版本索引与日期见 [docs/release/README.md](docs/release/README.md)。`0.2.1` 与 `0.2.2`→`0.2.3` 热修复环由同日 `0.2.3` 的重测覆盖。
-- 依赖 pin 已对准上游 `0.2.1-rc.2`：peer range 是 `^0.2.1-rc.2`（见 [package.json](package.json)），且全套自动化套件（typecheck、build、发布包与保真两个测试面）已于 2026-10-24 对它跑绿。该版本宿主的**真机重测尚未进行**，矩阵因此不为它声明真机验证——漂移监视（见下）继续跟踪上游后续版本，重测通过后在此落账。
+- 依赖 pin 仍锁步上游 `0.2.1-rc.2`：devDependencies 与 CI 不动（见 [package.json](package.json)），全套自动化套件（typecheck、build、发布包与保真两个测试面）已于 2026-10-24 对它跑绿。peer range 放宽为 `^0.2.0-rc.2 || ^0.2.1-rc.2`——两个内核均已真机验证（桌面公开版当前捆绑 `0.2.0-rc.2`，`0.2.2`/`0.2.3` 已于 2026-10-25 在其上通过；取并集是因为 semver 的 prerelease 只与同 `[major, minor, patch]` 元组的比较子匹配）。漂移监视（见下）继续跟踪上游后续版本。
 - **漂移监视。** 一个定时仓库工作流每天探测四路上游信号：npm registry（新版本与 dist-tag）、上游 Release 与 Tag、本插件所依赖契约路径上的提交、官方契约文档的提交。命中新版本即以该版本跑全套测试与 semver 检查，并按版本开一张跟踪 issue（标签 `upstream-drift`）。工作流只负责开 issue——不改代码，也不自行宣布兼容。
 
 ## 设计说明
