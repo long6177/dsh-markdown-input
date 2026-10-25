@@ -1659,7 +1659,8 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     return { host, beginCommand, inputActions }
   }
 
-  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */  function bindBusyEnter(behavior: string): void {
+  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */
+  function bindBusyEnter(behavior: string): void {
     // Store-contract parity: the store and its snapshot answer stable
     // references between updates, or useSyncExternalStore would loop.
     const snapshot = { value: { busyEnter: behavior } }
