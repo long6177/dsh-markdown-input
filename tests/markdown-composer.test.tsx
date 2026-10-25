@@ -2333,6 +2333,113 @@ describe('MarkdownComposer — hit area (issue #41)', () => {
   })
 })
 
+describe('MarkdownComposer — popup focus guard (issue #83)', () => {
+  // jsdom does not implement scrollIntoView; the model pane's highlight sync
+  // calls it when the pane drills in.
+  if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+    Element.prototype.scrollIntoView = function scrollIntoView(): void {}
+  }
+
+  const modelState = {
+    current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
+    routable: true,
+    groups: [{
+      id: 'deepseek-account',
+      name: 'DeepSeek 账号',
+      models: [{
+        id: 'deepseek-chat',
+        name: 'DeepSeek-V41-Flash',
+        reasoning: {
+          efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+          defaultEffort: 'low',
+        },
+      }],
+    }],
+    failures: [],
+    status: 'ready',
+    pending: null,
+    error: null,
+  }
+
+  /** Bind the model data plane so the seat and its `+` menu contribution live. */
+  function bindModelSource(): void {
+    setModelSource(() => ({
+      directoryFor: vi.fn(() => ({
+        store: {
+          subscribe: () => () => {},
+          getSnapshot: () => modelState,
+        },
+        load: vi.fn(() => Promise.resolve(modelState)),
+        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
+      })),
+    }) as never)
+    setModelLocale(((key: string, params?: Record<string, string>) =>
+      (modelEn as Record<string, string>)[key]
+        ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+  }
+
+  /** The portaled model card (root pane `role=menu`, drilled panes `role=group`). */
+  function modelCard(): HTMLElement | null {
+    return document.body.querySelector('[role="menu"][aria-label], [role="group"][aria-label]')
+  }
+
+  it('keeps the model card open when a card row is pressed from the tool row', async () => {
+    bindModelSource()
+    render(<MarkdownComposer {...chainProps()} />)
+    const trigger = document.querySelector('button[aria-haspopup="menu"]') as HTMLElement
+    fireEvent.click(trigger)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    const rows = [...document.querySelectorAll('[role="menuitem"]')] as HTMLElement[]
+    expect(rows).toHaveLength(2)
+    // The card portals to body, but the React synthetic mousedown still
+    // bubbles through this component subtree to the composer's tool row. The
+    // row's keep-focus arm must stand down for targets outside its own DOM —
+    // otherwise it focuses the editor, the card's onBlur fires, and the row
+    // unmounts before the click can drill.
+    fireEvent.mouseDown(rows[0])
+    expect(modelCard()).not.toBeNull()
+    fireEvent.click(rows[0])
+    // The row's click drilled into the model pane.
+    await waitFor(() => expect(modelCard()?.getAttribute('role')).toBe('group'))
+  })
+
+  it('opens the model card from the + menu model row and leaves it alive', async () => {
+    bindModelSource()
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps()} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const modelRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'model') as HTMLElement
+    expect(modelRow).toBeDefined()
+    // The pick's own mousedown chains into the card (setOpen(true)) and then
+    // bubbles to the tool row: the row must not reclaim focus in the same
+    // event, or the card's blur close lands in the same batch and it never
+    // paints.
+    fireEvent.mouseDown(modelRow)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    expect(document.querySelector('[role="listbox"]')).toBeNull()
+    expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(2)
+  })
+
+  it('does not reclaim focus from the card surface (padding mousedown)', async () => {
+    bindModelSource()
+    render(<MarkdownComposer {...chainProps()} />)
+    const trigger = document.querySelector('button[aria-haspopup="menu"]') as HTMLElement
+    fireEvent.click(trigger)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    // Drill into the model pane: its surface is `role=group`, which the
+    // card handler's interactive selector does not cover. A mousedown on its
+    // padding must fall to the card itself, not pull focus to the editor.
+    fireEvent.click([...document.querySelectorAll('[role="menuitem"]')][0] as HTMLElement)
+    await waitFor(() => expect(modelCard()?.getAttribute('role')).toBe('group'))
+    fireEvent.mouseDown(modelCard() as HTMLElement)
+    expect(modelCard()).not.toBeNull()
+    expect(document.activeElement).not.toBe(content())
+  })
+})
+
 describe('MarkdownComposer — hero row, one line for both seats (issue #42 alpha.12 feedback)', () => {
   // The three `conversation` keys the row reads, the words the host
   // ui-conversation dictionary carries.
