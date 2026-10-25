@@ -51,11 +51,11 @@ This project makes no range claims. What it has instead is a tested matrix — c
 
 | dsh version | Plugin versions verified | Last on-device verification | Result |
 |---|---|---|---|
-| `0.2.0-rc.2` | `0.2.0-alpha.0` → `0.2.0-alpha.20` | 2026-10-07 | Passed |
+| `0.2.0-rc.2` | `0.2.0-alpha.0` → `0.2.0-alpha.20`, `0.2.2` → `0.2.3` | 2026-10-25 | Passed |
 | `0.2.1-rc.2` | — | — | **Not verified on device** (automated suite passed 2026-10-24) |
 | `0.2.1-alpha.1` | — | — | **Not verified** |
 
-- Every npm release so far — `0.2.0-alpha.0` (2026-10-02) through `0.2.0-alpha.20` (2026-10-07) — was re-tested on the official desktop client running the `0.2.0-rc.2` kernel. Each release ships an acceptance checklist; the per-version index with dates lives in [docs/release/README.md](docs/release/README.md).
+- Every npm release so far — `0.2.0-alpha.0` (2026-10-02) through `0.2.0-alpha.20` (2026-10-07), then `0.2.2` and `0.2.3` (2026-10-25) — was re-tested on the official desktop client running the `0.2.0-rc.2` kernel (the current public desktop build still bundles that kernel). Each release ships an acceptance checklist; the per-version index with dates lives in [docs/release/README.md](docs/release/README.md). `0.2.1` and the `0.2.2`→`0.2.3` hotfix cycle were covered by the same-day `0.2.3` retest.
 - The dependency pins now target upstream `0.2.1-rc.2`: the peer range is `^0.2.1-rc.2` (see [package.json](package.json)), and the full automated suite (typecheck, build, published and fidelity test faces) passes against it as of 2026-10-24. A real-device retest of that host has **not** happened yet, so the matrix claims no on-device verification for it — drift watch (below) keeps tracking whatever upstream ships next, and the retest lands here when it passes.
 - **Drift watch.** A scheduled repository workflow checks four upstream signals every day: the npm registry (new versions and dist-tags), upstream releases and tags, commits touching the contract paths this plugin depends on, and the official contract documentation. A new upstream version triggers the full test suite plus semver checks against it, and one tracking issue per version (labelled `upstream-drift`). The workflow only opens issues — it does not change code and does not declare compatibility on its own.
 
