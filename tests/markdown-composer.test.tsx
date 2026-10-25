@@ -1620,8 +1620,33 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     }
   }
 
-  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */
-  function bindBusyEnter(behavior: string): void {
+  /**
+   * A fake host shell whose `beginCommand` really performs the upstream
+   * insertCommand: the chip's token replaces the machine draft's
+   * [start, end) span. `setDraft` writes that same machine draft, so the
+   * flush-before-claim sequencing is observable end to end.
+   */
+  function claimHost(): {
+    host: { draft: string }
+    beginCommand: ReturnType<typeof vi.fn>
+    inputActions: { setDraft: ReturnType<typeof vi.fn>, submit: ReturnType<typeof vi.fn> }
+  } {
+    const host = { draft: '' }
+    const beginCommand = vi.fn((
+      claim: { token: string },
+      span: { start: number, end: number, draftRev: number },
+    ): boolean => {
+      host.draft = host.draft.slice(0, span.start) + claim.token + host.draft.slice(span.end)
+      return true
+    })
+    const inputActions = {
+      setDraft: vi.fn((text: string) => { host.draft = text }),
+      submit: vi.fn(),
+    }
+    return { host, beginCommand, inputActions }
+  }
+
+  /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */  function bindBusyEnter(behavior: string): void {
     // Store-contract parity: the store and its snapshot answer stable
     // references between updates, or useSyncExternalStore would loop.
     const snapshot = { value: { busyEnter: behavior } }
@@ -1823,14 +1848,14 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
   })
 
-  it('applies a menu claim pick through the shell beginCommand (AC5)', async () => {
-    const beginCommand = vi.fn(() => true)
+  it('applies a menu claim pick over the flushed token span (AC5)', async () => {
+    const { host, beginCommand, inputActions } = claimHost()
     const shell = shellMembers({ beginCommand })
     setConversationSource(() => fakeConversation({ shell }))
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    render(<MarkdownComposer {...chainProps()} />)
+    render(<MarkdownComposer {...chainProps({ inputActions })} />)
     fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
     const goalRow = [...document.querySelectorAll('[role="option"]')]
       .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
@@ -1847,11 +1872,40 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     expect(claim.name).toBe('goal')
     expect(claim.token).toBe('/goal ')
     expect(typeof claim.submit).toBe('function')
-    // The span covers the head the pick replaced (the empty draft's caret),
-    // at the machine's own revision.
-    expect(span).toEqual({ start: 0, end: 0, draftRev: 0 })
+    // The span covers the token the flush just landed (the machine's draft
+    // is '/goal '): the chip replaces [0, 6), never the pre-pick [0, 0)
+    // which would prepend a second token ahead of the flushed one.
+    expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
+    // The host draft keeps exactly one token — the chip's projection.
+    expect(host.draft).toBe('/goal ')
+    expect(host.draft.match(/\/goal/gu)).toHaveLength(1)
     // The visible token text landed in the editor either way.
     expect(content().textContent).toContain('goal')
+  })
+
+  it('applies a claim pick over a non-empty leading draft without duplicating the token (AC1)', async () => {
+    const { host, beginCommand, inputActions } = claimHost()
+    const shell = shellMembers({ beginCommand })
+    setConversationSource(() => fakeConversation({ shell }))
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps({ draft: '  ', inputActions })} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    fireEvent.mouseDown(goalRow)
+    await waitFor(() => expect(beginCommand).toHaveBeenCalledTimes(1))
+    const [, span] = beginCommand.mock.calls[0] as [
+      unknown,
+      { start: number, end: number, draftRev: number },
+    ]
+    // Non-empty draft: claimSelection replaces the leading whitespace with
+    // the token, so the post-claim head is the token's end (not the caret's
+    // pre-pick offset).
+    expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
+    expect(host.draft).toBe('/goal ')
+    expect(host.draft.match(/\/goal/gu)).toHaveLength(1)
   })
 
   it('flushes the token draft synchronously and silences the mirror once claimed (AC5)', () => {
