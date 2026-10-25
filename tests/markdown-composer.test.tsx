@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
+import { EditorView } from '@codemirror/view'
 import { ImageLightbox } from '@deepseek-ai/dsh-client-ui-primitives'
 import { MarkdownComposer, MARKDOWN_TAKEOVER, MODE_STORAGE_KEY, DRAFT_SYNC_DEBOUNCE_MS, mergeRestoredDraft, shouldFocusEditorFromCard, type MarkdownComposerProps } from '../src/client/MarkdownComposer.tsx'
 import { installConversationSource, resetImageLightbox, setConversationSource, setImageLightbox } from '../src/client/conversation-face.ts'
@@ -158,6 +159,55 @@ function modeToggleCopy(mode: 'render' | 'source'): string {
     .replace('{mode}', mode === 'render' ? en['composer.mode.render'] : en['composer.mode.source'])
 }
 
+/**
+ * A ready model directory: one DeepSeek account group with one model. The
+ * tool-row split test needs only a routable model; the popup guard's effort
+ * row needs the reasoning metadata too.
+ */
+function modelDirectoryState(options: { readonly reasoning?: boolean } = {}) {
+  return {
+    current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
+    routable: true,
+    groups: [{
+      id: 'deepseek-account',
+      name: 'DeepSeek 账号',
+      models: [{
+        id: 'deepseek-chat',
+        name: 'DeepSeek-V41-Flash',
+        ...(options.reasoning === true
+          ? {
+              reasoning: {
+                efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+                defaultEffort: 'low',
+              },
+            }
+          : {}),
+      }],
+    }],
+    failures: [],
+    status: 'ready',
+    pending: null,
+    error: null,
+  }
+}
+
+/** Bind the model data plane so the seat and its `+` menu contribution live. */
+function bindModelPlane(state: ReturnType<typeof modelDirectoryState>): void {
+  setModelSource(() => ({
+    directoryFor: vi.fn(() => ({
+      store: {
+        subscribe: () => () => {},
+        getSnapshot: () => state,
+      },
+      load: vi.fn(() => Promise.resolve(state)),
+      select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
+    })),
+  }) as never)
+  setModelLocale(((key: string, params?: Record<string, string>) =>
+    (modelEn as Record<string, string>)[key]
+      ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+}
+
 /** Paste rich-text HTML into the editor surface (the conversion gesture). */
 function pasteHtml(html: string): void {
   fireEvent.paste(content(), {
@@ -252,32 +302,7 @@ describe('MarkdownComposer', () => {
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    const modelState = {
-      current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
-      routable: true,
-      groups: [{
-        id: 'deepseek-account',
-        name: 'DeepSeek 账号',
-        models: [{ id: 'deepseek-chat', name: 'DeepSeek-V41-Flash' }],
-      }],
-      failures: [],
-      status: 'ready',
-      pending: null,
-      error: null,
-    }
-    setModelSource(() => ({
-      directoryFor: vi.fn(() => ({
-        store: {
-          subscribe: () => () => {},
-          getSnapshot: () => modelState,
-        },
-        load: vi.fn(() => Promise.resolve(modelState)),
-        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
-      })),
-    }) as never)
-    setModelLocale(((key: string, params?: Record<string, string>) =>
-      (modelEn as Record<string, string>)[key]
-        ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+    bindModelPlane(modelDirectoryState())
     render(<MarkdownComposer {...chainProps()} />)
     const row = document.querySelector('[class*="toolRow"]')
     expect(row).not.toBeNull()
@@ -1620,6 +1645,44 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     }
   }
 
+  /**
+   * A fake host shell whose `beginCommand` really performs the upstream
+   * insertCommand AND advances the input machine — the chip's token replaces
+   * the machine draft's [start, end) span, the phase enters `claimed`, and
+   * the claim rides back through `useInput`. `setDraft` writes that same
+   * machine draft, so the flush-before-claim sequencing is observable end to
+   * end.
+   */
+  function claimHost(): {
+    host: {
+      draft: string
+      phase: 'plain' | 'claimed'
+      claim?: { name: string, token: string, hint?: string }
+    }
+    beginCommand: ReturnType<typeof vi.fn>
+    inputActions: { setDraft: ReturnType<typeof vi.fn>, submit: ReturnType<typeof vi.fn> }
+  } {
+    const host: {
+      draft: string
+      phase: 'plain' | 'claimed'
+      claim?: { name: string, token: string, hint?: string }
+    } = { draft: '', phase: 'plain' }
+    const beginCommand = vi.fn((
+      claim: { name: string, token: string, hint?: string },
+      span: { start: number, end: number, draftRev: number },
+    ): boolean => {
+      host.draft = host.draft.slice(0, span.start) + claim.token + host.draft.slice(span.end)
+      host.phase = 'claimed'
+      host.claim = claim
+      return true
+    })
+    const inputActions = {
+      setDraft: vi.fn((text: string) => { host.draft = text }),
+      submit: vi.fn(),
+    }
+    return { host, beginCommand, inputActions }
+  }
+
   /** Bind the host busy-Enter preference (`ui-conversation.busyEnter`). */
   function bindBusyEnter(behavior: string): void {
     // Store-contract parity: the store and its snapshot answer stable
@@ -1823,14 +1886,18 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
   })
 
-  it('applies a menu claim pick through the shell beginCommand (AC5)', async () => {
-    const beginCommand = vi.fn(() => true)
+  it.each([
+    ['an empty draft', ''],
+    ['a non-empty leading draft', '  '],
+  ])('applies a menu claim pick over the flushed token span (%s) (AC5/AC1)', async (_case, draft) => {
+    const { host, beginCommand, inputActions } = claimHost()
+    host.draft = draft
     const shell = shellMembers({ beginCommand })
     setConversationSource(() => fakeConversation({ shell }))
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    render(<MarkdownComposer {...chainProps()} />)
+    render(<MarkdownComposer {...chainProps({ draft, inputActions })} />)
     fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
     const goalRow = [...document.querySelectorAll('[role="option"]')]
       .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
@@ -1847,11 +1914,73 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     expect(claim.name).toBe('goal')
     expect(claim.token).toBe('/goal ')
     expect(typeof claim.submit).toBe('function')
-    // The span covers the head the pick replaced (the empty draft's caret),
-    // at the machine's own revision.
-    expect(span).toEqual({ start: 0, end: 0, draftRev: 0 })
+    // The span covers the token the flush just landed (the machine's draft
+    // is '/goal '): the chip replaces [0, 6), never the pre-pick [0, 0)
+    // which would prepend a second token ahead of the flushed one.
+    expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
+    // The host draft keeps exactly one token — the chip's projection.
+    expect(host.draft).toBe('/goal ')
     // The visible token text landed in the editor either way.
     expect(content().textContent).toContain('goal')
+  })
+
+  it('enters the claimed phase and shows the ghost hint after a claim pick (AC1)', async () => {
+    const { host, beginCommand, inputActions } = claimHost()
+    const shell = shellMembers({ beginCommand })
+    setConversationSource(() => fakeConversation({ shell }))
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    // The fake host really advances its machine; the chain props read it, so
+    // a rerender after the pick is the store push the real host would send.
+    const props = (): MarkdownComposerProps => chainProps({
+      draft: host.draft,
+      phase: host.phase,
+      ...(host.claim === undefined ? {} : { claim: host.claim }),
+      inputActions,
+    })
+    const view = render(<MarkdownComposer {...props()} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    fireEvent.mouseDown(goalRow)
+    await waitFor(() => expect(beginCommand).toHaveBeenCalledTimes(1))
+    expect(host.phase).toBe('claimed')
+    view.rerender(<MarkdownComposer {...props()} />)
+    await waitFor(() => {
+      expect(document.querySelector('.cm-mdx-claim-token')?.textContent).toBe('/goal')
+      expect(document.querySelector('.cm-mdx-claim-hint')?.textContent).toBe(en['composer.hint.goal'])
+    })
+  })
+
+  it('replaces only the document head and keeps the text after the caret (AC1 mid-draft)', async () => {
+    const { host, beginCommand, inputActions } = claimHost()
+    host.draft = '  tail text'
+    const shell = shellMembers({ beginCommand })
+    setConversationSource(() => fakeConversation({ shell }))
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps({ draft: '  tail text', inputActions })} />)
+    // Put the caret right after the leading whitespace: a mid-draft leading
+    // selection, so the claim rewrites [0, caret) and never the tail.
+    const view = EditorView.findFromDOM(content())
+    expect(view).not.toBeNull()
+    view!.dispatch({ selection: { anchor: 2 } })
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const goalRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
+    fireEvent.mouseDown(goalRow)
+    await waitFor(() => expect(beginCommand).toHaveBeenCalledTimes(1))
+    const [, span] = beginCommand.mock.calls[0] as [
+      unknown,
+      { start: number, end: number, draftRev: number },
+    ]
+    // The span ends at the token's end, not at the pre-pick caret offset.
+    expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
+    // The span absorbs the leading whitespace and leaves the tail intact;
+    // the exact projection also pins the single-token invariant.
+    expect(host.draft).toBe('/goal tail text')
   })
 
   it('flushes the token draft synchronously and silences the mirror once claimed (AC5)', () => {
@@ -2276,6 +2405,101 @@ describe('MarkdownComposer — hit area (issue #41)', () => {
       listbox.remove()
       button.remove()
     }
+  })
+})
+
+describe('MarkdownComposer — popup focus guard (issue #83)', () => {
+  // jsdom does not implement scrollIntoView; the model pane's highlight sync
+  // calls it when the pane drills in.
+  if (typeof Element !== 'undefined' && typeof Element.prototype.scrollIntoView !== 'function') {
+    Element.prototype.scrollIntoView = function scrollIntoView(): void {}
+  }
+
+  const modelState = modelDirectoryState({ reasoning: true })
+
+  /** Bind the model data plane so the seat and its `+` menu contribution live. */
+  const bindModelSource = (): void => { bindModelPlane(modelState) }
+
+  /** The portaled model card (root pane `role=menu`, drilled panes `role=group`). */
+  function modelCard(): HTMLElement | null {
+    return document.body.querySelector('[role="menu"][aria-label], [role="group"][aria-label]')
+  }
+
+  it('keeps the model card open when a card row is pressed from the tool row', async () => {
+    bindModelSource()
+    render(<MarkdownComposer {...chainProps()} />)
+    const trigger = document.querySelector('button[aria-haspopup="menu"]') as HTMLElement
+    fireEvent.click(trigger)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    const rows = [...document.querySelectorAll('[role="menuitem"]')] as HTMLElement[]
+    expect(rows).toHaveLength(2)
+    // The card portals to body, but the React synthetic mousedown still
+    // bubbles through this component subtree to the composer's tool row. The
+    // row's keep-focus arm must stand down for targets outside its own DOM —
+    // otherwise it focuses the editor, the card's onBlur fires, and the row
+    // unmounts before the click can drill.
+    fireEvent.mouseDown(rows[0])
+    expect(modelCard()).not.toBeNull()
+    fireEvent.click(rows[0])
+    // The row's click drilled into the model pane.
+    await waitFor(() => expect(modelCard()?.getAttribute('role')).toBe('group'))
+  })
+
+  it('drills the reasoning row open as well (issue #83 AC1)', async () => {
+    bindModelSource()
+    render(<MarkdownComposer {...chainProps()} />)
+    const trigger = document.querySelector('button[aria-haspopup="menu"]') as HTMLElement
+    fireEvent.click(trigger)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    const rows = [...document.querySelectorAll('[role="menuitem"]')] as HTMLElement[]
+    // Root order is Model then Effort; the effort cell is the second row.
+    expect(rows).toHaveLength(2)
+    fireEvent.mouseDown(rows[1] as HTMLElement)
+    expect(modelCard()).not.toBeNull()
+    fireEvent.click(rows[1] as HTMLElement)
+    // The effort pane drills open with the catalog's levels.
+    await waitFor(() => {
+      const levels = [...document.querySelectorAll('[role="menuitemradio"]')]
+        .map((row) => row.textContent ?? '')
+      expect(levels.some((text) => text.includes('Low'))).toBe(true)
+      expect(levels.some((text) => text.includes('High'))).toBe(true)
+    })
+  })
+
+  it('opens the model card from the + menu model row and leaves it alive', async () => {
+    bindModelSource()
+    setCommandSource(() => ({
+      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
+    }) as never)
+    render(<MarkdownComposer {...chainProps()} />)
+    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
+    const modelRow = [...document.querySelectorAll('[role="option"]')]
+      .find((row) => row.getAttribute('data-command-name') === 'model') as HTMLElement
+    expect(modelRow).toBeDefined()
+    // The pick's own mousedown chains into the card (setOpen(true)) and then
+    // bubbles to the tool row: the row must not reclaim focus in the same
+    // event, or the card's blur close lands in the same batch and it never
+    // paints.
+    fireEvent.mouseDown(modelRow)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    expect(document.querySelector('[role="listbox"]')).toBeNull()
+    expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(2)
+  })
+
+  it('does not reclaim focus from the card surface (padding mousedown)', async () => {
+    bindModelSource()
+    render(<MarkdownComposer {...chainProps()} />)
+    const trigger = document.querySelector('button[aria-haspopup="menu"]') as HTMLElement
+    fireEvent.click(trigger)
+    await waitFor(() => expect(modelCard()).not.toBeNull())
+    // Drill into the model pane: its surface is `role=group`, which the
+    // card handler's interactive selector does not cover. A mousedown on its
+    // padding must fall to the card itself, not pull focus to the editor.
+    fireEvent.click([...document.querySelectorAll('[role="menuitem"]')][0] as HTMLElement)
+    await waitFor(() => expect(modelCard()?.getAttribute('role')).toBe('group'))
+    fireEvent.mouseDown(modelCard() as HTMLElement)
+    expect(modelCard()).not.toBeNull()
+    expect(document.activeElement).not.toBe(content())
   })
 })
 

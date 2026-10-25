@@ -162,17 +162,34 @@ export interface WorkspaceRowSupport {
 }
 
 /**
+ * The native hero posture (`ConversationMainPanel.tsx:41-42`):
+ * `sessionId === undefined || session.blank`. This is the one blank-session
+ * verdict the card's hero line reads — the workspace row and the preset seat
+ * both derive from it, so the card never grows a second spelling.
+ * @param input - the chain's session identity and the session snapshot's
+ * blank flag.
+ */
+export function blankSessionPosture(input: {
+  readonly sessionId: string | undefined
+  readonly blank: boolean
+}): boolean {
+  return input.sessionId === undefined || input.blank
+}
+
+/**
  * Whether the card-top row renders: a blank session AND the two data surfaces
  * the row is useless without — the list hook (the label chain and the menu
  * rows) and the reuse-or-create verb (the pick). A missing surface hides the
  * row whole, per the face rule: no control is ever offered dead. The row is
  * also the only surface that can switch the card into the trigger posture, so
- * hiding it leaves the card exactly as it is today.
+ * hiding it leaves the card exactly as it is today. Unlike the hero posture,
+ * the row additionally needs a session at all — the takeover never elects on
+ * the no-session fallback shape.
  * @param support - the three presence facts.
  */
 export function workspaceRowSupported(support: WorkspaceRowSupport): boolean {
   return support.sessionId !== undefined
-    && support.blank
+    && blankSessionPosture(support)
     && support.hookPresent
     && support.verbPresent
 }

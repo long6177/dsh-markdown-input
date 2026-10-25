@@ -595,6 +595,52 @@ describe('hero line — one row for both seats (issue #42 alpha.12 feedback)', (
     })
     expect(heroRow).toContainElement(document.querySelector('[data-markdown-agent-preset]'))
   })
+
+  it('mounts the preset seat on a blank session (the native hero posture, #82)', async () => {
+    // The preset seat belongs on the NEW-session screen only, like the native
+    // `AgentPresetSeat` (`AgentPresetSeat.tsx:1-9`). A blank session is that
+    // screen: the seat keeps its place beside the workspace chip.
+    setAgentPresetsSource(() => roster)
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+    })
+    render(
+      <MarkdownComposer
+        {...chainProps({ session: blankSession(), projection: { agentPreset: null } })}
+        {...seats.props}
+      />,
+    )
+    await waitFor(() => {
+      expect(document.querySelector('[data-markdown-agent-preset]')).not.toBeNull()
+    })
+    expect(document.querySelector('[data-markdown-hero-row]'))
+      .toContainElement(document.querySelector('[data-markdown-agent-preset]'))
+  })
+
+  it('hides the preset seat and the whole hero line once the session has started (#82)', async () => {
+    // The native hero formula (`ConversationMainPanel.tsx:41-42`) is
+    // `sessionId === undefined || session.blank`; a started session renders
+    // no hero line at all (`ConversationContent.tsx:166-167`), so neither the
+    // workspace chip nor the preset seat may leak onto the takeover card.
+    setAgentPresetsSource(() => roster)
+    const seats = hostSeats({
+      workspaces: { items: [{ workspaceId: 'w1', title: 'project', sessionIds: ['s1'] }], phase: 'ready' },
+    })
+    render(
+      <MarkdownComposer
+        {...chainProps({ session: { ...blankSession(), blank: false }, projection: { agentPreset: null } })}
+        {...seats.props}
+      />,
+    )
+    // Synchronous: the line never mounts, so nothing has to "settle away".
+    expect(document.querySelector('[data-markdown-hero-row]')).toBeNull()
+    expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
+    expect(row()).toBeNull()
+    // …and no async roster read can mount a seat late either.
+    await waitFor(() => {
+      expect(document.querySelector('[data-markdown-agent-preset]')).toBeNull()
+    })
+  })
 })
 
 describe('workspace menu add row (issue #42, alpha.13 retest)', () => {

@@ -77,13 +77,14 @@ export interface CommandMenuFaceProps {
    */
   readonly onOpen?: () => void
   /**
-   * The card's claim application (issue #79 AC5): called after a claim row's
-   * token text lands, with the claim the shell's `beginCommand` applies —
-   * catalog name, localized token, catalog hint, and a submit closure over
-   * the detached execute verb — plus the pre-pick head end (detect
-   * coordinates) the machine's chip replaces. Absent (or a no-op) on a host
-   * without the runtime shell: the token text stands alone and the
-   * typed-slash adjudication delivers it on Enter, the pre-#79 behavior.
+   * The card's claim application (issue #79 AC5, #84): called after a claim
+   * row's `claimSelection` has landed, with the claim the shell's
+   * `beginCommand` applies — catalog name, localized token, catalog hint,
+   * and a submit closure over the detached execute verb — plus the head end
+   * of the span that insertion just produced (the token's end, the range
+   * the machine's chip replaces). Absent (or a no-op) on a host without the
+   * runtime shell: the token text stands alone and the typed-slash
+   * adjudication delivers it on Enter, the pre-#79 behavior.
    */
   readonly beginClaim?: (claim: ShellClaim, headEnd: number) => void
   /**
@@ -212,10 +213,13 @@ export function CommandMenuFace({
         // The leading guard re-checks at apply time (host beginCommand): a
         // caret moved into text since open never claims.
         if (editorHandle !== null && editorHandle.isLeadingSelection()) {
-          // The pre-pick head end is the span the machine's chip replaces —
-          // captured before the token insertion moves the caret.
-          const headEnd = editorHandle.selectionEnd()
           editorHandle.claimSelection(row.token ?? '')
+          // The head end is the span the machine's chip replaces — the token
+          // the insertion just landed (claimSelection parks the caret at the
+          // token's end). Reading it before the insertion yields the pre-pick
+          // caret (0 on an empty draft), and the host would prepend the chip
+          // to the flushed token instead of replacing it (issue #84).
+          const headEnd = editorHandle.selectionEnd()
           // The card applies the claim through the shell (issue #79 AC5):
           // the machine enters claimed and the ghost hint lives.
           beginClaim?.({
