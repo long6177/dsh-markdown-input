@@ -33,13 +33,16 @@ const tZh = fakeT(zh)
 const tEn = fakeT(en)
 
 /** Build a recording editor stub; the captured menu-key handler drives the keyboard tests. */
-function stubEditor(leading = true) {
+function stubEditor(leading = true, initialHead = '') {
   let menuHandler: MenuKeyHandler | null = null
+  // The real handle's claimSelection rewrites [0, caret) with the token and
+  // parks the caret at the token's end; selectionEnd follows that state.
+  let head = initialHead
   const editor = {
     focus: vi.fn(),
     isLeadingSelection: vi.fn(() => leading),
-    claimSelection: vi.fn(),
-    selectionEnd: vi.fn(() => 0),
+    claimSelection: vi.fn((token: string) => { head = token }),
+    selectionEnd: vi.fn(() => head.length),
     setMenuKeyHandler: vi.fn((handler: MenuKeyHandler | null) => { menuHandler = handler }),
   }
   return {
@@ -55,6 +58,8 @@ function mountFace(options: {
   listResult?: unknown
   executeResult?: unknown
   leading?: boolean
+  /** The pre-pick editor head (whitespace only for a leading selection). */
+  initialHead?: string
   locale?: 'zh' | 'en'
   chainPopups?: boolean
   /** The card's claim-application callback (issue #79 AC5). */
@@ -81,7 +86,7 @@ function mountFace(options: {
     $on: vi.fn(() => () => {}),
   }
   setCommandSource(() => ({ commands: surfaces.commands, remoteEvents: surfaces }))
-  const { editor, editorRef, handler } = stubEditor(options.leading ?? true)
+  const { editor, editorRef, handler } = stubEditor(options.leading ?? true, options.initialHead ?? '')
   const containerRef = { current: null as HTMLElement | null }
   let close: (() => void) | null = null
   const props = {
@@ -313,7 +318,8 @@ describe('CommandMenuFace keyboard', () => {
     await act(async () => { handler()?.('pick') })
     // The visible token still lands through claimSelection (the editor text
     // is the claim's projection), and the card gets the claim to apply —
-    // with the pre-pick head end the machine's chip replaces.
+    // with the head end the machine's chip replaces. The span is taken
+    // AFTER the token lands, so it covers the token itself.
     expect(editor.claimSelection).toHaveBeenCalledWith('/目标 ')
     expect(editor.selectionEnd).toHaveBeenCalled()
     expect(beginClaim).toHaveBeenCalledTimes(1)
@@ -323,8 +329,24 @@ describe('CommandMenuFace keyboard', () => {
     ]
     expect(claim.name).toBe('goal')
     expect(claim.token).toBe('/目标 ')
-    expect(headEnd).toBe(0)
+    expect(headEnd).toBe('/目标 '.length)
     expect(typeof claim.submit).toBe('function')
+  })
+
+  it('takes the claim span after the token lands, not the pre-pick head (AC1)', async () => {
+    const beginClaim = vi.fn()
+    // A non-empty leading draft: the pre-pick head ends at 2, the token at 4
+    // — the two values are distinguishable, so a pre-claim read fails here.
+    const { handler } = mountFace({ leading: true, initialHead: '  ', beginClaim })
+    await openMenu()
+    // Highlight the goal row (index 1 behind the file row) and pick it.
+    await act(async () => { handler()?.('down') })
+    await act(async () => { handler()?.('pick') })
+    expect(beginClaim).toHaveBeenCalledTimes(1)
+    const [, headEnd] = beginClaim.mock.calls[0] as [unknown, number]
+    // The host chip replaces [0, end): the end must be the landed token's
+    // end, otherwise the chip is prepended to it instead of replacing it.
+    expect(headEnd).toBe('/目标 '.length)
   })
 
   it('the claim submit closure runs the command line through the execute verb (AC5)', async () => {

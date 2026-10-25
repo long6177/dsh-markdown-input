@@ -212,10 +212,13 @@ export function CommandMenuFace({
         // The leading guard re-checks at apply time (host beginCommand): a
         // caret moved into text since open never claims.
         if (editorHandle !== null && editorHandle.isLeadingSelection()) {
-          // The pre-pick head end is the span the machine's chip replaces —
-          // captured before the token insertion moves the caret.
-          const headEnd = editorHandle.selectionEnd()
           editorHandle.claimSelection(row.token ?? '')
+          // The head end is the span the machine's chip replaces — the token
+          // the insertion just landed (claimSelection parks the caret at the
+          // token's end). Reading it before the insertion yields the pre-pick
+          // caret (0 on an empty draft), and the host would prepend the chip
+          // to the flushed token instead of replacing it (issue #84).
+          const headEnd = editorHandle.selectionEnd()
           // The card applies the claim through the shell (issue #79 AC5):
           // the machine enters claimed and the ghost hint lives.
           beginClaim?.({
