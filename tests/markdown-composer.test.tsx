@@ -159,6 +159,55 @@ function modeToggleCopy(mode: 'render' | 'source'): string {
     .replace('{mode}', mode === 'render' ? en['composer.mode.render'] : en['composer.mode.source'])
 }
 
+/**
+ * A ready model directory: one DeepSeek account group with one model. The
+ * tool-row split test needs only a routable model; the popup guard's effort
+ * row needs the reasoning metadata too.
+ */
+function modelDirectoryState(options: { readonly reasoning?: boolean } = {}) {
+  return {
+    current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
+    routable: true,
+    groups: [{
+      id: 'deepseek-account',
+      name: 'DeepSeek 账号',
+      models: [{
+        id: 'deepseek-chat',
+        name: 'DeepSeek-V41-Flash',
+        ...(options.reasoning === true
+          ? {
+              reasoning: {
+                efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
+                defaultEffort: 'low',
+              },
+            }
+          : {}),
+      }],
+    }],
+    failures: [],
+    status: 'ready',
+    pending: null,
+    error: null,
+  }
+}
+
+/** Bind the model data plane so the seat and its `+` menu contribution live. */
+function bindModelPlane(state: ReturnType<typeof modelDirectoryState>): void {
+  setModelSource(() => ({
+    directoryFor: vi.fn(() => ({
+      store: {
+        subscribe: () => () => {},
+        getSnapshot: () => state,
+      },
+      load: vi.fn(() => Promise.resolve(state)),
+      select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
+    })),
+  }) as never)
+  setModelLocale(((key: string, params?: Record<string, string>) =>
+    (modelEn as Record<string, string>)[key]
+      ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+}
+
 /** Paste rich-text HTML into the editor surface (the conversion gesture). */
 function pasteHtml(html: string): void {
   fireEvent.paste(content(), {
@@ -253,32 +302,7 @@ describe('MarkdownComposer', () => {
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    const modelState = {
-      current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
-      routable: true,
-      groups: [{
-        id: 'deepseek-account',
-        name: 'DeepSeek 账号',
-        models: [{ id: 'deepseek-chat', name: 'DeepSeek-V41-Flash' }],
-      }],
-      failures: [],
-      status: 'ready',
-      pending: null,
-      error: null,
-    }
-    setModelSource(() => ({
-      directoryFor: vi.fn(() => ({
-        store: {
-          subscribe: () => () => {},
-          getSnapshot: () => modelState,
-        },
-        load: vi.fn(() => Promise.resolve(modelState)),
-        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
-      })),
-    }) as never)
-    setModelLocale(((key: string, params?: Record<string, string>) =>
-      (modelEn as Record<string, string>)[key]
-        ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
+    bindModelPlane(modelDirectoryState())
     render(<MarkdownComposer {...chainProps()} />)
     const row = document.querySelector('[class*="toolRow"]')
     expect(row).not.toBeNull()
@@ -1862,14 +1886,18 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     await waitFor(() => expect(shell.submit).toHaveBeenCalledWith('steer', 'enter'))
   })
 
-  it('applies a menu claim pick over the flushed token span (AC5)', async () => {
+  it.each([
+    ['an empty draft', ''],
+    ['a non-empty leading draft', '  '],
+  ])('applies a menu claim pick over the flushed token span (%s) (AC5/AC1)', async (_case, draft) => {
     const { host, beginCommand, inputActions } = claimHost()
+    host.draft = draft
     const shell = shellMembers({ beginCommand })
     setConversationSource(() => fakeConversation({ shell }))
     setCommandSource(() => ({
       commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
     }) as never)
-    render(<MarkdownComposer {...chainProps({ inputActions })} />)
+    render(<MarkdownComposer {...chainProps({ draft, inputActions })} />)
     fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
     const goalRow = [...document.querySelectorAll('[role="option"]')]
       .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
@@ -1892,34 +1920,8 @@ describe('MarkdownComposer — submission policy (issue #79)', () => {
     expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
     // The host draft keeps exactly one token — the chip's projection.
     expect(host.draft).toBe('/goal ')
-    expect(host.draft.match(/\/goal/gu)).toHaveLength(1)
     // The visible token text landed in the editor either way.
     expect(content().textContent).toContain('goal')
-  })
-
-  it('applies a claim pick over a non-empty leading draft without duplicating the token (AC1)', async () => {
-    const { host, beginCommand, inputActions } = claimHost()
-    const shell = shellMembers({ beginCommand })
-    setConversationSource(() => fakeConversation({ shell }))
-    setCommandSource(() => ({
-      commands: { list: vi.fn(), execute: vi.fn() }, remoteEvents: undefined,
-    }) as never)
-    render(<MarkdownComposer {...chainProps({ draft: '  ', inputActions })} />)
-    fireEvent.click(document.querySelector('button[data-command-menu-trigger]') as HTMLElement)
-    const goalRow = [...document.querySelectorAll('[role="option"]')]
-      .find((row) => row.getAttribute('data-command-name') === 'goal') as HTMLElement
-    fireEvent.mouseDown(goalRow)
-    await waitFor(() => expect(beginCommand).toHaveBeenCalledTimes(1))
-    const [, span] = beginCommand.mock.calls[0] as [
-      unknown,
-      { start: number, end: number, draftRev: number },
-    ]
-    // Non-empty draft: claimSelection replaces the leading whitespace with
-    // the token, so the post-claim head is the token's end (not the caret's
-    // pre-pick offset).
-    expect(span).toEqual({ start: 0, end: '/goal '.length, draftRev: 0 })
-    expect(host.draft).toBe('/goal ')
-    expect(host.draft.match(/\/goal/gu)).toHaveLength(1)
   })
 
   it('enters the claimed phase and shows the ghost hint after a claim pick (AC1)', async () => {
@@ -2413,43 +2415,10 @@ describe('MarkdownComposer — popup focus guard (issue #83)', () => {
     Element.prototype.scrollIntoView = function scrollIntoView(): void {}
   }
 
-  const modelState = {
-    current: { provider: 'deepseek-account', model: 'deepseek-chat', reasoningEffort: 'high' },
-    routable: true,
-    groups: [{
-      id: 'deepseek-account',
-      name: 'DeepSeek 账号',
-      models: [{
-        id: 'deepseek-chat',
-        name: 'DeepSeek-V41-Flash',
-        reasoning: {
-          efforts: [{ id: 'low', name: 'Low' }, { id: 'high', name: 'High' }],
-          defaultEffort: 'low',
-        },
-      }],
-    }],
-    failures: [],
-    status: 'ready',
-    pending: null,
-    error: null,
-  }
+  const modelState = modelDirectoryState({ reasoning: true })
 
   /** Bind the model data plane so the seat and its `+` menu contribution live. */
-  function bindModelSource(): void {
-    setModelSource(() => ({
-      directoryFor: vi.fn(() => ({
-        store: {
-          subscribe: () => () => {},
-          getSnapshot: () => modelState,
-        },
-        load: vi.fn(() => Promise.resolve(modelState)),
-        select: vi.fn(() => Promise.resolve({ ok: true, value: undefined })),
-      })),
-    }) as never)
-    setModelLocale(((key: string, params?: Record<string, string>) =>
-      (modelEn as Record<string, string>)[key]
-        ?.replaceAll(/\{(\w+)\}/gu, (_, name: string) => params?.[name] ?? `{${name}}`) ?? key) as never)
-  }
+  const bindModelSource = (): void => { bindModelPlane(modelState) }
 
   /** The portaled model card (root pane `role=menu`, drilled panes `role=group`). */
   function modelCard(): HTMLElement | null {
