@@ -1429,13 +1429,24 @@ export function MarkdownComposer({
   // so the identity read here is stable across renders and the face's effect
   // never resubscribes.
   const presetRefresh = agentPresetRefreshSubscribe()
-  // #78: the preset seat judges its OWN availability — the roster verbs and
+  // The native hero posture (`ConversationMainPanel.tsx:41-42`):
+  // `sessionId === undefined || session.blank`. The whole hero line — the
+  // workspace chip AND the preset seat — exists only before the conversation
+  // starts (`ConversationContent.tsx:166-167`); the preset chip is a
+  // new-session control (`AgentPresetSeat.tsx:1-9`). `blank` is the same
+  // signal the workspace row reads (workspace-row-core.ts:156), never a
+  // second verdict.
+  const heroPosture = sessionId === undefined || blank
+  // #78: the preset seat judges its OWN data plane — the roster verbs and
   // the projection hook, the two facts its FaceGate probes. The predicate is
   // the face's OWN export (ADR-0005: the probe is not re-derived here); the
   // workspace row's capability verdict no longer takes it down: the native
   // hero's two seats are independent slot occupants, and a workspace-less
   // chain entry still offers the preset switch when ITS data plane is there.
-  const presetSeatPossible = agentPresetSeatPossible(useProjection, agentPresetsRemote !== undefined)
+  // #82: independence is about DATA, not POSTURE — a started session has no
+  // hero line at all, so the seat stays down with it.
+  const presetSeatPossible = heroPosture
+    && agentPresetSeatPossible(useProjection, agentPresetsRemote !== undefined)
   // The below-card meter's copy (issue #43): the same `conversation` seat the
   // workspace row reads, read per render here. The FaceGate's probe re-checks
   // the binding (registerFace latches per id, so a first render before apply's
